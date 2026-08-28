@@ -1,10 +1,12 @@
-use std::time::Duration;
+use std::{net::Ipv4Addr, sync::OnceLock, time::Duration};
 
+use reqwest::redirect::Policy;
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbErr,
     sea_query::{Alias, Expr, ExprTrait, Func, Query},
 };
 use tracing::{error, info, warn};
+use url::{Host, Url};
 
 use crate::{
     database::alert_repo::{
@@ -15,6 +17,8 @@ use crate::{
     services::authentication::AuthenticatedUser,
     state::InstalledState,
 };
+
+const DELIVERY_RETRY_DELAYS: [u64; 3] = [0, 1, 5];
 
 pub async fn list(
     installed: &InstalledState,
@@ -140,16 +144,16 @@ pub async fn delete(
     Ok(())
 }
 
-// ----------------------------------------------------
-// Channels Management
-// ----------------------------------------------------
-
 pub async fn list_channels(
     installed: &InstalledState,
     user: &AuthenticatedUser,
 ) -> Result<Vec<NotificationChannelRecord>, AppError> {
     user.require("alerts.read", None)?;
-    Ok(alert_repo::list_channels(&installed.database).await?)
+    let mut channels = alert_repo::list_channels(&installed.database).await?;
+    for channel in &mut channels {
+        redact_channel_config(&mut channel.config);
+    }
+    Ok(channels)
 }
 
 pub async fn create_channel(
@@ -162,8 +166,11 @@ pub async fn create_channel(
 ) -> Result<String, AppError> {
     user.require("alerts.manage", None)?;
     if name.trim().is_empty() || kind.trim().is_empty() {
-        return Err(AppError::Validation("channel name and kind are required".into()));
+        return Err(AppError::Validation(
+            "channel name and kind are required".into(),
+        ));
     }
+    validate_channel_config(kind, config).map_err(AppError::Validation)?;
     let id = alert_repo::create_channel(&installed.database, name, kind, config, enabled).await?;
 
     crate::database::app_repo::audit(
@@ -189,8 +196,11 @@ pub async fn update_channel(
 ) -> Result<(), AppError> {
     user.require("alerts.manage", None)?;
     if name.trim().is_empty() || kind.trim().is_empty() {
-        return Err(AppError::Validation("channel name and kind are required".into()));
+        return Err(AppError::Validation(
+            "channel name and kind are required".into(),
+        ));
     }
+    validate_channel_config(kind, config).map_err(AppError::Validation)?;
     alert_repo::update_channel(&installed.database, id, name, kind, config, enabled).await?;
 
     crate::database::app_repo::audit(
@@ -246,9 +256,9 @@ pub async fn test_channel(
         "message": format!("Test notification from Sonde for channel '{}'", channel.name)
     });
 
-    dispatch_to_channel(&channel, &test_payload).await.map_err(|err| {
-        AppError::Validation(format!("Failed to send test notification: {}", err))
-    })?;
+    dispatch_to_channel(&channel, &test_payload)
+        .await
+        .map_err(|err| AppError::Validation(format!("Failed to send test notification: {err}")))?;
 
     Ok(())
 }
@@ -263,14 +273,10 @@ pub async fn list_deliveries(
     Ok(alert_repo::list_deliveries(&installed.database, limit).await?)
 }
 
-// ----------------------------------------------------
-// Alert Evaluator Engine
-// ----------------------------------------------------
-
 pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, DbErr> {
     let rules = alert_repo::list_rules(database, None).await?;
     let channels = alert_repo::list_channels(database).await?;
-    let active_channels: Vec<_> = channels.into_iter().filter(|c| c.enabled).collect();
+    let active_channels: Vec<_> = channels.into_iter().filter(|channel| channel.enabled).collect();
 
     let now = chrono::Utc::now().timestamp_millis();
     let mut evaluated = 0;
@@ -286,31 +292,46 @@ pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, 
             continue;
         };
 
-        let window_ms = (expression.window_minutes as i64) * 60_000;
+        let window_ms = i64::from(expression.window_minutes) * 60_000;
         let window_start = now - window_ms;
-
-        let (condition_met, current_value) = match evaluate_rule_condition(database, &rule.application_id, &expression, window_start, now).await {
-            Ok(res) => res,
-            Err(err) => {
-                warn!(rule_id = %rule.id, error = %err, "error evaluating alert condition");
-                continue;
-            }
-        };
+        let (condition_met, current_value) =
+            match evaluate_rule_condition(database, &rule.application_id, &expression, window_start, now)
+                .await
+            {
+                Ok(result) => result,
+                Err(err) => {
+                    warn!(rule_id = %rule.id, error = %err, "error evaluating alert condition");
+                    continue;
+                }
+            };
 
         let is_currently_firing = rule.last_state == "firing";
-        let cooldown_ms = (rule.cooldown_seconds as i64) * 1_000;
-        let cooldown_passed = rule.last_evaluated_at.is_none_or(|last| now - last >= cooldown_ms);
+        let pending_hits = parse_pending_hits(&rule.last_state);
+        let cooldown_ms = i64::from(rule.cooldown_seconds) * 1_000;
+        let cooldown_passed = rule
+            .last_evaluated_at
+            .is_none_or(|last| now - last >= cooldown_ms);
 
         if condition_met {
+            if !is_currently_firing {
+                let next_hits = pending_hits.saturating_add(1);
+                if next_hits < expression.consecutive_hits {
+                    let pending_state = format!("pending:{next_hits}");
+                    alert_repo::update_rule_state(database, &rule.id, &pending_state, now).await?;
+                    continue;
+                }
+            }
+
             if !is_currently_firing || cooldown_passed {
                 info!(
                     rule_id = %rule.id,
                     rule_name = %rule.name,
                     val = %current_value,
                     threshold = %expression.threshold,
+                    consecutive_hits = expression.consecutive_hits,
                     "Alert FIRING"
                 );
-                let _ = alert_repo::update_rule_state(database, &rule.id, "firing", now).await;
+                alert_repo::update_rule_state(database, &rule.id, "firing", now).await?;
 
                 let alert_payload = serde_json::json!({
                     "status": "firing",
@@ -326,17 +347,12 @@ pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, 
                 });
 
                 for channel in &active_channels {
-                    let res = dispatch_to_channel(channel, &alert_payload).await;
-                    let (status, err_msg) = match res {
-                        Ok(_) => ("delivered", None),
-                        Err(e) => ("failed", Some(e)),
-                    };
-                    let _ = alert_repo::record_delivery(database, &rule.id, &channel.id, status, 1, err_msg.as_deref()).await;
+                    queue_delivery(database, &rule.id, channel, &alert_payload);
                 }
             }
         } else if is_currently_firing {
             info!(rule_id = %rule.id, rule_name = %rule.name, "Alert RESOLVED");
-            let _ = alert_repo::update_rule_state(database, &rule.id, "healthy", now).await;
+            alert_repo::update_rule_state(database, &rule.id, "healthy", now).await?;
 
             let resolved_payload = serde_json::json!({
                 "status": "resolved",
@@ -352,17 +368,73 @@ pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, 
             });
 
             for channel in &active_channels {
-                let res = dispatch_to_channel(channel, &resolved_payload).await;
-                let (status, err_msg) = match res {
-                    Ok(_) => ("delivered", None),
-                    Err(e) => ("failed", Some(e)),
-                };
-                let _ = alert_repo::record_delivery(database, &rule.id, &channel.id, status, 1, err_msg.as_deref()).await;
+                queue_delivery(database, &rule.id, channel, &resolved_payload);
             }
+        } else if pending_hits > 0 {
+            alert_repo::update_rule_state(database, &rule.id, "healthy", now).await?;
         }
     }
 
     Ok(evaluated)
+}
+
+fn parse_pending_hits(state: &str) -> u16 {
+    state
+        .strip_prefix("pending:")
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(0)
+}
+
+fn queue_delivery(
+    database: &DatabaseConnection,
+    rule_id: &str,
+    channel: &NotificationChannelRecord,
+    payload: &serde_json::Value,
+) {
+    let database = database.clone();
+    let rule_id = rule_id.to_owned();
+    let channel = channel.clone();
+    let payload = payload.clone();
+
+    tokio::spawn(async move {
+        let mut last_error = None;
+        for (index, delay_seconds) in DELIVERY_RETRY_DELAYS.iter().copied().enumerate() {
+            if delay_seconds > 0 {
+                tokio::time::sleep(Duration::from_secs(delay_seconds)).await;
+            }
+            match dispatch_to_channel(&channel, &payload).await {
+                Ok(()) => {
+                    if let Err(err) = alert_repo::record_delivery(
+                        &database,
+                        &rule_id,
+                        &channel.id,
+                        "delivered",
+                        (index + 1) as i32,
+                        None,
+                    )
+                    .await
+                    {
+                        warn!(error = %err, rule_id = %rule_id, channel_id = %channel.id, "failed to record alert delivery");
+                    }
+                    return;
+                }
+                Err(err) => last_error = Some(err),
+            }
+        }
+
+        if let Err(err) = alert_repo::record_delivery(
+            &database,
+            &rule_id,
+            &channel.id,
+            "failed",
+            DELIVERY_RETRY_DELAYS.len() as i32,
+            last_error.as_deref(),
+        )
+        .await
+        {
+            warn!(error = %err, rule_id = %rule_id, channel_id = %channel.id, "failed to record alert delivery failure");
+        }
+    });
 }
 
 async fn evaluate_rule_condition(
@@ -374,70 +446,73 @@ async fn evaluate_rule_condition(
 ) -> Result<(bool, f64), DbErr> {
     let value = match &expression.source {
         AlertSource::EventCount => {
-            let mut q = Query::select();
-            q.expr(Func::count(Expr::col(Alias::new("id"))))
+            let mut query = Query::select();
+            query
+                .expr(Func::count(Expr::col(Alias::new("id"))))
                 .from(Alias::new("events"))
                 .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
                 .and_where(Expr::col(Alias::new("timestamp")).gte(window_start))
                 .and_where(Expr::col(Alias::new("timestamp")).lte(window_end));
-            for f in &expression.filters {
-                q.and_where(Expr::col(Alias::new(&f.field)).eq(&f.value));
-            }
-            let row = database.query_one(&q).await?;
-            row.and_then(|r| r.try_get::<i64>("", "count").ok()).unwrap_or(0) as f64
+            apply_alert_filters(&mut query, &expression.filters);
+            let row = database.query_one(&query).await?;
+            row.and_then(|row| row.try_get::<i64>("", "count").ok())
+                .unwrap_or(0) as f64
         }
         AlertSource::LogCount => {
-            let mut q = Query::select();
-            q.expr(Func::count(Expr::col(Alias::new("id"))))
+            let mut query = Query::select();
+            query
+                .expr(Func::count(Expr::col(Alias::new("id"))))
                 .from(Alias::new("logs"))
                 .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
                 .and_where(Expr::col(Alias::new("timestamp")).gte(window_start))
                 .and_where(Expr::col(Alias::new("timestamp")).lte(window_end));
-            for f in &expression.filters {
-                q.and_where(Expr::col(Alias::new(&f.field)).eq(&f.value));
-            }
-            let row = database.query_one(&q).await?;
-            row.and_then(|r| r.try_get::<i64>("", "count").ok()).unwrap_or(0) as f64
+            apply_alert_filters(&mut query, &expression.filters);
+            let row = database.query_one(&query).await?;
+            row.and_then(|row| row.try_get::<i64>("", "count").ok())
+                .unwrap_or(0) as f64
         }
         AlertSource::MetricAverage => {
-            let mut q = Query::select();
-            q.expr(Func::avg(Expr::col(Alias::new("value"))))
+            let mut query = Query::select();
+            query
+                .expr(Func::avg(Expr::col(Alias::new("value"))))
                 .from(Alias::new("metric_points"))
                 .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
                 .and_where(Expr::col(Alias::new("timestamp")).gte(window_start))
                 .and_where(Expr::col(Alias::new("timestamp")).lte(window_end));
-            for f in &expression.filters {
-                q.and_where(Expr::col(Alias::new(&f.field)).eq(&f.value));
-            }
-            let row = database.query_one(&q).await?;
-            row.and_then(|r| r.try_get::<f64>("", "avg").ok()).unwrap_or(0.0)
+            apply_alert_filters(&mut query, &expression.filters);
+            let row = database.query_one(&query).await?;
+            row.and_then(|row| row.try_get::<f64>("", "avg").ok())
+                .unwrap_or(0.0)
         }
         AlertSource::MetricSum => {
-            let mut q = Query::select();
-            q.expr(Func::sum(Expr::col(Alias::new("value"))))
+            let mut query = Query::select();
+            query
+                .expr(Func::sum(Expr::col(Alias::new("value"))))
                 .from(Alias::new("metric_points"))
                 .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
                 .and_where(Expr::col(Alias::new("timestamp")).gte(window_start))
                 .and_where(Expr::col(Alias::new("timestamp")).lte(window_end));
-            for f in &expression.filters {
-                q.and_where(Expr::col(Alias::new(&f.field)).eq(&f.value));
-            }
-            let row = database.query_one(&q).await?;
-            row.and_then(|r| r.try_get::<f64>("", "sum").ok()).unwrap_or(0.0)
+            apply_alert_filters(&mut query, &expression.filters);
+            let row = database.query_one(&query).await?;
+            row.and_then(|row| row.try_get::<f64>("", "sum").ok())
+                .unwrap_or(0.0)
         }
         AlertSource::MissingData => {
-            let mut q = Query::select();
-            q.expr(Func::count(Expr::col(Alias::new("id"))))
+            let query = Query::select()
+                .expr(Func::count(Expr::col(Alias::new("id"))))
                 .from(Alias::new("events"))
                 .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
                 .and_where(Expr::col(Alias::new("timestamp")).gte(window_start))
-                .and_where(Expr::col(Alias::new("timestamp")).lte(window_end));
-            let row = database.query_one(&q).await?;
-            let count = row.and_then(|r| r.try_get::<i64>("", "count").ok()).unwrap_or(0);
+                .and_where(Expr::col(Alias::new("timestamp")).lte(window_end))
+                .to_owned();
+            let row = database.query_one(&query).await?;
+            let count = row
+                .and_then(|row| row.try_get::<i64>("", "count").ok())
+                .unwrap_or(0);
             return Ok((count == 0, count as f64));
         }
         AlertSource::ChangeRate => {
-            let curr_q = Query::select()
+            let curr_query = Query::select()
                 .expr(Func::count(Expr::col(Alias::new("id"))))
                 .from(Alias::new("events"))
                 .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
@@ -445,7 +520,7 @@ async fn evaluate_rule_condition(
                 .and_where(Expr::col(Alias::new("timestamp")).lte(window_end))
                 .to_owned();
             let prev_start = window_start - (window_end - window_start);
-            let prev_q = Query::select()
+            let prev_query = Query::select()
                 .expr(Func::count(Expr::col(Alias::new("id"))))
                 .from(Alias::new("events"))
                 .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
@@ -453,186 +528,331 @@ async fn evaluate_rule_condition(
                 .and_where(Expr::col(Alias::new("timestamp")).lt(window_start))
                 .to_owned();
 
-            let curr_cnt = database
-                .query_one(&curr_q)
+            let current_count = database
+                .query_one(&curr_query)
                 .await?
-                .and_then(|r| r.try_get::<i64>("", "count").ok())
+                .and_then(|row| row.try_get::<i64>("", "count").ok())
                 .unwrap_or(0) as f64;
-            let prev_cnt = database
-                .query_one(&prev_q)
+            let previous_count = database
+                .query_one(&prev_query)
                 .await?
-                .and_then(|r| r.try_get::<i64>("", "count").ok())
+                .and_then(|row| row.try_get::<i64>("", "count").ok())
                 .unwrap_or(0) as f64;
 
-            let rate = if prev_cnt > 0.0 {
-                ((curr_cnt - prev_cnt) / prev_cnt) * 100.0
+            let rate = if previous_count > 0.0 {
+                ((current_count - previous_count) / previous_count) * 100.0
             } else {
                 0.0
             };
-            return Ok((expression.operator.evaluate(rate, expression.threshold), rate));
+            return Ok((
+                expression.operator.evaluate(rate, expression.threshold),
+                rate,
+            ));
         }
     };
 
-    let met = expression.operator.evaluate(value, expression.threshold);
-    Ok((met, value))
+    Ok((
+        expression.operator.evaluate(value, expression.threshold),
+        value,
+    ))
+}
+
+fn apply_alert_filters(
+    query: &mut sea_orm::sea_query::SelectStatement,
+    filters: &[crate::domain::alert::AlertFilter],
+) {
+    for filter in filters {
+        query.and_where(Expr::col(Alias::new(&filter.field)).eq(&filter.value));
+    }
 }
 
 async fn dispatch_to_channel(
     channel: &NotificationChannelRecord,
     payload: &serde_json::Value,
 ) -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
-
-    let msg = payload.get("message").and_then(|v| v.as_str()).unwrap_or("Sonde Alert");
-    let status = payload.get("status").and_then(|v| v.as_str()).unwrap_or("alert");
+    let client = alert_http_client()?;
+    let message = payload
+        .get("message")
+        .and_then(|value| value.as_str())
+        .unwrap_or("Sonde Alert");
+    let status = payload
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or("alert");
 
     match channel.kind.as_str() {
         "webhook" => {
-            let url = channel
-                .config
-                .get("url")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing 'url' in channel config")?;
-
-            let mut req = client.post(url).header("content-type", "application/json");
-            if let Some(headers) = channel.config.get("headers").and_then(|v| v.as_object()) {
-                for (k, v) in headers {
-                    if let Some(val_str) = v.as_str() {
-                        req = req.header(k.as_str(), val_str);
+            let url = channel_url(&channel.config)?;
+            let mut request = client.post(url).header("content-type", "application/json");
+            if let Some(headers) = channel.config.get("headers").and_then(|value| value.as_object()) {
+                for (key, value) in headers {
+                    if let Some(value) = value.as_str() {
+                        request = request.header(key.as_str(), value);
                     }
                 }
             }
-
-            let resp = req
+            let response = request
                 .json(payload)
                 .send()
                 .await
-                .map_err(|e| format!("HTTP request failed: {}", e))?;
-
-            if resp.status().is_success() {
+                .map_err(|err| format!("HTTP request failed: {err}"))?;
+            if response.status().is_success() {
                 Ok(())
             } else {
-                let s = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                Err(format!("HTTP status {}: {}", s, body))
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                Err(format!("HTTP status {status}: {}", truncate_error_body(&body)))
             }
         }
         "slack" => {
-            let url = channel
-                .config
-                .get("url")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing 'url' in channel config")?;
-
+            let url = channel_url(&channel.config)?;
             let body = serde_json::json!({
-                "text": format!("🚨 *[Sonde Telemetry]* ({})\n{}", status.to_uppercase(), msg)
+                "text": format!("🚨 *[Sonde Telemetry]* ({})\n{}", status.to_uppercase(), message)
             });
-
-            let resp = client.post(url).json(&body).send().await.map_err(|e| format!("Slack request failed: {}", e))?;
-            if resp.status().is_success() { Ok(()) } else { Err(format!("Slack HTTP {}", resp.status())) }
+            send_json(&client, url, &body, "Slack").await
         }
         "discord" => {
-            let url = channel
-                .config
-                .get("url")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing 'url' in channel config")?;
-
+            let url = channel_url(&channel.config)?;
             let body = serde_json::json!({
-                "content": format!("🚨 **[Sonde Telemetry]** ({})\n{}", status.to_uppercase(), msg)
+                "content": format!("🚨 **[Sonde Telemetry]** ({})\n{}", status.to_uppercase(), message)
             });
-
-            let resp = client.post(url).json(&body).send().await.map_err(|e| format!("Discord request failed: {}", e))?;
-            if resp.status().is_success() { Ok(()) } else { Err(format!("Discord HTTP {}", resp.status())) }
+            send_json(&client, url, &body, "Discord").await
         }
         "feishu" => {
-            let url = channel
-                .config
-                .get("url")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing 'url' in channel config")?;
-
+            let url = channel_url(&channel.config)?;
             let body = serde_json::json!({
                 "msg_type": "text",
                 "content": {
-                    "text": format!("🚨 [Sonde 遥测告警通知]\n状态: {}\n信息: {}\n时间: {}", status.to_uppercase(), msg, chrono::Utc::now().to_rfc3339())
+                    "text": format!("🚨 [Sonde 遥测告警通知]\n状态: {}\n信息: {}\n时间: {}", status.to_uppercase(), message, chrono::Utc::now().to_rfc3339())
                 }
             });
-
-            let resp = client.post(url).json(&body).send().await.map_err(|e| format!("Feishu request failed: {}", e))?;
-            if resp.status().is_success() { Ok(()) } else { Err(format!("Feishu HTTP {}", resp.status())) }
+            send_json(&client, url, &body, "Feishu").await
         }
         "dingtalk" => {
-            let url = channel
-                .config
-                .get("url")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing 'url' in channel config")?;
-
+            let url = channel_url(&channel.config)?;
             let body = serde_json::json!({
                 "msgtype": "text",
                 "text": {
-                    "content": format!("🚨 [Sonde 遥测告警]\n状态: {}\n{}\n时间: {}", status.to_uppercase(), msg, chrono::Utc::now().to_rfc3339())
+                    "content": format!("🚨 [Sonde 遥测告警]\n状态: {}\n{}\n时间: {}", status.to_uppercase(), message, chrono::Utc::now().to_rfc3339())
                 }
             });
-
-            let resp = client.post(url).json(&body).send().await.map_err(|e| format!("DingTalk request failed: {}", e))?;
-            if resp.status().is_success() { Ok(()) } else { Err(format!("DingTalk HTTP {}", resp.status())) }
+            send_json(&client, url, &body, "DingTalk").await
         }
         "wecom" => {
-            let url = channel
-                .config
-                .get("url")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing 'url' in channel config")?;
-
+            let url = channel_url(&channel.config)?;
             let body = serde_json::json!({
                 "msgtype": "text",
                 "text": {
-                    "content": format!("🚨 [Sonde 告警事件]\n状态: {}\n{}\n时间: {}", status.to_uppercase(), msg, chrono::Utc::now().to_rfc3339())
+                    "content": format!("🚨 [Sonde 告警事件]\n状态: {}\n{}\n时间: {}", status.to_uppercase(), message, chrono::Utc::now().to_rfc3339())
                 }
             });
-
-            let resp = client.post(url).json(&body).send().await.map_err(|e| format!("WeCom request failed: {}", e))?;
-            if resp.status().is_success() { Ok(()) } else { Err(format!("WeCom HTTP {}", resp.status())) }
+            send_json(&client, url, &body, "WeCom").await
         }
         "telegram" => {
-            let bot_token = channel.config.get("botToken").and_then(|v| v.as_str()).ok_or("Missing 'botToken'")?;
-            let chat_id = channel.config.get("chatId").and_then(|v| v.as_str()).ok_or("Missing 'chatId'")?;
-            let url = format!("https://api.telegram.org/bot{}/sendMessage", bot_token);
-
+            let bot_token = channel
+                .config
+                .get("botToken")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
+                .ok_or("Missing 'botToken' in channel config")?;
+            let chat_id = channel
+                .config
+                .get("chatId")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
+                .ok_or("Missing 'chatId' in channel config")?;
+            let url = format!("https://api.telegram.org/bot{bot_token}/sendMessage");
             let body = serde_json::json!({
                 "chat_id": chat_id,
-                "text": format!("🚨 *[Sonde Telemetry]* ({})\n{}", status.to_uppercase(), msg),
+                "text": format!("🚨 *[Sonde Telemetry]* ({})\n{}", status.to_uppercase(), message),
                 "parse_mode": "Markdown"
             });
-
-            let resp = client.post(&url).json(&body).send().await.map_err(|e| format!("Telegram request failed: {}", e))?;
-            if resp.status().is_success() { Ok(()) } else { Err(format!("Telegram HTTP {}", resp.status())) }
+            send_json(&client, &url, &body, "Telegram").await
         }
         "email" => {
-            if let Some(url) = channel.config.get("url").and_then(|v| v.as_str()) {
-                let resp = client
-                    .post(url)
-                    .header("content-type", "application/json")
-                    .json(payload)
-                    .send()
-                    .await
-                    .map_err(|e| format!("Email webhook failed: {}", e))?;
-                if resp.status().is_success() {
-                    Ok(())
-                } else {
-                    Err(format!("Email webhook HTTP {}", resp.status()))
+            let url = channel_url(&channel.config)?;
+            send_json(&client, url, payload, "Email webhook").await
+        }
+        _ => Err(format!(
+            "Unsupported notification channel kind '{}'",
+            channel.kind
+        )),
+    }
+}
+
+async fn send_json(
+    client: &reqwest::Client,
+    url: &str,
+    payload: &serde_json::Value,
+    channel_name: &str,
+) -> Result<(), String> {
+    let response = client
+        .post(url)
+        .json(payload)
+        .send()
+        .await
+        .map_err(|err| format!("{channel_name} request failed: {err}"))?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("{channel_name} HTTP {}", response.status()))
+    }
+}
+
+fn alert_http_client() -> Result<reqwest::Client, String> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .redirect(Policy::none())
+        .build()
+        .map_err(|err| format!("Failed to build HTTP client: {err}"))?;
+    let _ = CLIENT.set(client.clone());
+    Ok(CLIENT.get().cloned().unwrap_or(client))
+}
+
+fn validate_channel_config(kind: &str, config: &serde_json::Value) -> Result<(), String> {
+    match kind {
+        "telegram" => {
+            for key in ["botToken", "chatId"] {
+                let value = config
+                    .get(key)
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| format!("{key} is required for telegram channels"))?;
+                if value.len() > 512 {
+                    return Err(format!("{key} is too long"));
                 }
-            } else {
-                Ok(())
+            }
+            Ok(())
+        }
+        "webhook" | "slack" | "discord" | "feishu" | "dingtalk" | "wecom" | "email" => {
+            let _ = channel_url(config)?;
+            if kind == "webhook" {
+                validate_custom_headers(config)?;
+            }
+            Ok(())
+        }
+        _ => Err(format!("unsupported notification channel kind '{kind}'")),
+    }
+}
+
+fn validate_custom_headers(config: &serde_json::Value) -> Result<(), String> {
+    let Some(headers) = config.get("headers") else {
+        return Ok(());
+    };
+    let Some(headers) = headers.as_object() else {
+        return Err("webhook headers must be an object".into());
+    };
+    if headers.len() > 32 {
+        return Err("at most 32 custom webhook headers are allowed".into());
+    }
+    for (key, value) in headers {
+        let Some(value) = value.as_str() else {
+            return Err("webhook header values must be strings".into());
+        };
+        if key.is_empty() || key.len() > 128 || value.len() > 4_096 {
+            return Err("webhook header name or value exceeds the allowed size".into());
+        }
+    }
+    Ok(())
+}
+
+fn channel_url(config: &serde_json::Value) -> Result<&str, String> {
+    let url = config
+        .get("url")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("Missing 'url' in channel config")?;
+    validate_outbound_url(url)?;
+    Ok(url)
+}
+
+fn validate_outbound_url(raw: &str) -> Result<(), String> {
+    if raw.len() > 2_048 {
+        return Err("notification URL is too long".into());
+    }
+    let parsed = Url::parse(raw).map_err(|_| "notification URL is invalid".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("notification URL must use http or https".into());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("notification URL must not contain userinfo credentials".into());
+    }
+
+    match parsed.host().ok_or("notification URL must contain a host")? {
+        Host::Domain(domain) => {
+            let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+            if domain == "localhost"
+                || domain.ends_with(".localhost")
+                || domain.ends_with(".local")
+                || domain.ends_with(".internal")
+                || domain == "metadata.google.internal"
+            {
+                return Err("notification URL must not target a local host".into());
             }
         }
-        _ => Err(format!("Unsupported notification channel kind '{}'", channel.kind)),
+        Host::Ipv4(address) => {
+            if !is_public_ipv4(address) {
+                return Err("notification URL must target a public IPv4 address".into());
+            }
+        }
+        Host::Ipv6(address) => {
+            if address.is_loopback()
+                || address.is_unspecified()
+                || address.is_unique_local()
+                || address.is_unicast_link_local()
+                || address.is_multicast()
+            {
+                return Err("notification URL must target a public IPv6 address".into());
+            }
+        }
     }
+    Ok(())
+}
+
+fn is_public_ipv4(address: Ipv4Addr) -> bool {
+    let [a, b, _, _] = address.octets();
+    !(a == 0
+        || a == 10
+        || a == 127
+        || a >= 224
+        || (a == 100 && (64..=127).contains(&b))
+        || (a == 169 && b == 254)
+        || (a == 172 && (16..=31).contains(&b))
+        || (a == 192 && b == 168)
+        || (a == 198 && (18..=19).contains(&b)))
+}
+
+fn redact_channel_config(config: &mut serde_json::Value) {
+    let Some(object) = config.as_object_mut() else {
+        return;
+    };
+    for (key, value) in object {
+        let normalized = key.to_ascii_lowercase();
+        if normalized == "url"
+            || normalized == "headers"
+            || normalized.contains("token")
+            || normalized.contains("secret")
+            || normalized.contains("password")
+            || normalized.contains("authorization")
+            || normalized.contains("apikey")
+            || normalized.contains("api_key")
+        {
+            *value = serde_json::Value::String("***redacted***".into());
+        }
+    }
+}
+
+fn truncate_error_body(body: &str) -> &str {
+    let end = body
+        .char_indices()
+        .nth(1_024)
+        .map_or(body.len(), |(index, _)| index);
+    &body[..end]
 }
 
 pub fn spawn_alert_evaluator_worker(database: DatabaseConnection) {
@@ -655,5 +875,26 @@ fn source_name(expression: &AlertExpression) -> &'static str {
         AlertSource::LogCount => "log_count",
         AlertSource::MissingData => "missing_data",
         AlertSource::ChangeRate => "change_rate",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_public_ipv4, parse_pending_hits, validate_outbound_url};
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn pending_alert_state_is_parsed() {
+        assert_eq!(parse_pending_hits("pending:3"), 3);
+        assert_eq!(parse_pending_hits("healthy"), 0);
+    }
+
+    #[test]
+    fn private_notification_targets_are_rejected() {
+        assert!(!is_public_ipv4(Ipv4Addr::new(127, 0, 0, 1)));
+        assert!(!is_public_ipv4(Ipv4Addr::new(10, 0, 0, 1)));
+        assert!(validate_outbound_url("http://127.0.0.1/hook").is_err());
+        assert!(validate_outbound_url("http://localhost/hook").is_err());
+        assert!(validate_outbound_url("https://example.com/hook").is_ok());
     }
 }
