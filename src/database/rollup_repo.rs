@@ -7,7 +7,7 @@ use sea_orm::{
 };
 use sha2::{Digest, Sha256};
 
-use super::{query::insert, telemetry_repo::TelemetryScope};
+use super::telemetry_repo::TelemetryScope;
 
 const GLOBAL_ENVIRONMENT: &str = "*";
 const ROLLUP_BACKFILL_KEY: &str = "telemetry_rollup_backfill_v1";
@@ -95,10 +95,10 @@ async fn upsert_dirty_rows(
         query.on_conflict(
             OnConflict::column(Alias::new("id"))
                 .update_column(Alias::new("marked_at"))
-                .update_expr(
+                .values([(
                     Alias::new("generation"),
                     Expr::col(Alias::new("generation")).add(1_i64),
-                )
+                )])
                 .to_owned(),
         );
         database.execute(&query).await?;
@@ -589,6 +589,7 @@ fn saturating_i64(value: u64) -> i64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::{day_bounds, day_for_timestamp, rollup_id};
 
