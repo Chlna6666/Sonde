@@ -763,41 +763,14 @@ async fn compute_growth(
             None
         };
 
-        let mut new_u_q = Query::select();
-        new_u_q
-            .expr_as(
-                Func::count(Expr::col(Alias::new("anonymous_id"))),
-                Alias::new("total"),
-            )
-            .from_subquery(
-                Query::select()
-                    .column(Alias::new("anonymous_id"))
-                    .expr_as(
-                        Func::min(Expr::col(Alias::new("timestamp"))),
-                        Alias::new("min_ts"),
-                    )
-                    .from(Alias::new("events"))
-                    .and_where(Expr::col(Alias::new("anonymous_id")).is_not_null())
-                    .apply_if(application_id, |q, id| {
-                        q.and_where(Expr::col(Alias::new("application_id")).eq(id));
-                    })
-                    .apply_if(environment_id, |q, env| {
-                        q.and_where(Expr::col(Alias::new("environment_id")).eq(env));
-                    })
-                    .group_by_col(Alias::new("anonymous_id"))
-                    .take(),
-                Alias::new("first_seen"),
-            )
-            .and_where(Expr::col(Alias::new("min_ts")).gte(since));
-        let new_users = std::cmp::max(
-            database
-                .query_one(&new_u_q)
-                .await?
-                .and_then(|r| r.try_get::<i64>("", "total").ok())
-                .unwrap_or(0),
-            0,
-        ) as u64;
-
+        let new_users = super::first_seen_repo::count_new_users_hybrid(
+            database,
+            application_id,
+            environment_id,
+            since,
+            None,
+        )
+        .await?;
         let returning_users = curr_users.saturating_sub(new_users);
 
         Ok(GrowthMetrics {
