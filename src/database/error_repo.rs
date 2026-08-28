@@ -51,6 +51,7 @@ pub async fn insert_error_index(
             .anonymous_id
             .as_deref()
             .map(|value| legacy_anonymous_hash(scope, value));
+        let handled = error.handled.map(|value| if value { 1_i64 } else { 0_i64 });
 
         let group = groups.entry(group_id.clone()).or_insert_with(|| ErrorGroupBatch {
             id: group_id.clone(),
@@ -88,7 +89,7 @@ pub async fn insert_error_index(
             Value::from(error.launcher_version.clone()),
             Value::from(error.os.clone()),
             Value::from(error.stack_trace.clone()),
-            Value::from(error.handled.map(i64::from)),
+            Value::from(handled),
             Value::from(serde_json::to_string(&error.attributes).map_err(json_error)?),
             Value::from(received_at),
         ]);
