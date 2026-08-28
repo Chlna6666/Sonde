@@ -12,6 +12,7 @@ const PlaceholderPage = lazy(() => import("./pages/PlaceholderPage").then((m) =>
 const MigrationPage = lazy(() => import("./pages/MigrationPage").then((m) => ({ default: m.MigrationPage })));
 const ExplorerPage = lazy(() => import("./pages/ExplorerPage").then((m) => ({ default: m.ExplorerPage })));
 const AccessPage = lazy(() => import("./pages/AccessPage").then((m) => ({ default: m.AccessPage })));
+const BackupPage = lazy(() => import("./pages/BackupPage").then((m) => ({ default: m.BackupPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const PublicAppPage = lazy(() => import("./pages/PublicAppPage").then((m) => ({ default: m.PublicAppPage })));
 
@@ -135,6 +136,7 @@ function AppRoutes() {
           <Route path="explorer" element={<ExplorerPage />} />
           <Route path="migration" element={<MigrationPage />} />
           <Route path="access" element={<AccessPage />} />
+          <Route path="backup" element={<BackupPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
@@ -153,4 +155,3 @@ function LoadingScreen() {
     </main>
   );
 }
-
