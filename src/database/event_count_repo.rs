@@ -9,6 +9,7 @@ use sea_orm::{
 use super::rollup_repo;
 
 const GLOBAL_ENVIRONMENT: &str = "*";
+const MAX_DIRTY_DAY_BINDS: usize = 400;
 
 /// Count events over an exact millisecond window while using daily rollups whenever they are
 /// authoritative. Dirty days and partial boundary days are replaced from raw events, so callers do
@@ -45,7 +46,10 @@ pub async fn event_count_hybrid(
     if application_id.is_some() {
         query.column(Alias::new("events"));
     } else {
-        query.expr_as(Func::sum(Expr::col(Alias::new("events"))), Alias::new("events"));
+        query.expr_as(
+            Func::sum(Expr::col(Alias::new("events"))),
+            Alias::new("events"),
+        );
     }
     query
         .from(Alias::new("telemetry_daily_rollups"))
@@ -72,7 +76,7 @@ pub async fn event_count_hybrid(
         );
     }
 
-    replace_dirty_days(
+    if !replace_dirty_days(
         database,
         &mut counts,
         application_id,
@@ -80,7 +84,10 @@ pub async fn event_count_hybrid(
         start_day.as_deref(),
         end_day.as_deref(),
     )
-    .await?;
+    .await?
+    {
+        return raw_event_count(database, application_id, environment_id, since, until).await;
+    }
     replace_partial_boundaries(
         database,
         &mut counts,
@@ -96,6 +103,8 @@ pub async fn event_count_hybrid(
         .fold(0_u64, |total, value| total.saturating_add(value)))
 }
 
+/// Returns false when the dirty backlog is too large for a safe cross-database `IN (...)` query.
+/// The caller then performs one exact raw range count instead of generating an oversized statement.
 async fn replace_dirty_days(
     database: &DatabaseConnection,
     counts: &mut BTreeMap<String, u64>,
@@ -103,7 +112,7 @@ async fn replace_dirty_days(
     environment_id: Option<&str>,
     start_day: Option<&str>,
     end_day: Option<&str>,
-) -> Result<(), DbErr> {
+) -> Result<bool, DbErr> {
     let dirty_environment = environment_id.unwrap_or(GLOBAL_ENVIRONMENT);
     let mut dirty = Query::select();
     dirty
@@ -127,7 +136,10 @@ async fn replace_dirty_days(
         .filter_map(|row| row.try_get::<String>("", "day").ok())
         .collect::<Vec<_>>();
     if dirty_days.is_empty() {
-        return Ok(());
+        return Ok(true);
+    }
+    if dirty_days.len() > MAX_DIRTY_DAY_BINDS {
+        return Ok(false);
     }
 
     // For global statistics, replacing the whole dirty calendar day prevents mixing stale rollups
@@ -135,7 +147,10 @@ async fn replace_dirty_days(
     // query is naturally scoped to that application/environment.
     let mut raw = Query::select();
     raw.column(Alias::new("day"))
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("events"))
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("events"),
+        )
         .from(Alias::new("events"))
         .and_where(Expr::col(Alias::new("day")).is_in(dirty_days.iter().map(String::as_str)))
         .group_by_col(Alias::new("day"));
@@ -160,7 +175,7 @@ async fn replace_dirty_days(
             counts.remove(&day);
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 async fn replace_partial_boundaries(
@@ -176,7 +191,8 @@ async fn replace_partial_boundaries(
         .and_then(|value| value.checked_sub(1))
         .and_then(day_for_timestamp);
 
-    if let (Some(since), Some(start_day), Some(end_day)) = (since, start_day.as_deref(), end_day.as_deref())
+    if let (Some(since), Some(start_day), Some(end_day)) =
+        (since, start_day.as_deref(), end_day.as_deref())
         && start_day == end_day
     {
         let end = until.unwrap_or_else(|| next_day_timestamp(start_day).unwrap_or(i64::MAX));
@@ -244,7 +260,10 @@ async fn raw_event_count(
 ) -> Result<u64, DbErr> {
     let mut query = Query::select();
     query
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("total"))
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("total"),
+        )
         .from(Alias::new("events"));
     if let Some(application_id) = application_id {
         query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
@@ -266,16 +285,18 @@ async fn raw_event_count(
 }
 
 fn day_for_timestamp(timestamp: i64) -> Option<String> {
-    DateTime::<Utc>::from_timestamp_millis(timestamp).map(|value| value.format("%Y-%m-%d").to_string())
+    DateTime::<Utc>::from_timestamp_millis(timestamp)
+        .map(|value| value.format("%Y-%m-%d").to_string())
 }
 
 fn day_start_timestamp(day: &str) -> Option<i64> {
-    NaiveDate::parse_from_str(day, "%Y-%m-%d")
-        .ok()?
-        .and_hms_opt(0, 0, 0)?
-        .and_utc()
-        .timestamp_millis()
-        .into()
+    Some(
+        NaiveDate::parse_from_str(day, "%Y-%m-%d")
+            .ok()?
+            .and_hms_opt(0, 0, 0)?
+            .and_utc()
+            .timestamp_millis(),
+    )
 }
 
 fn next_day_timestamp(day: &str) -> Option<i64> {
