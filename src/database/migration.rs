@@ -4,6 +4,7 @@ mod auth_shared_state;
 mod columns;
 mod daily_rollups;
 mod error_model;
+mod job_leases;
 mod rollup_generation;
 mod tables;
 
@@ -11,6 +12,7 @@ use auth_shared_state::SharedAuthState;
 use columns::{bigint, create_index, create_table, string};
 use daily_rollups::DailyRollups;
 use error_model::ErrorTelemetryModel;
+use job_leases::JobLeases;
 use rollup_generation::RollupGeneration;
 use tables::{
     create_alert_tables, create_application_tables, create_identity_tables, create_import_tables,
@@ -33,6 +35,7 @@ impl MigratorTrait for Migrator {
             Box::new(SharedAuthState),
             Box::new(DailyRollups),
             Box::new(RollupGeneration),
+            Box::new(JobLeases),
         ]
     }
 }
@@ -275,6 +278,7 @@ impl MigrationTrait for InitialSchema {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for table in [
+            "job_leases",
             "telemetry_daily_rollups",
             "telemetry_dirty_days",
             "auth_totp_replay",
