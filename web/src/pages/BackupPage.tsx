@@ -83,7 +83,11 @@ export function BackupPage() {
 
   const handleRestore = async () => {
     if (!restoreFile || !manifest) return;
-    if (!window.confirm("确认恢复此全量备份？恢复过程会合并归档中的系统数据，已存在的主键记录不会重复写入。")) {
+    if (
+      !window.confirm(
+        "确认执行全量恢复？归档会在一个数据库事务中精确替换当前用户、应用、遥测、告警和审计数据；当前登录会话将失效。损坏归档会在写入前被拒绝。",
+      )
+    ) {
       return;
     }
 
@@ -96,12 +100,14 @@ export function BackupPage() {
         headers: { "content-type": "application/x-ndjson" },
         body: restoreFile,
       });
-      setSuccess(`恢复完成：已处理 ${result.restoredRecords.toLocaleString()} 条记录。`);
+      setSuccess(
+        `恢复完成：已写入 ${result.restoredRecords.toLocaleString()} 条记录。认证状态已重置，正在返回登录页。`,
+      );
       setRestoreFile(null);
       setManifest(null);
+      window.setTimeout(() => window.location.assign("/login"), 900);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "恢复失败。");
-    } finally {
       setRestoring(false);
     }
   };
@@ -181,9 +187,13 @@ export function BackupPage() {
             <div>
               <h3 className="text-base font-bold text-[var(--text)] m-0">恢复流式备份</h3>
               <p className="text-xs text-[var(--muted)] mt-1 mb-0 leading-relaxed">
-                浏览器仅读取首行 manifest。服务端先异步暂存并完整验证归档，再开启单个数据库事务批量恢复，损坏文件不会产生部分写入。
+                浏览器仅读取首行 manifest。服务端先异步暂存并完整验证归档，再开启单个数据库事务精确替换业务数据，任何失败都会整体回滚。
               </p>
             </div>
+          </div>
+
+          <div className="rounded-xl border border-[var(--danger)]/25 bg-[var(--danger)]/10 p-3 text-xs text-[var(--danger)] leading-relaxed">
+            全量恢复不是合并导入：当前用户、应用、遥测、告警与审计数据会被归档内容替换；认证会话、2FA replay、后台任务 lease 与 dirty marker 会被清空。
           </div>
 
           <label className="field">
