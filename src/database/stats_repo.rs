@@ -246,9 +246,37 @@ pub async fn overview(
     let user_growth = compute_user_growth(database, None, None, since_ts, &bucket_expr).await?;
     let version_timeline = compute_version_timeline(database, None, None, since_ts, &bucket_expr).await?;
     let version_series = compute_version_series(database, None, None, since_ts, &bucket_expr).await?;
-    let os_families = os_family_distribution(database, None, None, since_ts, total_events).await?;
-    let operating_systems = distribution_all(database, None, None, since_ts, "os", total_events).await?;
-    let build_distribution = build_distribution(database, None, None, since_ts, total_events).await?;
+
+    let os_dimension = super::dimension_rollup_repo::event_dimension_timeline_hybrid(
+        database,
+        None,
+        None,
+        since_ts,
+        super::dimension_rollup_repo::DIMENSION_OS,
+    )
+    .await?;
+    let (os_families, operating_systems, build_distribution) = if let Some(points) = os_dimension {
+        (
+            distribution_items(
+                super::dimension_rollup_repo::aggregate_os_families(&points),
+                usize::MAX,
+            ),
+            distribution_items(
+                super::dimension_rollup_repo::aggregate_dimension(&points),
+                50,
+            ),
+            distribution_items(
+                super::dimension_rollup_repo::aggregate_os_builds(&points),
+                100,
+            ),
+        )
+    } else {
+        (
+            os_family_distribution(database, None, None, since_ts, total_events).await?,
+            distribution_all(database, None, None, since_ts, "os", total_events).await?,
+            build_distribution(database, None, None, since_ts, total_events).await?,
+        )
+    };
 
     Ok(Overview {
         applications,
@@ -565,49 +593,109 @@ pub async fn application_stats(
     )
     .await?;
 
-    let app_versions = distribution(
-        database,
-        application_id,
-        environment_id,
-        since_ts,
-        "app_version",
-        total_events,
-    )
-    .await?;
-    let launcher_versions = distribution(
-        database,
-        application_id,
-        environment_id,
-        since_ts,
-        "launcher_version",
-        total_events,
-    )
-    .await?;
-    let os_families = os_family_distribution(
+    let app_version_dimension = super::dimension_rollup_repo::event_dimension_timeline_hybrid(
         database,
         Some(application_id),
         environment_id,
         since_ts,
-        total_events,
+        super::dimension_rollup_repo::DIMENSION_APP_VERSION,
     )
     .await?;
-    let operating_systems = distribution_all(
+    let app_versions = if let Some(points) = app_version_dimension {
+        distribution_items(
+            super::dimension_rollup_repo::aggregate_dimension(&points),
+            50,
+        )
+    } else {
+        distribution(
+            database,
+            application_id,
+            environment_id,
+            since_ts,
+            "app_version",
+            total_events,
+        )
+        .await?
+    };
+
+    let launcher_version_dimension =
+        super::dimension_rollup_repo::event_dimension_timeline_hybrid(
+            database,
+            Some(application_id),
+            environment_id,
+            since_ts,
+            super::dimension_rollup_repo::DIMENSION_LAUNCHER_VERSION,
+        )
+        .await?;
+    let launcher_versions = if let Some(points) = launcher_version_dimension {
+        distribution_items(
+            super::dimension_rollup_repo::aggregate_dimension(&points),
+            50,
+        )
+    } else {
+        distribution(
+            database,
+            application_id,
+            environment_id,
+            since_ts,
+            "launcher_version",
+            total_events,
+        )
+        .await?
+    };
+
+    let os_dimension = super::dimension_rollup_repo::event_dimension_timeline_hybrid(
         database,
         Some(application_id),
         environment_id,
         since_ts,
-        "os",
-        total_events,
+        super::dimension_rollup_repo::DIMENSION_OS,
     )
     .await?;
-    let build_distribution = build_distribution(
-        database,
-        Some(application_id),
-        environment_id,
-        since_ts,
-        total_events,
-    )
-    .await?;
+    let (os_families, operating_systems, build_distribution) = if let Some(points) = os_dimension {
+        (
+            distribution_items(
+                super::dimension_rollup_repo::aggregate_os_families(&points),
+                usize::MAX,
+            ),
+            distribution_items(
+                super::dimension_rollup_repo::aggregate_dimension(&points),
+                50,
+            ),
+            distribution_items(
+                super::dimension_rollup_repo::aggregate_os_builds(&points),
+                100,
+            ),
+        )
+    } else {
+        (
+            os_family_distribution(
+                database,
+                Some(application_id),
+                environment_id,
+                since_ts,
+                total_events,
+            )
+            .await?,
+            distribution_all(
+                database,
+                Some(application_id),
+                environment_id,
+                since_ts,
+                "os",
+                total_events,
+            )
+            .await?,
+            build_distribution(
+                database,
+                Some(application_id),
+                environment_id,
+                since_ts,
+                total_events,
+            )
+            .await?,
+        )
+    };
 
     Ok(AppTelemetryStats {
         overview: AppStatsOverview {
@@ -1243,4 +1331,29 @@ async fn distribution(
         total_events,
     )
     .await
+}
+
+fn distribution_items(
+    counts: Vec<super::dimension_rollup_repo::DimensionCount>,
+    limit: usize,
+) -> Vec<DistributionItem> {
+    let total = counts
+        .iter()
+        .fold(0_u64, |acc, item| acc.saturating_add(item.count));
+    counts
+        .into_iter()
+        .take(limit)
+        .map(|item| {
+            let percentage = if total > 0 {
+                (item.count as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
+            DistributionItem {
+                name: item.value,
+                count: item.count,
+                percentage: (percentage * 10.0).round() / 10.0,
+            }
+        })
+        .collect()
 }
