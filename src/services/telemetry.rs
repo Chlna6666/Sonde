@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     auth,
     database::{
-        app_repo,
+        ingest_auth_repo,
         telemetry_repo::{self, TelemetryScope},
     },
     domain::telemetry::{
@@ -150,7 +150,7 @@ pub async fn issue_token_from_request(
 
     let raw_key = extract_raw_key(request).ok_or(AppError::Unauthorized)?;
     let hash = hex::encode(Sha256::digest(raw_key.as_bytes()));
-    let context = app_repo::api_key_context(
+    let context = ingest_auth_repo::api_key_context(
         &installed.database,
         &hash,
         chrono::Utc::now().timestamp_millis(),
@@ -292,7 +292,7 @@ pub async fn scope_for_key_with_permission(
     required_perm: &str,
 ) -> Result<TelemetryScope, AppError> {
     let hash = hex::encode(Sha256::digest(raw_key.as_bytes()));
-    let context = app_repo::api_key_context(
+    let context = ingest_auth_repo::api_key_context(
         &installed.database,
         &hash,
         chrono::Utc::now().timestamp_millis(),
