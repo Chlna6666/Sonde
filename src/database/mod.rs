@@ -10,7 +10,7 @@ pub mod query;
 pub mod stats_repo;
 pub mod telemetry_repo;
 
-use sea_orm::{ConnectOptions, Database, DatabaseConnection, DbErr};
+use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbErr};
 use sea_orm_migration::MigratorTrait;
 use std::time::Duration;
 
@@ -27,16 +27,21 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
         .idle_timeout(Duration::from_secs(300))
         .max_lifetime(Duration::from_secs(1800))
         .sqlx_logging(false);
-    let db = Database::connect(options).await?;
+
     if is_sqlite {
-        use sea_orm::ConnectionTrait;
-        let _ = db
-            .execute_unprepared(
-                "PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA wal_autocheckpoint=1000;",
-            )
-            .await;
+        options.after_connect(|connection| {
+            Box::pin(async move {
+                connection
+                    .execute_unprepared(
+                        "PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA wal_autocheckpoint=1000;",
+                    )
+                    .await?;
+                Ok(())
+            })
+        });
     }
-    Ok(db)
+
+    Database::connect(options).await
 }
 
 pub async fn migrate(database: &DatabaseConnection) -> Result<(), DbErr> {
