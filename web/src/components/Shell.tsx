@@ -8,6 +8,7 @@ import {
   ChevronRight,
   DatabaseZap,
   Gauge,
+  HardDrive,
   LogOut,
   Menu,
   Radio,
@@ -70,6 +71,14 @@ const navigation = [
     colorClass: "icon-squircle-purple",
     eyebrow: "access.eyebrow",
     title: "access.title",
+  },
+  {
+    to: "/backup",
+    label: "settings.backupRestore",
+    Icon: HardDrive,
+    colorClass: "icon-squircle-amber",
+    eyebrow: "settings.eyebrow",
+    title: "settings.backupRestore",
   },
   {
     to: "/settings",
