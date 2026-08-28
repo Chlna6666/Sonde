@@ -4,6 +4,7 @@ mod auth_shared_state;
 mod columns;
 mod daily_rollups;
 mod dimension_rollups;
+mod dirty_source_mask;
 mod error_model;
 mod first_seen_epoch;
 mod first_seen_index;
@@ -17,6 +18,7 @@ use auth_shared_state::SharedAuthState;
 use columns::{bigint, create_index, create_table, string};
 use daily_rollups::DailyRollups;
 use dimension_rollups::DimensionRollups;
+use dirty_source_mask::DirtySourceMask;
 use error_model::ErrorTelemetryModel;
 use first_seen_epoch::FirstSeenEpoch;
 use first_seen_index::FirstSeenIndex;
@@ -51,6 +53,7 @@ impl MigratorTrait for Migrator {
             Box::new(UserRollupChunks),
             Box::new(FirstSeenIndex),
             Box::new(FirstSeenEpoch),
+            Box::new(DirtySourceMask),
         ]
     }
 }
