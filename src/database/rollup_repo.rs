@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::NaiveDate;
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbBackend, DbErr, TransactionTrait,
-    sea_query::{Alias, Expr, ExprTrait, Func, OnConflict, Order, Query, Value},
+    sea_query::{Alias, Expr, ExprTrait, Func, OnConflict, Order, Query, SimpleExpr, Value},
 };
 use sha2::{Digest, Sha256};
 
@@ -13,6 +13,13 @@ const GLOBAL_ENVIRONMENT: &str = "*";
 const ROLLUP_BACKFILL_KEY: &str = "telemetry_rollup_backfill_v1";
 const DIRTY_INSERT_CHUNK: usize = 100;
 
+pub const DIRTY_SOURCE_EVENT: i64 = 1;
+pub const DIRTY_SOURCE_METRIC: i64 = 1 << 1;
+pub const DIRTY_SOURCE_LOG: i64 = 1 << 2;
+pub const DIRTY_SOURCE_ERROR: i64 = 1 << 3;
+pub const DIRTY_SOURCE_ALL: i64 =
+    DIRTY_SOURCE_EVENT | DIRTY_SOURCE_METRIC | DIRTY_SOURCE_LOG | DIRTY_SOURCE_ERROR;
+
 #[derive(Clone, Debug)]
 pub struct DirtyDay {
     pub id: String,
@@ -21,6 +28,13 @@ pub struct DirtyDay {
     pub day: String,
     pub marked_at: i64,
     pub generation: i64,
+    pub source_mask: i64,
+}
+
+impl DirtyDay {
+    pub fn has_source(&self, source: i64) -> bool {
+        self.source_mask & source != 0
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -33,6 +47,8 @@ pub struct DailyRollupPoint {
     pub errors: u64,
 }
 
+/// Conservative compatibility entrypoint used by lifecycle code. Ingestion should call
+/// `mark_dirty_timestamps_for_source` so unrelated data sources do not invalidate event/user caches.
 pub async fn mark_dirty_timestamps<I>(
     database: &impl ConnectionTrait,
     scope: &TelemetryScope,
@@ -41,13 +57,29 @@ pub async fn mark_dirty_timestamps<I>(
 where
     I: IntoIterator<Item = i64>,
 {
+    mark_dirty_timestamps_for_source(database, scope, DIRTY_SOURCE_ALL, timestamps).await
+}
+
+pub async fn mark_dirty_timestamps_for_source<I>(
+    database: &impl ConnectionTrait,
+    scope: &TelemetryScope,
+    source_mask: i64,
+    timestamps: I,
+) -> Result<(), DbErr>
+where
+    I: IntoIterator<Item = i64>,
+{
+    if source_mask <= 0 || source_mask & !DIRTY_SOURCE_ALL != 0 {
+        return Err(DbErr::Custom("invalid telemetry dirty source mask".into()));
+    }
     let days: BTreeSet<String> = timestamps.into_iter().filter_map(day_for_timestamp).collect();
-    mark_dirty_days(database, scope, days).await
+    mark_dirty_days(database, scope, source_mask, days).await
 }
 
 async fn mark_dirty_days<I>(
     database: &impl ConnectionTrait,
     scope: &TelemetryScope,
+    source_mask: i64,
     days: I,
 ) -> Result<(), DbErr>
 where
@@ -62,15 +94,17 @@ where
                 environment_id,
                 &day,
                 now,
+                source_mask,
             ));
         }
     }
-    upsert_dirty_rows(database, rows).await
+    upsert_dirty_rows(database, rows, source_mask).await
 }
 
 async fn upsert_dirty_rows(
     database: &impl ConnectionTrait,
     rows: Vec<Vec<Value>>,
+    source_mask: i64,
 ) -> Result<(), DbErr> {
     for chunk in rows.chunks(DIRTY_INSERT_CHUNK) {
         let mut query = Query::insert();
@@ -84,6 +118,7 @@ async fn upsert_dirty_rows(
                     "day",
                     "marked_at",
                     "generation",
+                    "source_mask",
                 ]
                 .map(Alias::new),
             );
@@ -95,15 +130,25 @@ async fn upsert_dirty_rows(
         query.on_conflict(
             OnConflict::column(Alias::new("id"))
                 .update_column(Alias::new("marked_at"))
-                .values([(
-                    Alias::new("generation"),
-                    Expr::col(Alias::new("generation")).add(1_i64),
-                )])
+                .values([
+                    (
+                        Alias::new("generation"),
+                        Expr::col(Alias::new("generation")).add(1_i64),
+                    ),
+                    (
+                        Alias::new("source_mask"),
+                        Expr::cust(format!("source_mask | {source_mask}")),
+                    ),
+                ])
                 .to_owned(),
         );
         database.execute(&query).await?;
     }
     Ok(())
+}
+
+pub fn dirty_source_condition(source_mask: i64) -> SimpleExpr {
+    Expr::cust(format!("(source_mask & {source_mask}) <> 0"))
 }
 
 pub async fn list_dirty_days(
@@ -120,6 +165,7 @@ pub async fn list_dirty_days(
                 "day",
                 "marked_at",
                 "generation",
+                "source_mask",
             ]
             .map(Alias::new),
         )
@@ -138,6 +184,7 @@ pub async fn list_dirty_days(
                 day: row.try_get("", "day")?,
                 marked_at: row.try_get("", "marked_at")?,
                 generation: row.try_get("", "generation")?,
+                source_mask: row.try_get("", "source_mask")?,
             })
         })
         .collect()
@@ -150,16 +197,19 @@ pub async fn recompute_claimed_day(
     let transaction = database.begin().await?;
 
     let marker = Query::select()
-        .column(Alias::new("generation"))
+        .columns(["generation", "source_mask"].map(Alias::new))
         .from(Alias::new("telemetry_dirty_days"))
         .and_where(Expr::col(Alias::new("id")).eq(&dirty.id))
         .limit(1)
         .to_owned();
-    let generation = transaction
-        .query_one(&marker)
-        .await?
+    let current = transaction.query_one(&marker).await?;
+    let generation = current
+        .as_ref()
         .and_then(|row| row.try_get::<i64>("", "generation").ok());
-    if generation != Some(dirty.generation) {
+    let source_mask = current
+        .as_ref()
+        .and_then(|row| row.try_get::<i64>("", "source_mask").ok());
+    if generation != Some(dirty.generation) || source_mask != Some(dirty.source_mask) {
         transaction.rollback().await?;
         return Ok(false);
     }
@@ -167,64 +217,111 @@ pub async fn recompute_claimed_day(
     let (start, end) = day_bounds(&dirty.day)?;
     let environment = (dirty.environment_id != GLOBAL_ENVIRONMENT)
         .then_some(dirty.environment_id.as_str());
-    let (events, users) = event_counts(
-        &transaction,
-        &dirty.application_id,
-        environment,
-        &dirty.day,
-    )
-    .await?;
-    let metrics = time_count(
-        &transaction,
-        "metric_points",
-        &dirty.application_id,
-        environment,
-        start,
-        end,
-    )
-    .await?;
-    let logs = time_count(
-        &transaction,
-        "logs",
-        &dirty.application_id,
-        environment,
-        start,
-        end,
-    )
-    .await?;
-    let errors = time_count(
-        &transaction,
-        "error_occurrences",
-        &dirty.application_id,
-        environment,
-        start,
-        end,
-    )
-    .await?;
+    let mut counts = if dirty.source_mask == DIRTY_SOURCE_ALL {
+        (0, 0, 0, 0, 0)
+    } else {
+        existing_rollup_counts(
+            &transaction,
+            &dirty.application_id,
+            &dirty.environment_id,
+            &dirty.day,
+        )
+        .await?
+    };
+
+    if dirty.has_source(DIRTY_SOURCE_EVENT) {
+        (counts.0, counts.1) = event_counts(
+            &transaction,
+            &dirty.application_id,
+            environment,
+            &dirty.day,
+        )
+        .await?;
+    }
+    if dirty.has_source(DIRTY_SOURCE_METRIC) {
+        counts.2 = time_count(
+            &transaction,
+            "metric_points",
+            &dirty.application_id,
+            environment,
+            start,
+            end,
+        )
+        .await?;
+    }
+    if dirty.has_source(DIRTY_SOURCE_LOG) {
+        counts.3 = time_count(
+            &transaction,
+            "logs",
+            &dirty.application_id,
+            environment,
+            start,
+            end,
+        )
+        .await?;
+    }
+    if dirty.has_source(DIRTY_SOURCE_ERROR) {
+        counts.4 = time_count(
+            &transaction,
+            "error_occurrences",
+            &dirty.application_id,
+            environment,
+            start,
+            end,
+        )
+        .await?;
+    }
 
     upsert_rollup(
         &transaction,
         &dirty.application_id,
         &dirty.environment_id,
         &dirty.day,
-        events,
-        users,
-        metrics,
-        logs,
-        errors,
+        counts.0,
+        counts.1,
+        counts.2,
+        counts.3,
+        counts.4,
     )
     .await?;
 
-    // Only clear the exact generation we recomputed. If ingestion refreshed this marker while the
-    // rollup was being calculated, its generation is newer and it deliberately survives.
+    // Only clear the exact generation/source snapshot we recomputed. If ingestion refreshed this
+    // marker while the rollup was being calculated, the newer row deliberately survives.
     let clear = Query::delete()
         .from_table(Alias::new("telemetry_dirty_days"))
         .and_where(Expr::col(Alias::new("id")).eq(&dirty.id))
         .and_where(Expr::col(Alias::new("generation")).eq(dirty.generation))
+        .and_where(Expr::col(Alias::new("source_mask")).eq(dirty.source_mask))
         .to_owned();
     let cleared = transaction.execute(&clear).await?.rows_affected() == 1;
     transaction.commit().await?;
     Ok(cleared)
+}
+
+async fn existing_rollup_counts(
+    database: &impl ConnectionTrait,
+    application_id: &str,
+    environment_id: &str,
+    day: &str,
+) -> Result<(u64, u64, u64, u64, u64), DbErr> {
+    let query = Query::select()
+        .columns(["events", "users", "metrics", "logs", "errors"].map(Alias::new))
+        .from(Alias::new("telemetry_daily_rollups"))
+        .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
+        .and_where(Expr::col(Alias::new("environment_id")).eq(environment_id))
+        .and_where(Expr::col(Alias::new("day")).eq(day))
+        .limit(1)
+        .to_owned();
+    let Some(row) = database.query_one(&query).await? else {
+        return Ok((0, 0, 0, 0, 0));
+    };
+    Ok((
+        positive_u64(row.try_get::<i64>("", "events").unwrap_or(0)),
+        positive_u64(row.try_get::<i64>("", "users").unwrap_or(0)),
+        positive_u64(row.try_get::<i64>("", "metrics").unwrap_or(0)),
+        positive_u64(row.try_get::<i64>("", "logs").unwrap_or(0)),
+        positive_u64(row.try_get::<i64>("", "errors").unwrap_or(0)),
+    ))
 }
 
 async fn upsert_rollup(
@@ -301,10 +398,22 @@ pub async fn seed_historical_dirty_days_once(
     let now = chrono::Utc::now().timestamp_millis();
     let mut rows = Vec::with_capacity(scope_days.len().saturating_mul(2));
     for (application_id, environment_id, day) in &scope_days {
-        rows.push(dirty_row(application_id, environment_id, day, now));
-        rows.push(dirty_row(application_id, GLOBAL_ENVIRONMENT, day, now));
+        rows.push(dirty_row(
+            application_id,
+            environment_id,
+            day,
+            now,
+            DIRTY_SOURCE_ALL,
+        ));
+        rows.push(dirty_row(
+            application_id,
+            GLOBAL_ENVIRONMENT,
+            day,
+            now,
+            DIRTY_SOURCE_ALL,
+        ));
     }
-    upsert_dirty_rows(database, rows).await?;
+    upsert_dirty_rows(database, rows, DIRTY_SOURCE_ALL).await?;
     set_system_state(database, ROLLUP_BACKFILL_KEY, "complete").await?;
     Ok(scope_days.len())
 }
@@ -394,6 +503,7 @@ pub async fn application_event_trend_hybrid(
         .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
         .and_where(Expr::col(Alias::new("environment_id")).eq(rollup_environment))
         .and_where(Expr::col(Alias::new("day")).gte(since_day))
+        .and_where(dirty_source_condition(DIRTY_SOURCE_EVENT))
         .to_owned();
     let dirty_days = database
         .query_all(&dirty_query)
@@ -404,16 +514,19 @@ pub async fn application_event_trend_hybrid(
 
     if !dirty_days.is_empty() {
         let mut raw = Query::select();
-        raw.expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("events"))
-            .expr_as(
-                Expr::cust("COUNT(DISTINCT anonymous_id)"),
-                Alias::new("users"),
-            )
-            .column(Alias::new("day"))
-            .from(Alias::new("events"))
-            .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
-            .and_where(Expr::col(Alias::new("day")).is_in(dirty_days.iter().map(String::as_str)))
-            .group_by_col(Alias::new("day"));
+        raw.expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("events"),
+        )
+        .expr_as(
+            Expr::cust("COUNT(DISTINCT anonymous_id)"),
+            Alias::new("users"),
+        )
+        .column(Alias::new("day"))
+        .from(Alias::new("events"))
+        .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
+        .and_where(Expr::col(Alias::new("day")).is_in(dirty_days.iter().map(String::as_str)))
+        .group_by_col(Alias::new("day"));
         if let Some(environment_id) = environment_id {
             raw.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
         }
@@ -510,7 +623,11 @@ async fn set_system_state(
     query
         .into_table(Alias::new("system_state"))
         .columns([Alias::new("key"), Alias::new("value")])
-        .values([Value::from(key.to_owned()), Value::from(value.to_owned())].into_iter().map(Expr::value))
+        .values(
+            [Value::from(key.to_owned()), Value::from(value.to_owned())]
+                .into_iter()
+                .map(Expr::value),
+        )
         .map_err(|error| DbErr::Custom(error.to_string()))?
         .on_conflict(
             OnConflict::column(Alias::new("key"))
@@ -521,7 +638,13 @@ async fn set_system_state(
     Ok(())
 }
 
-fn dirty_row(application_id: &str, environment_id: &str, day: &str, marked_at: i64) -> Vec<Value> {
+fn dirty_row(
+    application_id: &str,
+    environment_id: &str,
+    day: &str,
+    marked_at: i64,
+    source_mask: i64,
+) -> Vec<Value> {
     vec![
         Value::from(dirty_id(application_id, environment_id, day)),
         Value::from(application_id.to_owned()),
@@ -529,6 +652,7 @@ fn dirty_row(application_id: &str, environment_id: &str, day: &str, marked_at: i
         Value::from(day.to_owned()),
         Value::from(marked_at),
         Value::from(1_i64),
+        Value::from(source_mask),
     ]
 }
 
@@ -591,7 +715,10 @@ fn saturating_i64(value: u64) -> i64 {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::{day_bounds, day_for_timestamp, rollup_id};
+    use super::{
+        DIRTY_SOURCE_EVENT, DIRTY_SOURCE_LOG, day_bounds, day_for_timestamp, dirty_source_condition,
+        rollup_id,
+    };
 
     #[test]
     fn day_round_trip_is_utc_and_stable() {
@@ -603,5 +730,11 @@ mod tests {
             rollup_id("app", "prod", &day),
             rollup_id("app", "prod", &day)
         );
+    }
+
+    #[test]
+    fn dirty_source_masks_are_independent_bits() {
+        assert_eq!(DIRTY_SOURCE_EVENT & DIRTY_SOURCE_LOG, 0);
+        let _ = dirty_source_condition(DIRTY_SOURCE_EVENT | DIRTY_SOURCE_LOG);
     }
 }
