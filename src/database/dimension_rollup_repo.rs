@@ -193,7 +193,16 @@ pub async fn event_dimension_timeline_hybrid(
 ) -> Result<Option<Vec<DimensionDayCount>>, DbErr> {
     raw_column(dimension)?;
     if !dimension_backfill_seeded(database).await? {
-        return Ok(None);
+        return Ok(Some(
+            raw_dimension_timeline(
+                database,
+                application_id,
+                environment_id,
+                since_ts,
+                dimension,
+            )
+            .await?,
+        ));
     }
 
     let rollup_environment = environment_id.unwrap_or(GLOBAL_ENVIRONMENT);
@@ -267,7 +276,16 @@ pub async fn event_dimension_timeline_hybrid(
     }
 
     if dirty.len() > MAX_DIRTY_SCOPE_DAYS {
-        return Ok(None);
+        return Ok(Some(
+            raw_dimension_timeline(
+                database,
+                application_id,
+                environment_id,
+                since_ts,
+                dimension,
+            )
+            .await?,
+        ));
     }
     for (app, day) in dirty {
         values.retain(|(stored_app, stored_day, _), _| {
@@ -384,6 +402,54 @@ fn os_build_name(os: &str) -> String {
         return "Unknown".into();
     }
     os.to_owned()
+}
+
+async fn raw_dimension_timeline(
+    database: &impl ConnectionTrait,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since_ts: Option<i64>,
+    dimension: &str,
+) -> Result<Vec<DimensionDayCount>, DbErr> {
+    let column = raw_column(dimension)?;
+    let mut query = Query::select();
+    query
+        .column(Alias::new("day"))
+        .expr_as(
+            Expr::cust(format!("COALESCE({column}, 'unknown')")),
+            Alias::new("dimension_value"),
+        )
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("item_count"),
+        )
+        .from(Alias::new("events"));
+    if let Some(application_id) = application_id {
+        query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
+    }
+    if let Some(environment_id) = environment_id {
+        query.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
+    }
+    if let Some(since_ts) = since_ts {
+        query.and_where(Expr::col(Alias::new("timestamp")).gte(since_ts));
+    }
+    query
+        .group_by_col(Alias::new("day"))
+        .group_by_col(Alias::new("dimension_value"))
+        .order_by(Alias::new("day"), Order::Asc);
+
+    database
+        .query_all(&query)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(DimensionDayCount {
+                day: row.try_get("", "day")?,
+                value: row.try_get("", "dimension_value")?,
+                count: positive_u64(row.try_get::<i64>("", "item_count").unwrap_or(0)),
+            })
+        })
+        .collect()
 }
 
 async fn raw_dimension_counts(
