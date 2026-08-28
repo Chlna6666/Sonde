@@ -8,6 +8,7 @@ use crate::{
     database,
     error::AppError,
     security::AuthSecurity,
+    services::ingest_writer::IngestWriter,
 };
 
 const MAX_IN_FLIGHT_INGEST_REQUESTS: usize = 64;
@@ -17,6 +18,23 @@ pub struct InstalledState {
     pub database: DatabaseConnection,
     pub config: InstallationConfig,
     pub auth_security: Arc<AuthSecurity>,
+    pub ingest_writer: IngestWriter,
+}
+
+impl InstalledState {
+    pub fn new(
+        database: DatabaseConnection,
+        config: InstallationConfig,
+        auth_security: Arc<AuthSecurity>,
+    ) -> Self {
+        let ingest_writer = IngestWriter::new(database.clone());
+        Self {
+            database,
+            config,
+            auth_security,
+            ingest_writer,
+        }
+    }
 }
 
 pub struct AppState {
@@ -38,12 +56,12 @@ impl AppState {
             }
             let database = database::connect(&config.database_url).await?;
             database::migrate(&database).await?;
-            let auth_security = AuthSecurity::new(runtime.password_pepper.as_bytes())?;
-            Some(Arc::new(InstalledState {
+            let auth_security = Arc::new(AuthSecurity::new(runtime.password_pepper.as_bytes())?);
+            Some(Arc::new(InstalledState::new(
                 database,
                 config,
-                auth_security: Arc::new(auth_security),
-            }))
+                auth_security,
+            )))
         } else if let Some(url) = &runtime.database_url_override {
             match database::connect(url).await {
                 Ok(database) => {
@@ -58,12 +76,13 @@ impl AppState {
                         config
                             .write_atomic(&runtime.config_path)
                             .map_err(|_| AppError::Internal)?;
-                        let auth_security = AuthSecurity::new(runtime.password_pepper.as_bytes())?;
-                        Some(Arc::new(InstalledState {
+                        let auth_security =
+                            Arc::new(AuthSecurity::new(runtime.password_pepper.as_bytes())?);
+                        Some(Arc::new(InstalledState::new(
                             database,
                             config,
-                            auth_security: Arc::new(auth_security),
-                        }))
+                            auth_security,
+                        )))
                     } else {
                         None
                     }
@@ -89,12 +108,12 @@ impl AppState {
                                 .write_atomic(&runtime.config_path)
                                 .map_err(|_| AppError::Internal)?;
                             let auth_security =
-                                AuthSecurity::new(runtime.password_pepper.as_bytes())?;
-                            Some(Arc::new(InstalledState {
+                                Arc::new(AuthSecurity::new(runtime.password_pepper.as_bytes())?);
+                            Some(Arc::new(InstalledState::new(
                                 database,
                                 config,
-                                auth_security: Arc::new(auth_security),
-                            }))
+                                auth_security,
+                            )))
                         } else {
                             None
                         }
@@ -165,6 +184,7 @@ impl AppState {
                 database: installed_ref.database.clone(),
                 config: new_config.clone(),
                 auth_security: installed_ref.auth_security.clone(),
+                ingest_writer: installed_ref.ingest_writer.clone(),
             }));
             Ok(new_config)
         } else {
