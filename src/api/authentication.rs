@@ -15,6 +15,8 @@ use crate::{
     state::AppState,
 };
 
+const MAX_AUTH_JSON_BYTES: usize = 16 * 1024;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LoginRequest {
@@ -34,13 +36,20 @@ struct LoginRequest {
 
 impl LoginRequest {
     fn identifier(&self) -> Result<&str, AppError> {
-        self.username
+        let identifier = self
+            .username
             .as_deref()
             .or(self.email.as_deref())
             .or(self.account.as_deref())
             .or(self.identifier.as_deref())
             .filter(|val| !val.trim().is_empty())
-            .ok_or_else(|| AppError::Validation("username or email is required".into()))
+            .ok_or_else(|| AppError::Validation("username or email is required".into()))?;
+        if identifier.len() > 254 {
+            return Err(AppError::Validation(
+                "username or email is too long".into(),
+            ));
+        }
+        Ok(identifier)
     }
 }
 
@@ -98,6 +107,7 @@ struct LoginErrorResponse {
 pub fn configure(config: &mut web::ServiceConfig) {
     config.service(
         web::scope("/api/v1/auth")
+            .app_data(web::JsonConfig::default().limit(MAX_AUTH_JSON_BYTES))
             .route("/login", web::post().to(login))
             .route("/2fa/verify", web::post().to(verify_2fa))
             .route("/2fa/setup", web::post().to(setup_2fa))
@@ -175,6 +185,9 @@ async fn verify_2fa(
     state: web::Data<Arc<AppState>>,
     body: web::Json<TwoFactorVerifyRequest>,
 ) -> Result<HttpResponse, AppError> {
+    if body.temp_token.len() > 256 || body.code.len() > 16 {
+        return Err(AppError::Validation("invalid 2FA verification request".into()));
+    }
     let installed = state.installed().await?;
     let outcome = authentication::verify_2fa_login(&installed, &body.temp_token, &body.code).await?;
     let cookie = session_cookie(&installed.config, outcome.session_token, Duration::hours(8));
@@ -199,6 +212,9 @@ async fn enable_2fa(
     request: HttpRequest,
     body: web::Json<TwoFactorEnableRequest>,
 ) -> Result<HttpResponse, AppError> {
+    if body.secret.len() > 512 || body.code.len() > 16 || body.password.len() > 128 {
+        return Err(AppError::Validation("invalid 2FA enable request".into()));
+    }
     let installed = state.installed().await?;
     let user = authentication::authenticate_mutation(&installed, &request).await?;
     authentication::enable_2fa(
@@ -218,6 +234,9 @@ async fn disable_2fa(
     request: HttpRequest,
     body: web::Json<TwoFactorDisableRequest>,
 ) -> Result<HttpResponse, AppError> {
+    if body.code.len() > 16 || body.password.len() > 128 {
+        return Err(AppError::Validation("invalid 2FA disable request".into()));
+    }
     let installed = state.installed().await?;
     let user = authentication::authenticate_mutation(&installed, &request).await?;
     authentication::disable_2fa(
@@ -248,7 +267,7 @@ async fn logout(
 ) -> Result<HttpResponse, AppError> {
     let installed = state.installed().await?;
     authentication::authenticate_mutation(&installed, &request).await?;
-    authentication::logout(&installed, &request).await;
+    authentication::logout(&installed, &request).await?;
     let mut response = HttpResponse::NoContent();
     for name in [auth::SESSION_COOKIE, auth::DEVELOPMENT_SESSION_COOKIE] {
         response.cookie(expired_cookie(name, installed.config.secure_cookie));
