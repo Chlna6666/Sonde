@@ -8,6 +8,7 @@ pub mod explorer;
 pub mod ingest_writer;
 pub mod migrations;
 pub mod retention;
+pub mod rollups;
 pub mod setup;
 pub mod statistics;
 pub mod telemetry;
