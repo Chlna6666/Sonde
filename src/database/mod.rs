@@ -10,6 +10,7 @@ pub mod dimension_rollup_repo;
 pub mod error_query_repo;
 pub mod error_repo;
 pub mod explorer_repo;
+pub mod first_seen_repo;
 pub mod import_repo;
 pub mod ingest_auth_repo;
 pub mod job_lease_repo;
