@@ -354,6 +354,8 @@ pub async fn insert_errors(
         }
         insert_batch(&transaction, "logs", &columns, rows).await?;
     }
+
+    super::error_repo::insert_error_index(&transaction, scope, errors, received_at).await?;
     transaction.commit().await?;
     Ok(errors.len())
 }
