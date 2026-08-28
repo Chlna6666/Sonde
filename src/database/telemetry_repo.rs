@@ -257,6 +257,14 @@ fn scoped_event_dedupe_key(scope: &TelemetryScope, idempotency_key: &str) -> Str
     format!("evt:{}", hex::encode(hasher.finalize()))
 }
 
+fn legacy_anonymous_hash(scope: &TelemetryScope, value: &str) -> String {
+    let salt = format!("{}:{}", scope.application_id, scope.environment_id);
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    hasher.update(salt.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
 fn json_error(error: serde_json::Error) -> DbErr {
     DbErr::Custom(error.to_string())
 }
@@ -293,17 +301,33 @@ pub async fn insert_errors(
                 "error_name".into(),
                 serde_json::Value::String(err.name.clone()),
             );
+            attrs.insert(
+                "error_message".into(),
+                serde_json::Value::String(err.message.clone()),
+            );
             if let Some(ref st) = err.stack_trace {
                 attrs.insert("stack_trace".into(), serde_json::Value::String(st.clone()));
             }
             if let Some(h) = err.handled {
                 attrs.insert("handled".into(), serde_json::Value::Bool(h));
             }
+            if let Some(ref anonymous_id) = err.anonymous_id {
+                attrs.insert(
+                    "anonymous_id".into(),
+                    serde_json::Value::String(legacy_anonymous_hash(scope, anonymous_id)),
+                );
+            }
             if let Some(ref s) = err.session_id {
                 attrs.insert("session_id".into(), serde_json::Value::String(s.clone()));
             }
             if let Some(ref v) = err.app_version {
                 attrs.insert("app_version".into(), serde_json::Value::String(v.clone()));
+            }
+            if let Some(ref v) = err.launcher_version {
+                attrs.insert(
+                    "launcher_version".into(),
+                    serde_json::Value::String(v.clone()),
+                );
             }
             if let Some(ref os) = err.os {
                 attrs.insert("os".into(), serde_json::Value::String(os.clone()));
@@ -336,7 +360,7 @@ pub async fn insert_errors(
 
 #[cfg(test)]
 mod tests {
-    use super::{TelemetryScope, scoped_event_dedupe_key};
+    use super::{TelemetryScope, legacy_anonymous_hash, scoped_event_dedupe_key};
 
     #[test]
     fn idempotency_key_is_scoped_to_application_and_environment() {
@@ -356,5 +380,20 @@ mod tests {
             scoped_event_dedupe_key(&a, "request-1"),
             scoped_event_dedupe_key(&a, "request-1")
         );
+    }
+
+    #[test]
+    fn error_anonymous_id_uses_the_event_compatibility_scope() {
+        let scope = TelemetryScope {
+            application_id: "app-a".into(),
+            environment_id: "prod".into(),
+        };
+        let expected = {
+            let mut hasher = Sha256::new();
+            hasher.update(b"device-1");
+            hasher.update(b"app-a:prod");
+            hex::encode(hasher.finalize())
+        };
+        assert_eq!(legacy_anonymous_hash(&scope, "device-1"), expected);
     }
 }
