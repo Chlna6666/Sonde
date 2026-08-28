@@ -37,6 +37,16 @@ pub async fn application_daily_hybrid(
     let since_day = since_ts
         .and_then(day_for_timestamp)
         .unwrap_or_else(|| "0001-01-01".to_owned());
+    if application_dirty_backlog_exceeds(
+        database,
+        application_id,
+        environment_id,
+        &since_day,
+    )
+    .await?
+    {
+        return Ok(None);
+    }
     let Some(points) = rollup_repo::application_event_trend_hybrid(
         database,
         application_id,
@@ -208,6 +218,24 @@ fn supports_rollup(days: Option<u32>) -> bool {
 
 fn monthly_buckets(days: Option<u32>) -> bool {
     matches!(days, Some(365) | None)
+}
+
+async fn application_dirty_backlog_exceeds(
+    database: &DatabaseConnection,
+    application_id: &str,
+    environment_id: Option<&str>,
+    since_day: &str,
+) -> Result<bool, DbErr> {
+    let rollup_environment = environment_id.unwrap_or(GLOBAL_ENVIRONMENT);
+    let query = Query::select()
+        .column(Alias::new("id"))
+        .from(Alias::new("telemetry_dirty_days"))
+        .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
+        .and_where(Expr::col(Alias::new("environment_id")).eq(rollup_environment))
+        .and_where(Expr::col(Alias::new("day")).gte(since_day))
+        .limit((MAX_DIRTY_DAY_BINDS + 1) as u64)
+        .to_owned();
+    Ok(database.query_all(&query).await?.len() > MAX_DIRTY_DAY_BINDS)
 }
 
 fn apply_user_counts(
