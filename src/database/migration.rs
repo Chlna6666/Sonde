@@ -1,9 +1,11 @@
 use sea_orm_migration::prelude::*;
 
 mod columns;
+mod error_model;
 mod tables;
 
 use columns::{bigint, create_index, create_table, string};
+use error_model::ErrorTelemetryModel;
 use tables::{
     create_alert_tables, create_application_tables, create_identity_tables, create_import_tables,
     create_telemetry_tables,
@@ -21,6 +23,7 @@ impl MigratorTrait for Migrator {
             Box::new(TwoFactorAuthAndChannels),
             Box::new(AlertsAndAuditTables),
             Box::new(OperationalIndexes),
+            Box::new(ErrorTelemetryModel),
         ]
     }
 }
@@ -263,6 +266,8 @@ impl MigrationTrait for InitialSchema {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for table in [
+            "error_occurrences",
+            "error_groups",
             "audit_log",
             "alert_deliveries",
             "notification_channels",
