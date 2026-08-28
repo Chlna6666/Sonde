@@ -1,6 +1,7 @@
 pub mod alert_repo;
 pub mod app_repo;
 pub mod auth_repo;
+pub mod auth_state_repo;
 pub mod backup_repo;
 pub mod error_query_repo;
 pub mod error_repo;
