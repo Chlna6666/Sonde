@@ -55,8 +55,6 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             cutoff,
         )
         .await?;
-        // A group contains only derived/sample error metadata. Once its most recent occurrence is
-        // outside retention it must be removed as well, otherwise message samples survive forever.
         report.error_groups_deleted +=
             delete_in_batches(database, "error_groups", "last_seen", &app_id, cutoff).await?;
         let _ = delete_in_batches(
@@ -75,6 +73,8 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             "retention sweep completed for application"
         );
     }
+
+    crate::database::auth_state_repo::cleanup_expired(database).await?;
 
     if report.apps_processed > 0 {
         info!(
