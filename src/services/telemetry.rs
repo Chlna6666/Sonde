@@ -3,10 +3,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     auth,
-    database::{
-        ingest_auth_repo,
-        telemetry_repo::{self, TelemetryScope},
-    },
+    database::{ingest_auth_repo, telemetry_repo::TelemetryScope},
     domain::telemetry::{
         BatchReceipt, ErrorInput, EventInput, LogInput, MAX_BATCH_ITEMS, MetricInput, RejectedItem,
         ValidateTelemetry,
@@ -332,7 +329,7 @@ pub async fn events(
             .map(|id| anonymous_hash(&id, &key_salt));
     }
     let valid = select_valid(items, &rejected);
-    telemetry_repo::insert_events(&installed.database, scope, &valid).await?;
+    installed.ingest_writer.write_events(scope, valid).await?;
     Ok(BatchReceipt { accepted, rejected })
 }
 
@@ -344,7 +341,7 @@ pub async fn metrics(
     ensure_batch_size(items.len())?;
     let (accepted, rejected) = validate(items.as_slice());
     let valid = select_valid(items, &rejected);
-    telemetry_repo::insert_metrics(&installed.database, scope, &valid).await?;
+    installed.ingest_writer.write_metrics(scope, valid).await?;
     Ok(BatchReceipt { accepted, rejected })
 }
 
@@ -356,7 +353,7 @@ pub async fn logs(
     ensure_batch_size(items.len())?;
     let (accepted, rejected) = validate(items.as_slice());
     let valid = select_valid(items, &rejected);
-    telemetry_repo::insert_logs(&installed.database, scope, &valid).await?;
+    installed.ingest_writer.write_logs(scope, valid).await?;
     Ok(BatchReceipt { accepted, rejected })
 }
 
@@ -368,7 +365,7 @@ pub async fn errors(
     ensure_batch_size(items.len())?;
     let (accepted, rejected) = validate(items.as_slice());
     let valid = select_valid(items, &rejected);
-    telemetry_repo::insert_errors(&installed.database, scope, &valid).await?;
+    installed.ingest_writer.write_errors(scope, valid).await?;
     Ok(BatchReceipt { accepted, rejected })
 }
 
