@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use actix_web::{HttpRequest, HttpResponse, web};
+use serde::de::DeserializeOwned;
 
 use crate::{
     domain::telemetry::{Batch, ErrorInput, EventInput, LogInput, MetricInput},
@@ -8,6 +9,8 @@ use crate::{
     services::telemetry::{self, IngestTokenRequest},
     state::AppState,
 };
+
+const MAX_INGEST_BODY_BYTES: usize = 1_048_576;
 
 pub fn configure(config: &mut web::ServiceConfig) {
     config.service(
@@ -26,18 +29,27 @@ async fn token(
     body: web::Json<IngestTokenRequest>,
 ) -> Result<HttpResponse, AppError> {
     let installed = state.installed().await?;
-    let response = telemetry::issue_token_from_request(&installed, &request, body.into_inner()).await?;
+    let response =
+        telemetry::issue_token_from_request(&installed, &request, body.into_inner()).await?;
     Ok(HttpResponse::Ok().json(response))
 }
 
 async fn events(
     state: web::Data<Arc<AppState>>,
     request: HttpRequest,
-    body: web::Json<Batch<EventInput>>,
+    body: web::Bytes,
 ) -> Result<HttpResponse, AppError> {
+    ensure_body_size(&body)?;
     let installed = state.installed().await?;
-    let scope = telemetry::scope_from_request_with_permission(&installed, &request, "telemetry.events").await?;
-    let receipt = telemetry::events(&installed, &scope, body.into_inner().items).await?;
+    let scope = telemetry::scope_from_request_with_permission(
+        &installed,
+        &request,
+        "telemetry.events",
+        body.as_ref(),
+    )
+    .await?;
+    let batch: Batch<EventInput> = parse_batch(&body)?;
+    let receipt = telemetry::events(&installed, &scope, batch.items).await?;
     publish(&state, &scope.application_id, "events", receipt.accepted);
     Ok(HttpResponse::Accepted().json(receipt))
 }
@@ -45,11 +57,19 @@ async fn events(
 async fn metrics(
     state: web::Data<Arc<AppState>>,
     request: HttpRequest,
-    body: web::Json<Batch<MetricInput>>,
+    body: web::Bytes,
 ) -> Result<HttpResponse, AppError> {
+    ensure_body_size(&body)?;
     let installed = state.installed().await?;
-    let scope = telemetry::scope_from_request_with_permission(&installed, &request, "telemetry.metrics").await?;
-    let receipt = telemetry::metrics(&installed, &scope, body.into_inner().items).await?;
+    let scope = telemetry::scope_from_request_with_permission(
+        &installed,
+        &request,
+        "telemetry.metrics",
+        body.as_ref(),
+    )
+    .await?;
+    let batch: Batch<MetricInput> = parse_batch(&body)?;
+    let receipt = telemetry::metrics(&installed, &scope, batch.items).await?;
     publish(&state, &scope.application_id, "metrics", receipt.accepted);
     Ok(HttpResponse::Accepted().json(receipt))
 }
@@ -57,11 +77,19 @@ async fn metrics(
 async fn logs(
     state: web::Data<Arc<AppState>>,
     request: HttpRequest,
-    body: web::Json<Batch<LogInput>>,
+    body: web::Bytes,
 ) -> Result<HttpResponse, AppError> {
+    ensure_body_size(&body)?;
     let installed = state.installed().await?;
-    let scope = telemetry::scope_from_request_with_permission(&installed, &request, "telemetry.logs").await?;
-    let receipt = telemetry::logs(&installed, &scope, body.into_inner().items).await?;
+    let scope = telemetry::scope_from_request_with_permission(
+        &installed,
+        &request,
+        "telemetry.logs",
+        body.as_ref(),
+    )
+    .await?;
+    let batch: Batch<LogInput> = parse_batch(&body)?;
+    let receipt = telemetry::logs(&installed, &scope, batch.items).await?;
     publish(&state, &scope.application_id, "logs", receipt.accepted);
     Ok(HttpResponse::Accepted().json(receipt))
 }
@@ -69,13 +97,33 @@ async fn logs(
 async fn errors(
     state: web::Data<Arc<AppState>>,
     request: HttpRequest,
-    body: web::Json<Batch<ErrorInput>>,
+    body: web::Bytes,
 ) -> Result<HttpResponse, AppError> {
+    ensure_body_size(&body)?;
     let installed = state.installed().await?;
-    let scope = telemetry::scope_from_request_with_permission(&installed, &request, "telemetry.errors").await?;
-    let receipt = telemetry::errors(&installed, &scope, body.into_inner().items).await?;
+    let scope = telemetry::scope_from_request_with_permission(
+        &installed,
+        &request,
+        "telemetry.errors",
+        body.as_ref(),
+    )
+    .await?;
+    let batch: Batch<ErrorInput> = parse_batch(&body)?;
+    let receipt = telemetry::errors(&installed, &scope, batch.items).await?;
     publish(&state, &scope.application_id, "errors", receipt.accepted);
     Ok(HttpResponse::Accepted().json(receipt))
+}
+
+fn ensure_body_size(body: &[u8]) -> Result<(), AppError> {
+    if body.len() > MAX_INGEST_BODY_BYTES {
+        return Err(AppError::PayloadTooLarge);
+    }
+    Ok(())
+}
+
+fn parse_batch<T: DeserializeOwned>(body: &[u8]) -> Result<Batch<T>, AppError> {
+    serde_json::from_slice(body)
+        .map_err(|_| AppError::Validation("invalid telemetry JSON payload".into()))
 }
 
 fn publish(state: &AppState, application_id: &str, kind: &str, accepted: usize) {

@@ -16,6 +16,8 @@ pub enum AppError {
     AlreadyInitialized,
     #[error("invalid request: {0}")]
     Validation(String),
+    #[error("request payload is too large")]
+    PayloadTooLarge,
     #[error("password must be 15..128 characters")]
     PasswordLength,
     #[error("password appears in the blocked password list")]
@@ -45,6 +47,7 @@ impl ResponseError for AppError {
             Self::Validation(_) | Self::PasswordLength | Self::PasswordBlocked => {
                 StatusCode::BAD_REQUEST
             }
+            Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
             Self::Database(_) | Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -58,6 +61,7 @@ impl ResponseError for AppError {
             Self::NotInitialized => "not_initialized",
             Self::AlreadyInitialized => "already_initialized",
             Self::Validation(_) => "validation_error",
+            Self::PayloadTooLarge => "payload_too_large",
             Self::PasswordLength => "password_length",
             Self::PasswordBlocked => "password_blocked",
             Self::TooManyRequests => "rate_limited",

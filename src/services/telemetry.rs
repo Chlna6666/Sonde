@@ -75,10 +75,14 @@ pub fn has_permission(scopes: &[String], required_perm: &str) -> bool {
             || scope == "ingest"
             || scope == "telemetry.ingest"
             || scope == required_perm
-            || (required_perm == "telemetry.events" && (scope == "events" || scope == "ingest.events"))
-            || (required_perm == "telemetry.metrics" && (scope == "metrics" || scope == "ingest.metrics"))
-            || (required_perm == "telemetry.logs" && (scope == "logs" || scope == "ingest.logs"))
-            || (required_perm == "telemetry.errors" && (scope == "errors" || scope == "ingest.errors"))
+            || (required_perm == "telemetry.events"
+                && (scope == "events" || scope == "ingest.events"))
+            || (required_perm == "telemetry.metrics"
+                && (scope == "metrics" || scope == "ingest.metrics"))
+            || (required_perm == "telemetry.logs"
+                && (scope == "logs" || scope == "ingest.logs"))
+            || (required_perm == "telemetry.errors"
+                && (scope == "errors" || scope == "ingest.errors"))
     })
 }
 
@@ -106,7 +110,7 @@ pub fn match_user_agent(rule: &str, user_agent: &str) -> bool {
     false
 }
 
-/// Exchange API Key + Device ID for an ephemeral 2-minute Ingest Token
+/// Exchange API Key + Device ID for an ephemeral 2-minute Ingest Token.
 pub async fn issue_token_from_request(
     installed: &InstalledState,
     request: &HttpRequest,
@@ -120,16 +124,26 @@ pub async fn issue_token_from_request(
         .trim();
 
     if user_agent.is_empty() {
-        return Err(AppError::Validation("valid User-Agent header is required to request ingest token".into()));
+        return Err(AppError::Validation(
+            "valid User-Agent header is required to request ingest token".into(),
+        ));
     }
 
     let client_ip = extract_client_ip(request);
-    if !installed.auth_security.ingest.check_ip_token_rate(&client_ip).await {
+    if !installed
+        .auth_security
+        .ingest
+        .check_ip_token_rate(&client_ip)
+        .await
+    {
         return Err(AppError::TooManyRequests);
     }
 
-    if body.device_id.trim().is_empty() {
-        return Err(AppError::Validation("deviceId is required".into()));
+    let device_id = body.device_id.trim();
+    if device_id.is_empty() || device_id.len() > 256 {
+        return Err(AppError::Validation(
+            "deviceId must be 1..256 bytes".into(),
+        ));
     }
 
     let raw_key = extract_raw_key(request).ok_or(AppError::Unauthorized)?;
@@ -145,9 +159,9 @@ pub async fn issue_token_from_request(
     let (token, signing_key, expires_at) = installed.auth_security.ingest.issue_ingest_token(
         &context.application_id,
         &context.environment_id,
-        &body.device_id,
+        device_id,
         &context.scopes,
-        120, // 2 minutes TTL
+        120,
         installed.auth_security.pepper(),
     )?;
 
@@ -165,6 +179,7 @@ pub async fn scope_from_request_with_permission(
     installed: &InstalledState,
     request: &HttpRequest,
     required_perm: &str,
+    raw_body: &[u8],
 ) -> Result<TelemetryScope, AppError> {
     let user_agent = request
         .headers()
@@ -174,25 +189,67 @@ pub async fn scope_from_request_with_permission(
         .trim();
 
     if user_agent.is_empty() {
-        return Err(AppError::Validation("valid User-Agent header is required for telemetry ingestion".into()));
+        return Err(AppError::Validation(
+            "valid User-Agent header is required for telemetry ingestion".into(),
+        ));
     }
 
     let client_ip = extract_client_ip(request);
-    if !installed.auth_security.ingest.check_ip_ingest_rate(&client_ip).await {
+    if !installed
+        .auth_security
+        .ingest
+        .check_ip_ingest_rate(&client_ip)
+        .await
+    {
         return Err(AppError::TooManyRequests);
     }
 
     let auth_header = extract_raw_key(request).ok_or(AppError::Unauthorized)?;
 
     if auth_header.starts_with("sndt_") {
-        // Ephemeral Ingest Token Validation
         let claims = installed
             .auth_security
             .ingest
             .verify_ingest_token(auth_header, installed.auth_security.pepper())
             .ok_or(AppError::Unauthorized)?;
 
-        // Device rate limit (max 60 requests / 60s per device)
+        if !has_permission(&claims.scopes, required_perm) {
+            return Err(AppError::Forbidden);
+        }
+
+        let signature = required_header(request, "x-sonde-signature")?;
+        let timestamp = required_header(request, "x-sonde-timestamp")?
+            .parse::<i64>()
+            .map_err(|_| AppError::Validation("invalid x-sonde-timestamp".into()))?;
+        let nonce = required_header(request, "x-sonde-nonce")?;
+        if nonce.is_empty() || nonce.len() > 128 {
+            return Err(AppError::Validation(
+                "x-sonde-nonce must be 1..128 bytes".into(),
+            ));
+        }
+
+        let signing_key = installed
+            .auth_security
+            .ingest
+            .signing_key_for_claims(&claims, installed.auth_security.pepper());
+        IngestSecurity::verify_request_signature(
+            &signing_key,
+            timestamp,
+            nonce,
+            raw_body,
+            signature,
+        )?;
+
+        let now = chrono::Utc::now().timestamp_millis();
+        if !installed
+            .auth_security
+            .ingest
+            .check_and_record_nonce(&claims.application_id, nonce, now + 120_000)
+            .await
+        {
+            return Err(AppError::Forbidden);
+        }
+
         if !installed
             .auth_security
             .ingest
@@ -202,47 +259,11 @@ pub async fn scope_from_request_with_permission(
             return Err(AppError::TooManyRequests);
         }
 
-        if !has_permission(&claims.scopes, required_perm) {
-            return Err(AppError::Forbidden);
-        }
-
-        // HMAC Signature & Nonce Anti-Replay Verification (if headers provided)
-        if let (Some(sig), Some(ts_str), Some(nonce)) = (
-            request.headers().get("x-sonde-signature").and_then(|v| v.to_str().ok()),
-            request.headers().get("x-sonde-timestamp").and_then(|v| v.to_str().ok()),
-            request.headers().get("x-sonde-nonce").and_then(|v| v.to_str().ok()),
-        ) {
-            let timestamp_ms = ts_str
-                .parse::<i64>()
-                .map_err(|_| AppError::Validation("invalid x-sonde-timestamp".into()))?;
-            let now = chrono::Utc::now().timestamp_millis();
-
-            // Nonce anti-replay
-            if !installed
-                .auth_security
-                .ingest
-                .check_and_record_nonce(&claims.application_id, nonce, now + 120_000)
-                .await
-            {
-                return Err(AppError::Forbidden); // Replay attack detected
-            }
-
-            // Verify HMAC signature against empty body or header stream
-            let _ = IngestSecurity::verify_request_signature(
-                &claims.signing_key,
-                timestamp_ms,
-                nonce,
-                b"",
-                sig,
-            );
-        }
-
         Ok(TelemetryScope {
             application_id: claims.application_id,
             environment_id: claims.environment_id,
         })
     } else {
-        // Direct long-lived API Key (Server-to-Server)
         scope_for_key_with_permission(installed, auth_header, required_perm).await
     }
 }
@@ -250,8 +271,17 @@ pub async fn scope_from_request_with_permission(
 pub async fn scope_from_request(
     installed: &InstalledState,
     request: &HttpRequest,
+    raw_body: &[u8],
 ) -> Result<TelemetryScope, AppError> {
-    scope_from_request_with_permission(installed, request, "telemetry.ingest").await
+    scope_from_request_with_permission(installed, request, "telemetry.ingest", raw_body).await
+}
+
+fn required_header<'a>(request: &'a HttpRequest, name: &str) -> Result<&'a str, AppError> {
+    request
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(AppError::Forbidden)
 }
 
 pub async fn scope_for_key_with_permission(

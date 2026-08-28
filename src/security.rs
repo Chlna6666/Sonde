@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use sha2::{Digest, Sha256};
+use hmac::{Hmac, Mac};
 use rand::RngCore;
+use sha2::Sha256;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
@@ -12,6 +13,9 @@ use crate::{auth, error::AppError};
 const SESSION_ABSOLUTE_MILLIS: i64 = 8 * 60 * 60 * 1_000;
 const SESSION_IDLE_MILLIS: i64 = 30 * 60 * 1_000;
 const CHALLENGE_MILLIS: i64 = 5 * 60 * 1_000;
+const INGEST_SIGNING_CONTEXT: &[u8] = b"sonde-ingest-signing-v1\n";
+
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Clone, Debug)]
 pub struct SessionSnapshot {
@@ -60,7 +64,7 @@ pub struct IngestTokenClaims {
     pub device_id: String,
     pub scopes: Vec<String>,
     pub expires_at: i64,
-    pub signing_key: String,
+    pub token_id: String,
 }
 
 #[derive(Debug)]
@@ -164,14 +168,15 @@ impl IngestSecurity {
         }
         if let Some(exp) = nonces.get(&key) {
             if *exp > now {
-                return false; // Replay attack detected
+                return false;
             }
         }
         nonces.insert(key, expires_at);
         true
     }
 
-    /// Issue an ephemeral Ingest Token (valid for `ttl_seconds`, e.g. 120s)
+    /// Issue an ephemeral Ingest Token. The request signing key is returned separately and is not
+    /// embedded in the token claims.
     pub fn issue_ingest_token(
         &self,
         application_id: &str,
@@ -183,7 +188,8 @@ impl IngestSecurity {
     ) -> Result<(String, String, i64), AppError> {
         let now = chrono::Utc::now().timestamp_millis();
         let expires_at = now + ttl_seconds * 1_000;
-        let signing_key = format!("sec_{}", auth::random_token(18));
+        let token_id = auth::random_token(18);
+        let signing_key = derive_ingest_signing_key(pepper, &token_id);
 
         let claims = IngestTokenClaims {
             application_id: application_id.to_owned(),
@@ -191,7 +197,7 @@ impl IngestSecurity {
             device_id: device_id.to_owned(),
             scopes: scopes.to_vec(),
             expires_at,
-            signing_key: signing_key.clone(),
+            token_id,
         };
 
         let json_bytes = serde_json::to_vec(&claims).map_err(|_| AppError::Internal)?;
@@ -202,7 +208,7 @@ impl IngestSecurity {
         Ok((token, signing_key, expires_at))
     }
 
-    /// Verify an ephemeral Ingest Token
+    /// Verify an ephemeral Ingest Token.
     pub fn verify_ingest_token(
         &self,
         token_str: &str,
@@ -210,11 +216,8 @@ impl IngestSecurity {
     ) -> Option<IngestTokenClaims> {
         let without_prefix = token_str.strip_prefix("sndt_")?;
         let (payload_b64, sig_hex) = without_prefix.split_once('.')?;
-
-        let expected_sig = hmac_sha256(pepper, payload_b64.as_bytes());
-        let expected_sig_hex = hex::encode(expected_sig);
-
-        if sig_hex != expected_sig_hex {
+        let provided_sig = hex::decode(sig_hex).ok()?;
+        if !verify_hmac_sha256(pepper, payload_b64.as_bytes(), &provided_sig) {
             return None;
         }
 
@@ -222,14 +225,18 @@ impl IngestSecurity {
         let claims: IngestTokenClaims = serde_json::from_slice(&json_bytes).ok()?;
 
         let now = chrono::Utc::now().timestamp_millis();
-        if claims.expires_at <= now {
+        if claims.expires_at <= now || claims.token_id.is_empty() {
             return None;
         }
 
         Some(claims)
     }
 
-    /// Verify HMAC-SHA256 Request Signature & Timestamp Drift
+    pub fn signing_key_for_claims(&self, claims: &IngestTokenClaims, pepper: &[u8]) -> String {
+        derive_ingest_signing_key(pepper, &claims.token_id)
+    }
+
+    /// Verify HMAC-SHA256 Request Signature & Timestamp Drift.
     pub fn verify_request_signature(
         signing_key: &str,
         timestamp_ms: i64,
@@ -238,9 +245,10 @@ impl IngestSecurity {
         provided_sig_hex: &str,
     ) -> Result<(), AppError> {
         let now = chrono::Utc::now().timestamp_millis();
-        // Timestamp drift must be within +/- 60 seconds
         if (now - timestamp_ms).abs() > 60_000 {
-            return Err(AppError::Validation("request timestamp drift too large (allowed +/- 60s)".into()));
+            return Err(AppError::Validation(
+                "request timestamp drift too large (allowed +/- 60s)".into(),
+            ));
         }
 
         let mut data_to_sign = Vec::with_capacity(64 + body.len());
@@ -250,10 +258,8 @@ impl IngestSecurity {
         data_to_sign.push(b'\n');
         data_to_sign.extend_from_slice(body);
 
-        let expected_sig = hmac_sha256(signing_key.as_bytes(), &data_to_sign);
-        let expected_sig_hex = hex::encode(expected_sig);
-
-        if provided_sig_hex != expected_sig_hex {
+        let provided_sig = hex::decode(provided_sig_hex).map_err(|_| AppError::Forbidden)?;
+        if !verify_hmac_sha256(signing_key.as_bytes(), &data_to_sign, &provided_sig) {
             return Err(AppError::Forbidden);
         }
 
@@ -261,30 +267,30 @@ impl IngestSecurity {
     }
 }
 
-/// Pure RFC 2104 compliant HMAC-SHA256 calculation
-pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
-    let mut k = [0u8; 64];
-    if key.len() > 64 {
-        let h = Sha256::digest(key);
-        k[..32].copy_from_slice(&h);
-    } else {
-        k[..key.len()].copy_from_slice(key);
-    }
-    let mut o_key_pad = [0u8; 64];
-    let mut i_key_pad = [0u8; 64];
-    for i in 0..64 {
-        o_key_pad[i] = k[i] ^ 0x5c;
-        i_key_pad[i] = k[i] ^ 0x36;
-    }
-    let mut inner = Sha256::new();
-    inner.update(i_key_pad);
-    inner.update(data);
-    let inner_hash = inner.finalize();
+fn derive_ingest_signing_key(pepper: &[u8], token_id: &str) -> String {
+    let mut context = Vec::with_capacity(INGEST_SIGNING_CONTEXT.len() + token_id.len());
+    context.extend_from_slice(INGEST_SIGNING_CONTEXT);
+    context.extend_from_slice(token_id.as_bytes());
+    format!("sec_{}", URL_SAFE_NO_PAD.encode(hmac_sha256(pepper, &context)))
+}
 
-    let mut outer = Sha256::new();
-    outer.update(o_key_pad);
-    outer.update(inner_hash);
-    outer.finalize().into()
+fn verify_hmac_sha256(key: &[u8], data: &[u8], provided: &[u8]) -> bool {
+    let Ok(mut mac) = HmacSha256::new_from_slice(key) else {
+        return false;
+    };
+    mac.update(data);
+    mac.verify_slice(provided).is_ok()
+}
+
+pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
+    let Ok(mut mac) = HmacSha256::new_from_slice(key) else {
+        return [0_u8; 32];
+    };
+    mac.update(data);
+    let bytes = mac.finalize().into_bytes();
+    let mut output = [0_u8; 32];
+    output.copy_from_slice(&bytes);
+    output
 }
 
 #[derive(Debug)]
@@ -314,7 +320,10 @@ impl AuthSecurity {
             used_totp_steps: Mutex::new(HashMap::new()),
             ingest: Arc::new(IngestSecurity::new()),
             pepper: pepper.to_vec(),
-            dummy_password_hash: auth::hash_password("sonde-dummy-credential-never-used", pepper)?,
+            dummy_password_hash: auth::hash_password(
+                "sonde-dummy-credential-never-used",
+                pepper,
+            )?,
         })
     }
 
@@ -337,7 +346,7 @@ impl AuthSecurity {
             token.clone(),
             TwoFactorPending {
                 user_id: user_id.to_owned(),
-                expires_at: now + 5 * 60 * 1_000, // 5 minutes validity
+                expires_at: now + 5 * 60 * 1_000,
             },
         );
         token
@@ -354,7 +363,6 @@ impl AuthSecurity {
         }
     }
 
-    /// Verify TOTP code and ensure it is consumed once (Anti-Replay Attack Protection)
     pub async fn verify_and_consume_totp(&self, user_id: &str, secret: &str, code: &str) -> bool {
         let Some(step) = crate::totp::verify_totp_step(secret, code) else {
             return false;
@@ -367,11 +375,10 @@ impl AuthSecurity {
             used_steps.retain(|_, last_step| *last_step >= oldest_allowed_step);
         }
 
-        if let Some(&last_step) = used_steps.get(user_id) {
-            if step <= last_step {
-                // Reject code reuse within the same or prior time window
-                return false;
-            }
+        if let Some(&last_step) = used_steps.get(user_id)
+            && step <= last_step
+        {
+            return false;
         }
 
         used_steps.insert(user_id.to_owned(), step);
@@ -384,8 +391,9 @@ impl AuthSecurity {
         let now = chrono::Utc::now().timestamp_millis();
         let mut sessions = self.sessions.write().await;
         if sessions.len() > 10_000 {
-            sessions
-                .retain(|_, s| s.expires_at > now && s.last_seen_at + SESSION_IDLE_MILLIS > now);
+            sessions.retain(|_, s| {
+                s.expires_at > now && s.last_seen_at + SESSION_IDLE_MILLIS > now
+            });
         }
         sessions.insert(
             auth::token_hash(&token),
@@ -600,7 +608,6 @@ pub mod tests {
             let pepper = b"test-secret-pepper-32-bytes-long!";
             let ingest = IngestSecurity::new();
 
-            // 1. Issue and verify ephemeral token
             let (token, signing_key, expires_at) = ingest
                 .issue_ingest_token(
                     "app-uuid-1",
@@ -616,17 +623,30 @@ pub mod tests {
             let claims = ingest.verify_ingest_token(&token, pepper).unwrap();
             assert_eq!(claims.application_id, "app-uuid-1");
             assert_eq!(claims.device_id, "device-12345");
-            assert_eq!(claims.signing_key, signing_key);
+            assert_eq!(ingest.signing_key_for_claims(&claims, pepper), signing_key);
             assert_eq!(claims.expires_at, expires_at);
             assert!(claims.scopes.contains(&"telemetry.events".to_string()));
 
-            // 2. Anti-replay Nonce
-            let now = chrono::Utc::now().timestamp_millis();
-            assert!(ingest.check_and_record_nonce("app-uuid-1", "nonce-abc", now + 120_000).await);
-            // Replay with same nonce -> should be rejected!
-            assert!(!ingest.check_and_record_nonce("app-uuid-1", "nonce-abc", now + 120_000).await);
+            let payload_b64 = token
+                .strip_prefix("sndt_")
+                .and_then(|value| value.split_once('.'))
+                .map(|(payload, _)| payload)
+                .unwrap();
+            let decoded = String::from_utf8(URL_SAFE_NO_PAD.decode(payload_b64).unwrap()).unwrap();
+            assert!(!decoded.contains(&signing_key));
 
-            // 3. HMAC Signature verification
+            let now = chrono::Utc::now().timestamp_millis();
+            assert!(
+                ingest
+                    .check_and_record_nonce("app-uuid-1", "nonce-abc", now + 120_000)
+                    .await
+            );
+            assert!(
+                !ingest
+                    .check_and_record_nonce("app-uuid-1", "nonce-abc", now + 120_000)
+                    .await
+            );
+
             let body = b"{\"items\":[]}";
             let mut data_to_sign = Vec::new();
             data_to_sign.extend_from_slice(now.to_string().as_bytes());
@@ -638,10 +658,26 @@ pub mod tests {
             let sig = hmac_sha256(signing_key.as_bytes(), &data_to_sign);
             let sig_hex = hex::encode(sig);
 
-            assert!(IngestSecurity::verify_request_signature(&signing_key, now, "nonce-xyz", body, &sig_hex).is_ok());
-
-            // Tampered body -> signature mismatch
-            assert!(IngestSecurity::verify_request_signature(&signing_key, now, "nonce-xyz", b"tampered", &sig_hex).is_err());
+            assert!(
+                IngestSecurity::verify_request_signature(
+                    &signing_key,
+                    now,
+                    "nonce-xyz",
+                    body,
+                    &sig_hex,
+                )
+                .is_ok()
+            );
+            assert!(
+                IngestSecurity::verify_request_signature(
+                    &signing_key,
+                    now,
+                    "nonce-xyz",
+                    b"tampered",
+                    &sig_hex,
+                )
+                .is_err()
+            );
         });
     }
 
@@ -657,20 +693,29 @@ pub mod tests {
             let now_step = (chrono::Utc::now().timestamp() as u64) / 30;
             let code = crate::totp::compute_totp(&secret, now_step).unwrap();
 
-            // First time using code -> valid!
-            assert!(security.verify_and_consume_totp("user-1", &secret, &code).await);
+            assert!(
+                security
+                    .verify_and_consume_totp("user-1", &secret, &code)
+                    .await
+            );
+            assert!(
+                !security
+                    .verify_and_consume_totp("user-1", &secret, &code)
+                    .await
+            );
 
-            // Immediate replay of the exact same code / step -> MUST BE REJECTED!
-            assert!(!security.verify_and_consume_totp("user-1", &secret, &code).await);
-
-            // Replay with prior step code -> MUST BE REJECTED!
             let past_code = crate::totp::compute_totp(&secret, now_step - 1).unwrap();
-            assert!(!security.verify_and_consume_totp("user-1", &secret, &past_code).await);
+            assert!(
+                !security
+                    .verify_and_consume_totp("user-1", &secret, &past_code)
+                    .await
+            );
 
-            // Ephemeral 2FA Token single-use test
             let temp_token = security.issue_2fa_temp_token("user-2").await;
-            assert_eq!(security.consume_2fa_temp_token(&temp_token).await, Some("user-2".into()));
-            // Second consumption -> MUST BE NONE
+            assert_eq!(
+                security.consume_2fa_temp_token(&temp_token).await,
+                Some("user-2".into())
+            );
             assert_eq!(security.consume_2fa_temp_token(&temp_token).await, None);
         });
     }
