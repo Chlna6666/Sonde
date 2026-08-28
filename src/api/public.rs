@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     database::{app_repo, stats_repo},
     error::AppError,
+    services::statistics,
     state::AppState,
 };
 
@@ -40,9 +41,8 @@ async fn get_public_application(
     let app = app_repo::get_public_application_by_slug(&installed.database, &slug)
         .await?
         .ok_or(AppError::NotFound)?;
-
-    let stats =
-        stats_repo::application_stats(&installed.database, &app.id, None, query.days).await?;
+    let days = statistics::validate_days(query.days)?;
+    let stats = stats_repo::application_stats(&installed.database, &app.id, None, days).await?;
 
     Ok(HttpResponse::Ok().json(PublicApplicationDetails {
         application: app,
