@@ -8,6 +8,7 @@ mod error_model;
 mod job_leases;
 mod rollup_generation;
 mod tables;
+mod user_rollups;
 
 use auth_shared_state::SharedAuthState;
 use columns::{bigint, create_index, create_table, string};
@@ -20,6 +21,7 @@ use tables::{
     create_alert_tables, create_application_tables, create_identity_tables, create_import_tables,
     create_telemetry_tables,
 };
+use user_rollups::UserRollups;
 
 pub struct Migrator;
 
@@ -39,6 +41,7 @@ impl MigratorTrait for Migrator {
             Box::new(RollupGeneration),
             Box::new(JobLeases),
             Box::new(DimensionRollups),
+            Box::new(UserRollups),
         ]
     }
 }
@@ -281,6 +284,7 @@ impl MigrationTrait for InitialSchema {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for table in [
+            "telemetry_daily_user_sets",
             "telemetry_daily_dimensions",
             "job_leases",
             "telemetry_daily_rollups",
