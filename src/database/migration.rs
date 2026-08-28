@@ -3,6 +3,7 @@ use sea_orm_migration::prelude::*;
 mod auth_shared_state;
 mod columns;
 mod daily_rollups;
+mod dimension_rollups;
 mod error_model;
 mod job_leases;
 mod rollup_generation;
@@ -11,6 +12,7 @@ mod tables;
 use auth_shared_state::SharedAuthState;
 use columns::{bigint, create_index, create_table, string};
 use daily_rollups::DailyRollups;
+use dimension_rollups::DimensionRollups;
 use error_model::ErrorTelemetryModel;
 use job_leases::JobLeases;
 use rollup_generation::RollupGeneration;
@@ -36,6 +38,7 @@ impl MigratorTrait for Migrator {
             Box::new(DailyRollups),
             Box::new(RollupGeneration),
             Box::new(JobLeases),
+            Box::new(DimensionRollups),
         ]
     }
 }
@@ -278,6 +281,7 @@ impl MigrationTrait for InitialSchema {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for table in [
+            "telemetry_daily_dimensions",
             "job_leases",
             "telemetry_daily_rollups",
             "telemetry_dirty_days",
