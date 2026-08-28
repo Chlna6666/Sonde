@@ -3,7 +3,9 @@ use std::path::Path;
 use futures_util::Stream;
 
 use crate::{
-    database::{app_repo, backup_repo, backup_v2_repo, backup_v2_restore_repo},
+    database::{
+        app_repo, backup_repo, backup_v2_repo, backup_v2_restore_repo, dimension_restore_repo,
+    },
     error::AppError,
     services::{applications::ensure_app_access, authentication::AuthenticatedUser},
     state::InstalledState,
@@ -126,6 +128,11 @@ pub async fn restore_full_system_v2(
     let restored = backup_v2_restore_repo::restore_full_system_exact(&installed.database, path)
         .await
         .map_err(map_backup_v2_error)?;
+
+    // Dimension rollups are derived cache state and are intentionally not part of the archive.
+    // Invalidate readiness first so concurrent readers use authoritative raw telemetry until the
+    // normal dirty-day worker has rebuilt every restored event day.
+    dimension_restore_repo::reset_after_full_restore(&installed.database).await?;
 
     // Full restore intentionally clears auth_sessions and may replace the account that initiated the
     // request. Record the successful operation as a system actor instead of persisting a dangling id.
