@@ -1,5 +1,9 @@
+use std::path::Path;
+
+use futures_util::Stream;
+
 use crate::{
-    database::{app_repo, backup_repo},
+    database::{app_repo, backup_repo, backup_v2_repo},
     error::AppError,
     services::{applications::ensure_app_access, authentication::AuthenticatedUser},
     state::InstalledState,
@@ -55,14 +59,7 @@ pub async fn export_full_system(
     installed: &InstalledState,
     user: &AuthenticatedUser,
 ) -> Result<backup_repo::FullSystemBackup, AppError> {
-    if !user
-        .roles
-        .iter()
-        .any(|r| r == "Super Admin" || r == "Admin")
-        && !user.grants.iter().any(|g| g.allows("*", None))
-    {
-        return Err(AppError::Forbidden);
-    }
+    require_system_backup_access(user)?;
 
     let backup_data = backup_repo::export_full_system(&installed.database).await?;
 
@@ -83,14 +80,7 @@ pub async fn restore_full_system(
     user: &AuthenticatedUser,
     payload: backup_repo::FullSystemBackup,
 ) -> Result<(), AppError> {
-    if !user
-        .roles
-        .iter()
-        .any(|r| r == "Super Admin" || r == "Admin")
-        && !user.grants.iter().any(|g| g.allows("*", None))
-    {
-        return Err(AppError::Forbidden);
-    }
+    require_system_backup_access(user)?;
 
     backup_repo::restore_full_system(&installed.database, payload).await?;
 
@@ -104,4 +94,71 @@ pub async fn restore_full_system(
     .await?;
 
     Ok(())
+}
+
+pub async fn export_full_system_v2(
+    installed: &InstalledState,
+    user: &AuthenticatedUser,
+) -> Result<impl Stream<Item = Result<Vec<u8>, backup_v2_repo::BackupV2Error>>, AppError> {
+    require_system_backup_access(user)?;
+
+    app_repo::audit(
+        &installed.database,
+        Some(&user.id),
+        "system.backup_export_requested",
+        "system",
+        None,
+    )
+    .await?;
+
+    Ok(backup_v2_repo::export_full_system_stream(
+        installed.database.clone(),
+    ))
+}
+
+pub async fn restore_full_system_v2(
+    installed: &InstalledState,
+    user: &AuthenticatedUser,
+    path: &Path,
+) -> Result<u64, AppError> {
+    require_system_backup_access(user)?;
+
+    let restored = backup_v2_repo::restore_full_system_from_file(&installed.database, path)
+        .await
+        .map_err(map_backup_v2_error)?;
+
+    app_repo::audit(
+        &installed.database,
+        Some(&user.id),
+        "system.backup_v2_restored",
+        "system",
+        None,
+    )
+    .await?;
+
+    Ok(restored)
+}
+
+fn require_system_backup_access(user: &AuthenticatedUser) -> Result<(), AppError> {
+    if user
+        .roles
+        .iter()
+        .any(|role| role == "Super Admin" || role == "Admin")
+        || user.grants.iter().any(|grant| grant.allows("*", None))
+    {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
+
+fn map_backup_v2_error(error: backup_v2_repo::BackupV2Error) -> AppError {
+    match error {
+        backup_v2_repo::BackupV2Error::Database(error) => AppError::Database(error),
+        backup_v2_repo::BackupV2Error::Invalid(message) => AppError::Validation(message),
+        backup_v2_repo::BackupV2Error::Json(error) => {
+            AppError::Validation(format!("invalid backup JSON: {error}"))
+        }
+        backup_v2_repo::BackupV2Error::Io(_) => AppError::Internal,
+    }
 }
