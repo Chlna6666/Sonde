@@ -7,7 +7,10 @@ use sea_orm::{
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use super::{query::insert_batch_ignore_conflicts, rollup_repo::DirtyDay};
+use super::{
+    query::insert_batch_ignore_conflicts,
+    rollup_repo::{self, DirtyDay},
+};
 
 const BACKFILL_STATE_KEY: &str = "telemetry_first_seen_backfill_v1";
 const GLOBAL_SCOPE: &str = "global";
@@ -523,6 +526,9 @@ async fn relevant_dirty_exists(
     query
         .column(Alias::new("id"))
         .from(Alias::new("telemetry_dirty_days"))
+        .and_where(rollup_repo::dirty_source_condition(
+            rollup_repo::DIRTY_SOURCE_EVENT,
+        ))
         .limit(1);
     if let Some(application_id) = application_id {
         query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
