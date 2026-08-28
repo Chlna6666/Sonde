@@ -19,6 +19,7 @@ pub mod rollup_repo;
 pub mod stats_repo;
 pub mod telemetry_repo;
 pub mod trend_repo;
+pub mod version_dimension_repo;
 
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbErr};
 use sea_orm_migration::MigratorTrait;
