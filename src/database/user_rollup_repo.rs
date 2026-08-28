@@ -1,9 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use chrono::NaiveDate;
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbErr, TransactionTrait,
-    sea_query::{Alias, Expr, ExprTrait, Func, OnConflict, Order, Query, Value},
+    sea_query::{Alias, Expr, ExprTrait, OnConflict, Order, Query, Value},
 };
 use sha2::{Digest, Sha256};
 
@@ -12,6 +12,8 @@ use super::rollup_repo::DirtyDay;
 const GLOBAL_ENVIRONMENT: &str = "*";
 const USER_ROLLUP_BACKFILL_KEY: &str = "telemetry_user_rollup_backfill_v1";
 const FINGERPRINT_BYTES: usize = 16;
+const FINGERPRINTS_PER_CHUNK: usize = 2_048;
+const USER_SET_INSERT_CHUNK: usize = 100;
 const MAX_DIRTY_SCOPE_DAYS: usize = 32;
 const DIRTY_INSERT_CHUNK: usize = 100;
 
@@ -112,56 +114,45 @@ pub async fn recompute_claimed_day_user_set(
         Some(&dirty.day),
     )
     .await?;
-    let encoded = encode_fingerprints(&fingerprints);
 
-    let mut upsert = Query::insert();
-    upsert
-        .into_table(Alias::new("telemetry_daily_user_sets"))
-        .columns(
-            [
-                "id",
-                "application_id",
-                "environment_id",
-                "day",
-                "user_count",
-                "fingerprints",
-                "updated_at",
-            ]
-            .map(Alias::new),
-        )
-        .values(
-            [
-                Value::from(user_set_id(
-                    &dirty.application_id,
-                    &dirty.environment_id,
-                    &dirty.day,
-                )),
-                Value::from(dirty.application_id.clone()),
-                Value::from(dirty.environment_id.clone()),
-                Value::from(dirty.day.clone()),
-                Value::from(saturating_i64(fingerprints.len() as u64)),
-                Value::from(encoded),
-                Value::from(chrono::Utc::now().timestamp_millis()),
-            ]
-            .into_iter()
-            .map(Expr::value),
-        )
-        .map_err(|error| DbErr::Custom(error.to_string()))?
-        .on_conflict(
-            OnConflict::column(Alias::new("id"))
-                .update_columns(
-                    ["user_count", "fingerprints", "updated_at"].map(Alias::new),
-                )
-                .to_owned(),
-        );
-    transaction.execute(&upsert).await?;
+    let delete_existing = Query::delete()
+        .from_table(Alias::new("telemetry_daily_user_sets"))
+        .and_where(Expr::col(Alias::new("application_id")).eq(&dirty.application_id))
+        .and_where(Expr::col(Alias::new("environment_id")).eq(&dirty.environment_id))
+        .and_where(Expr::col(Alias::new("day")).eq(&dirty.day))
+        .to_owned();
+    transaction.execute(&delete_existing).await?;
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut rows = Vec::with_capacity(fingerprints.len().div_ceil(FINGERPRINTS_PER_CHUNK));
+    for (chunk_index, chunk) in fingerprints.chunks(FINGERPRINTS_PER_CHUNK).enumerate() {
+        let chunk_index = i32::try_from(chunk_index)
+            .map_err(|_| DbErr::Custom("daily user-set chunk index overflow".into()))?;
+        rows.push(vec![
+            Value::from(user_set_id(
+                &dirty.application_id,
+                &dirty.environment_id,
+                &dirty.day,
+                chunk_index,
+            )),
+            Value::from(dirty.application_id.clone()),
+            Value::from(dirty.environment_id.clone()),
+            Value::from(dirty.day.clone()),
+            Value::from(chunk_index),
+            Value::from(saturating_i64(chunk.len() as u64)),
+            Value::from(encode_fingerprints(chunk)),
+            Value::from(now),
+        ]);
+    }
+    insert_user_set_rows(&transaction, rows).await?;
+
     transaction.commit().await?;
     Ok(true)
 }
 
 /// Returns the unique anonymous-user count in `[since, until)`.
 ///
-/// Clean complete days are served from compact sorted fingerprint sets. Dirty days and partial
+/// Clean complete days are served from compact sorted fingerprint chunks. Dirty days and partial
 /// boundary days are recomputed from authoritative raw events. A large dirty backlog falls back to
 /// one raw DISTINCT query instead of issuing one query per dirty day.
 pub async fn unique_users_hybrid(
@@ -194,11 +185,19 @@ pub async fn unique_users_hybrid(
     let mut query = Query::select();
     query
         .columns(
-            ["application_id", "day", "user_count", "fingerprints"].map(Alias::new),
+            [
+                "application_id",
+                "day",
+                "chunk_index",
+                "user_count",
+                "fingerprints",
+            ]
+            .map(Alias::new),
         )
         .from(Alias::new("telemetry_daily_user_sets"))
         .and_where(Expr::col(Alias::new("environment_id")).eq(rollup_environment))
-        .order_by(Alias::new("day"), Order::Asc);
+        .order_by(Alias::new("day"), Order::Asc)
+        .order_by(Alias::new("chunk_index"), Order::Asc);
     if let Some(application_id) = application_id {
         query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
     }
@@ -216,6 +215,9 @@ pub async fn unique_users_hybrid(
         let declared = positive_u64(row.try_get::<i64>("", "user_count").unwrap_or(0));
         if declared != fingerprints.len() as u64 {
             return Err(DbErr::Custom("daily user-set fingerprint count mismatch".into()));
+        }
+        if fingerprints.len() > FINGERPRINTS_PER_CHUNK {
+            return Err(DbErr::Custom("daily user-set chunk exceeds configured size".into()));
         }
         sets.push(ScopedUserSet {
             application_id: row.try_get("", "application_id")?,
@@ -442,6 +444,37 @@ fn merge_sorted_unique(left: Vec<Fingerprint>, right: Vec<Fingerprint>) -> Vec<F
     merged
 }
 
+async fn insert_user_set_rows(
+    database: &impl ConnectionTrait,
+    rows: Vec<Vec<Value>>,
+) -> Result<(), DbErr> {
+    for chunk in rows.chunks(USER_SET_INSERT_CHUNK) {
+        let mut query = Query::insert();
+        query
+            .into_table(Alias::new("telemetry_daily_user_sets"))
+            .columns(
+                [
+                    "id",
+                    "application_id",
+                    "environment_id",
+                    "day",
+                    "chunk_index",
+                    "user_count",
+                    "fingerprints",
+                    "updated_at",
+                ]
+                .map(Alias::new),
+            );
+        for row in chunk {
+            query
+                .values(row.iter().cloned().map(Expr::value))
+                .map_err(|error| DbErr::Custom(error.to_string()))?;
+        }
+        database.execute(&query).await?;
+    }
+    Ok(())
+}
+
 async fn upsert_dirty_rows(
     database: &impl ConnectionTrait,
     rows: Vec<Vec<Value>>,
@@ -526,14 +559,16 @@ fn dirty_id(application_id: &str, environment_id: &str, day: &str) -> String {
     format!("dr_{}", hex::encode(hasher.finalize()))
 }
 
-fn user_set_id(application_id: &str, environment_id: &str, day: &str) -> String {
+fn user_set_id(application_id: &str, environment_id: &str, day: &str, chunk_index: i32) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"sonde:user-rollup:v1\0");
+    hasher.update(b"sonde:user-rollup:v2\0");
     hasher.update(application_id.as_bytes());
     hasher.update(b"\0");
     hasher.update(environment_id.as_bytes());
     hasher.update(b"\0");
     hasher.update(day.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(chunk_index.to_le_bytes());
     format!("us_{}", hex::encode(hasher.finalize()))
 }
 
@@ -564,7 +599,10 @@ fn saturating_i64(value: u64) -> i64 {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::{decode_fingerprints, encode_fingerprints, fingerprint, union_sorted_sets};
+    use super::{
+        FINGERPRINTS_PER_CHUNK, decode_fingerprints, encode_fingerprints, fingerprint,
+        union_sorted_sets,
+    };
 
     #[test]
     fn fingerprint_encoding_and_union_are_stable() {
@@ -580,5 +618,10 @@ mod tests {
         assert_eq!(merged.len(), 3);
         assert_eq!(decode_fingerprints(&encode_fingerprints(&merged)).unwrap(), merged);
         assert_eq!(fingerprint("alpha"), alpha);
+    }
+
+    #[test]
+    fn configured_chunk_stays_below_standard_blob_limit() {
+        assert!(FINGERPRINTS_PER_CHUNK * 16 < 65_535);
     }
 }
