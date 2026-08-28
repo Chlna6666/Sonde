@@ -129,6 +129,7 @@ fn migrated_event(row: super::parser::LegacyEventRow) -> EventInput {
         app_version: row.app_version,
         launcher_version: row.launcher_version,
         os: row.os,
+        idempotency_key: None,
         attributes,
     }
 }

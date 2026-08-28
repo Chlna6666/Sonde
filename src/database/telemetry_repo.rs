@@ -1,12 +1,10 @@
-use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DbErr, TransactionTrait,
-    sea_query::{Alias, Expr, ExprTrait, Query},
-};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, TransactionTrait};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::domain::telemetry::{EventInput, LogInput, MetricInput};
 
-use super::query::{insert, insert_batch};
+use super::query::{insert_batch, insert_batch_ignore_conflicts};
 
 #[derive(Clone, Debug)]
 pub struct TelemetryScope {
@@ -40,6 +38,7 @@ pub async fn insert_events(
         "dedupe_key",
         "received_at",
     ];
+    let mut inserted = 0_u64;
 
     for chunk in events.chunks(100) {
         let mut rows = Vec::with_capacity(chunk.len());
@@ -53,6 +52,10 @@ pub async fn insert_events(
             } else {
                 serde_json::to_string(&event.attributes).map_err(json_error)?
             };
+            let dedupe_key = event
+                .idempotency_key
+                .as_deref()
+                .map(|key| scoped_event_dedupe_key(scope, key));
             rows.push(vec![
                 Uuid::now_v7().to_string().into(),
                 scope.application_id.clone().into(),
@@ -66,14 +69,22 @@ pub async fn insert_events(
                 event.launcher_version.clone().into(),
                 event.os.clone().into(),
                 attributes_json.into(),
-                Option::<String>::None.into(),
+                dedupe_key.into(),
                 received_at.into(),
             ]);
         }
-        insert_batch(&transaction, "events", &columns, rows).await?;
+        inserted += insert_batch_ignore_conflicts(
+            &transaction,
+            "events",
+            &columns,
+            rows,
+            "dedupe_key",
+            "id",
+        )
+        .await?;
     }
     transaction.commit().await?;
-    Ok(events.len())
+    Ok(inserted as usize)
 }
 
 pub async fn insert_metrics(
@@ -184,60 +195,66 @@ pub async fn insert_migrated_event(
     event: &EventInput,
     dedupe_key: &str,
 ) -> Result<bool, DbErr> {
-    let exists = Query::select()
-        .expr(Expr::col(Alias::new("id")))
-        .from(Alias::new("events"))
-        .and_where(Expr::col(Alias::new("dedupe_key")).eq(dedupe_key))
-        .limit(1)
-        .to_owned();
-    if database.query_one(&exists).await?.is_some() {
-        return Ok(false);
-    }
     let received_at = chrono::Utc::now().timestamp_millis();
     let timestamp = event.timestamp.unwrap_or(received_at);
     let day = chrono::DateTime::from_timestamp_millis(timestamp)
         .map(|value| value.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| "1970-01-01".into());
-    insert(
+    let columns = [
+        "id",
+        "application_id",
+        "environment_id",
+        "name",
+        "timestamp",
+        "day",
+        "anonymous_id",
+        "session_id",
+        "app_version",
+        "launcher_version",
+        "os",
+        "attributes",
+        "dedupe_key",
+        "received_at",
+    ];
+    let rows = vec![vec![
+        Uuid::now_v7().to_string().into(),
+        scope.application_id.clone().into(),
+        scope.environment_id.clone().into(),
+        event.name.clone().into(),
+        timestamp.into(),
+        day.into(),
+        event.anonymous_id.clone().into(),
+        event.session_id.clone().into(),
+        event.app_version.clone().into(),
+        event.launcher_version.clone().into(),
+        event.os.clone().into(),
+        serde_json::to_string(&event.attributes)
+            .map_err(json_error)?
+            .into(),
+        dedupe_key.into(),
+        received_at.into(),
+    ]];
+    Ok(insert_batch_ignore_conflicts(
         database,
         "events",
-        &[
-            "id",
-            "application_id",
-            "environment_id",
-            "name",
-            "timestamp",
-            "day",
-            "anonymous_id",
-            "session_id",
-            "app_version",
-            "launcher_version",
-            "os",
-            "attributes",
-            "dedupe_key",
-            "received_at",
-        ],
-        vec![
-            Uuid::now_v7().to_string().into(),
-            scope.application_id.clone().into(),
-            scope.environment_id.clone().into(),
-            event.name.clone().into(),
-            timestamp.into(),
-            day.into(),
-            event.anonymous_id.clone().into(),
-            event.session_id.clone().into(),
-            event.app_version.clone().into(),
-            event.launcher_version.clone().into(),
-            event.os.clone().into(),
-            serde_json::to_string(&event.attributes)
-                .map_err(json_error)?
-                .into(),
-            dedupe_key.into(),
-            received_at.into(),
-        ],
+        &columns,
+        rows,
+        "dedupe_key",
+        "id",
     )
-    .await?;
-    Ok(true)
+    .await?
+        > 0)
+}
+
+fn scoped_event_dedupe_key(scope: &TelemetryScope, idempotency_key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"sonde:event-idempotency:v1\0");
+    hasher.update(scope.application_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(scope.environment_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(idempotency_key.as_bytes());
+    format!("evt:{}", hex::encode(hasher.finalize()))
 }
 
 fn json_error(error: serde_json::Error) -> DbErr {
@@ -272,7 +289,10 @@ pub async fn insert_errors(
         let mut rows = Vec::with_capacity(chunk.len());
         for err in chunk {
             let mut attrs = err.attributes.clone();
-            attrs.insert("error_name".into(), serde_json::Value::String(err.name.clone()));
+            attrs.insert(
+                "error_name".into(),
+                serde_json::Value::String(err.name.clone()),
+            );
             if let Some(ref st) = err.stack_trace {
                 attrs.insert("stack_trace".into(), serde_json::Value::String(st.clone()));
             }
@@ -312,4 +332,29 @@ pub async fn insert_errors(
     }
     transaction.commit().await?;
     Ok(errors.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TelemetryScope, scoped_event_dedupe_key};
+
+    #[test]
+    fn idempotency_key_is_scoped_to_application_and_environment() {
+        let a = TelemetryScope {
+            application_id: "app-a".into(),
+            environment_id: "prod".into(),
+        };
+        let b = TelemetryScope {
+            application_id: "app-b".into(),
+            environment_id: "prod".into(),
+        };
+        assert_ne!(
+            scoped_event_dedupe_key(&a, "request-1"),
+            scoped_event_dedupe_key(&b, "request-1")
+        );
+        assert_eq!(
+            scoped_event_dedupe_key(&a, "request-1"),
+            scoped_event_dedupe_key(&a, "request-1")
+        );
+    }
 }

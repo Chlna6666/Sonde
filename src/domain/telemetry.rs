@@ -22,6 +22,8 @@ pub struct EventInput {
     pub app_version: Option<String>,
     pub launcher_version: Option<String>,
     pub os: Option<String>,
+    /// Stable client-generated key used to make event retries idempotent within one app/environment.
+    pub idempotency_key: Option<String>,
     #[serde(default)]
     pub attributes: Attributes,
 }
@@ -152,6 +154,13 @@ impl ValidateTelemetry for EventInput {
             self.launcher_version.as_deref(),
             self.os.as_deref(),
         )?;
+        if self
+            .idempotency_key
+            .as_ref()
+            .is_some_and(|key| key.is_empty() || key.len() > 128)
+        {
+            return Err("idempotency_key must be 1..128 bytes when provided");
+        }
         validate_attributes(&self.attributes)
     }
 }
@@ -278,33 +287,36 @@ fn valid_attribute_value(value: &Value, depth: usize) -> bool {
 mod tests {
     use super::{Attributes, EventInput, ValidateTelemetry};
 
-    #[test]
-    fn empty_event_name_is_rejected() {
-        let event = EventInput {
-            name: String::new(),
+    fn event(name: &str) -> EventInput {
+        EventInput {
+            name: name.into(),
             timestamp: None,
             anonymous_id: None,
             session_id: None,
             app_version: None,
             launcher_version: None,
             os: None,
+            idempotency_key: None,
             attributes: Attributes::new(),
-        };
-        assert!(event.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn empty_event_name_is_rejected() {
+        assert!(event("").validate().is_err());
     }
 
     #[test]
     fn far_future_timestamp_is_rejected() {
-        let event = EventInput {
-            name: "application.start".into(),
-            timestamp: Some(chrono::Utc::now().timestamp_millis() + 10 * 60 * 1_000),
-            anonymous_id: None,
-            session_id: None,
-            app_version: None,
-            launcher_version: None,
-            os: None,
-            attributes: Attributes::new(),
-        };
+        let mut event = event("application.start");
+        event.timestamp = Some(chrono::Utc::now().timestamp_millis() + 10 * 60 * 1_000);
+        assert!(event.validate().is_err());
+    }
+
+    #[test]
+    fn oversized_idempotency_key_is_rejected() {
+        let mut event = event("application.start");
+        event.idempotency_key = Some("x".repeat(129));
         assert!(event.validate().is_err());
     }
 }

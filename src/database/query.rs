@@ -1,6 +1,6 @@
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbErr, ExecResult,
-    sea_query::{Alias, Expr, ExprTrait, Query, Value},
+    sea_query::{Alias, Expr, ExprTrait, OnConflict, Query, Value},
 };
 
 pub async fn insert(
@@ -24,6 +24,38 @@ pub async fn insert_batch(
     columns: &[&str],
     rows: Vec<Vec<Value>>,
 ) -> Result<u64, DbErr> {
+    insert_batch_inner(database, table, columns, rows, None).await
+}
+
+/// Insert a batch while treating an existing unique idempotency value as a successful no-op.
+///
+/// `mysql_noop_column` is the column SeaQuery uses for its MySQL `ON DUPLICATE KEY UPDATE x=x`
+/// compatibility form. PostgreSQL and SQLite use the actual conflict target.
+pub async fn insert_batch_ignore_conflicts(
+    database: &impl ConnectionTrait,
+    table: &str,
+    columns: &[&str],
+    rows: Vec<Vec<Value>>,
+    conflict_column: &str,
+    mysql_noop_column: &str,
+) -> Result<u64, DbErr> {
+    insert_batch_inner(
+        database,
+        table,
+        columns,
+        rows,
+        Some((conflict_column, mysql_noop_column)),
+    )
+    .await
+}
+
+async fn insert_batch_inner(
+    database: &impl ConnectionTrait,
+    table: &str,
+    columns: &[&str],
+    rows: Vec<Vec<Value>>,
+    conflict: Option<(&str, &str)>,
+) -> Result<u64, DbErr> {
     if rows.is_empty() {
         return Ok(0);
     }
@@ -34,6 +66,13 @@ pub async fn insert_batch(
         query
             .values(row.into_iter().map(Expr::value))
             .map_err(|error| DbErr::Custom(error.to_string()))?;
+    }
+    if let Some((conflict_column, mysql_noop_column)) = conflict {
+        query.on_conflict(
+            OnConflict::column(Alias::new(conflict_column))
+                .do_nothing_on([Alias::new(mysql_noop_column)])
+                .to_owned(),
+        );
     }
     Ok(database.execute(&query).await?.rows_affected())
 }
