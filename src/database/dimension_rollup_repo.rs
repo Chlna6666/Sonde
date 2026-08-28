@@ -270,7 +270,9 @@ pub async fn event_dimension_timeline_hybrid(
         return Ok(None);
     }
     for (app, day) in dirty {
-        values.retain(|(stored_app, stored_day, _), _| stored_app != &app || stored_day != &day);
+        values.retain(|(stored_app, stored_day, _), _| {
+            stored_app != &app || stored_day != &day
+        });
         for (_, value, count) in raw_dimension_counts(
             database,
             Some(&app),
@@ -363,8 +365,14 @@ fn os_build_name(os: &str) -> String {
         }
         return os.to_owned();
     }
-    if let Some(inner) = os.strip_prefix("Linux (").and_then(|value| value.strip_suffix(')')) {
-        return inner.strip_suffix(" Linux").unwrap_or(inner).to_owned();
+    if let Some(inner) = os
+        .strip_prefix("Linux (")
+        .and_then(|value| value.strip_suffix(')'))
+    {
+        if inner.contains(" Linux ") {
+            return inner.replace(" Linux", "");
+        }
+        return inner.to_owned();
     }
     if let Some(version) = os.strip_prefix("Mac OS X ") {
         return format!("macOS {version}");
@@ -504,7 +512,12 @@ async fn set_system_state(
     Ok(())
 }
 
-fn dirty_row(application_id: &str, environment_id: &str, day: &str, marked_at: i64) -> Vec<Value> {
+fn dirty_row(
+    application_id: &str,
+    environment_id: &str,
+    day: &str,
+    marked_at: i64,
+) -> Vec<Value> {
     vec![
         Value::from(dirty_id(application_id, environment_id, day)),
         Value::from(application_id.to_owned()),
@@ -575,6 +588,10 @@ mod tests {
         assert_eq!(os_family_name("Windows 11 Build 26100"), "Windows");
         assert_eq!(os_family_name("Ubuntu 24.04 Linux x86_64"), "Linux");
         assert_eq!(os_build_name("Windows 11 Build 26100"), "Win 11 (26100)");
+        assert_eq!(
+            os_build_name("Linux (Ubuntu 24.04 Linux x86_64)"),
+            "Ubuntu 24.04 x86_64"
+        );
         assert_eq!(os_build_name("Darwin 25.0"), "macOS 25.0");
     }
 }
