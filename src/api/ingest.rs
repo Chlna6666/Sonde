@@ -11,10 +11,13 @@ use crate::{
 };
 
 const MAX_INGEST_BODY_BYTES: usize = 1_048_576;
+const MAX_TOKEN_BODY_BYTES: usize = 16_384;
 
 pub fn configure(config: &mut web::ServiceConfig) {
     config.service(
         web::scope("/api/v1/ingest")
+            .app_data(web::PayloadConfig::new(MAX_INGEST_BODY_BYTES))
+            .app_data(web::JsonConfig::default().limit(MAX_TOKEN_BODY_BYTES))
             .route("/token", web::post().to(token))
             .route("/events", web::post().to(events))
             .route("/metrics", web::post().to(metrics))
