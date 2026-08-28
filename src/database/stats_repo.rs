@@ -163,7 +163,7 @@ pub async fn overview(
     let active_users_24h = distinct_users(database, since_24h, None, None).await?;
 
     let total_users = count_distinct_users(database, None, None, None).await?;
-    let dau = distinct_users(database, since_24h, None, None).await?;
+    let dau = active_users_24h;
     let wau = distinct_users(database, since_7d, None, None).await?;
     let mau = distinct_users(database, since_30d, None, None).await?;
 
@@ -353,27 +353,7 @@ async fn distinct_users(
     app_id: Option<&str>,
     env_id: Option<&str>,
 ) -> Result<u64, DbErr> {
-    let mut query = Query::select();
-    query
-        .expr_as(
-            Expr::cust("COUNT(DISTINCT anonymous_id)"),
-            Alias::new("total"),
-        )
-        .from(Alias::new("events"))
-        .and_where(Expr::col(Alias::new("timestamp")).gte(since))
-        .and_where(Expr::col(Alias::new("anonymous_id")).is_not_null());
-    if let Some(id) = app_id {
-        query.and_where(Expr::col(Alias::new("application_id")).eq(id));
-    }
-    if let Some(env) = env_id {
-        query.and_where(Expr::col(Alias::new("environment_id")).eq(env));
-    }
-    let row = database.query_one(&query).await?;
-    Ok(std::cmp::max(
-        row.and_then(|value| value.try_get::<i64>("", "total").ok())
-            .unwrap_or(0),
-        0,
-    ) as u64)
+    super::user_rollup_repo::unique_users_hybrid(database, app_id, env_id, Some(since), None).await
 }
 
 async fn count_distinct_users(
@@ -382,29 +362,7 @@ async fn count_distinct_users(
     env_id: Option<&str>,
     since: Option<i64>,
 ) -> Result<u64, DbErr> {
-    let mut query = Query::select();
-    query
-        .expr_as(
-            Expr::cust("COUNT(DISTINCT anonymous_id)"),
-            Alias::new("total"),
-        )
-        .from(Alias::new("events"))
-        .and_where(Expr::col(Alias::new("anonymous_id")).is_not_null());
-    if let Some(id) = app_id {
-        query.and_where(Expr::col(Alias::new("application_id")).eq(id));
-    }
-    if let Some(env) = env_id {
-        query.and_where(Expr::col(Alias::new("environment_id")).eq(env));
-    }
-    if let Some(s) = since {
-        query.and_where(Expr::col(Alias::new("timestamp")).gte(s));
-    }
-    let row = database.query_one(&query).await?;
-    Ok(std::cmp::max(
-        row.and_then(|value| value.try_get::<i64>("", "total").ok())
-            .unwrap_or(0),
-        0,
-    ) as u64)
+    super::user_rollup_repo::unique_users_hybrid(database, app_id, env_id, since, None).await
 }
 
 pub async fn application_stats(
@@ -773,54 +731,22 @@ async fn compute_growth(
             0,
         ) as u64;
 
-        let mut curr_u_q = Query::select();
-        curr_u_q
-            .expr_as(
-                Expr::cust("COUNT(DISTINCT anonymous_id)"),
-                Alias::new("total"),
-            )
-            .from(Alias::new("events"))
-            .and_where(Expr::col(Alias::new("timestamp")).gte(since))
-            .and_where(Expr::col(Alias::new("anonymous_id")).is_not_null());
-        if let Some(id) = application_id {
-            curr_u_q.and_where(Expr::col(Alias::new("application_id")).eq(id));
-        }
-        if let Some(env) = environment_id {
-            curr_u_q.and_where(Expr::col(Alias::new("environment_id")).eq(env));
-        }
-        let curr_users = std::cmp::max(
-            database
-                .query_one(&curr_u_q)
-                .await?
-                .and_then(|r| r.try_get::<i64>("", "total").ok())
-                .unwrap_or(0),
-            0,
-        ) as u64;
-
-        let mut prev_u_q = Query::select();
-        prev_u_q
-            .expr_as(
-                Expr::cust("COUNT(DISTINCT anonymous_id)"),
-                Alias::new("total"),
-            )
-            .from(Alias::new("events"))
-            .and_where(Expr::col(Alias::new("timestamp")).gte(prev_since))
-            .and_where(Expr::col(Alias::new("timestamp")).lt(prev_until))
-            .and_where(Expr::col(Alias::new("anonymous_id")).is_not_null());
-        if let Some(id) = application_id {
-            prev_u_q.and_where(Expr::col(Alias::new("application_id")).eq(id));
-        }
-        if let Some(env) = environment_id {
-            prev_u_q.and_where(Expr::col(Alias::new("environment_id")).eq(env));
-        }
-        let prev_users = std::cmp::max(
-            database
-                .query_one(&prev_u_q)
-                .await?
-                .and_then(|r| r.try_get::<i64>("", "total").ok())
-                .unwrap_or(0),
-            0,
-        ) as u64;
+        let curr_users = super::user_rollup_repo::unique_users_hybrid(
+            database,
+            application_id,
+            environment_id,
+            Some(since),
+            None,
+        )
+        .await?;
+        let prev_users = super::user_rollup_repo::unique_users_hybrid(
+            database,
+            application_id,
+            environment_id,
+            Some(prev_since),
+            Some(prev_until),
+        )
+        .await?;
 
         let events_growth_pct = if prev_events > 0 {
             let pct = ((curr_events as f64 - prev_events as f64) / prev_events as f64) * 100.0;
