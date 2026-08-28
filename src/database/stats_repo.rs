@@ -199,34 +199,48 @@ pub async fn overview(
 
     let growth = compute_growth(database, None, None, since_ts, prev_since_ts, prev_until_ts).await?;
 
-    let mut trend_query = Query::select();
-    trend_query
-        .expr_as(Expr::cust(bucket_expr.to_string()), Alias::new("bucket_time"))
-        .expr_as(
-            Func::count(Expr::col(Alias::new("id"))),
-            Alias::new("events"),
-        )
-        .expr_as(
-            Expr::cust("COUNT(DISTINCT anonymous_id)"),
-            Alias::new("users"),
-        )
-        .from(Alias::new("events"));
-    if let Some(since) = since_ts {
-        trend_query.and_where(Expr::col(Alias::new("timestamp")).gte(since));
-    }
-    trend_query
-        .group_by_col(Alias::new("bucket_time"))
-        .order_by(Alias::new("bucket_time"), sea_orm::sea_query::Order::Asc);
+    let trend = if let Some(points) =
+        super::trend_repo::global_daily_hybrid(database, days, since_ts).await?
+    {
+        points
+            .into_iter()
+            .map(|point| DailyTrendPoint {
+                day: point.day,
+                events: point.events,
+                users: point.users,
+            })
+            .collect()
+    } else {
+        let mut trend_query = Query::select();
+        trend_query
+            .expr_as(Expr::cust(bucket_expr.to_string()), Alias::new("bucket_time"))
+            .expr_as(
+                Func::count(Expr::col(Alias::new("id"))),
+                Alias::new("events"),
+            )
+            .expr_as(
+                Expr::cust("COUNT(DISTINCT anonymous_id)"),
+                Alias::new("users"),
+            )
+            .from(Alias::new("events"));
+        if let Some(since) = since_ts {
+            trend_query.and_where(Expr::col(Alias::new("timestamp")).gte(since));
+        }
+        trend_query
+            .group_by_col(Alias::new("bucket_time"))
+            .order_by(Alias::new("bucket_time"), sea_orm::sea_query::Order::Asc);
 
-    let trend_rows = database.query_all(&trend_query).await?;
-    let mut trend = Vec::with_capacity(trend_rows.len());
-    for row in trend_rows {
-        trend.push(DailyTrendPoint {
-            day: row.try_get("", "bucket_time")?,
-            events: std::cmp::max(row.try_get::<i64>("", "events").unwrap_or(0), 0) as u64,
-            users: std::cmp::max(row.try_get::<i64>("", "users").unwrap_or(0), 0) as u64,
-        });
-    }
+        let trend_rows = database.query_all(&trend_query).await?;
+        let mut trend = Vec::with_capacity(trend_rows.len());
+        for row in trend_rows {
+            trend.push(DailyTrendPoint {
+                day: row.try_get("", "bucket_time")?,
+                events: std::cmp::max(row.try_get::<i64>("", "events").unwrap_or(0), 0) as u64,
+                users: std::cmp::max(row.try_get::<i64>("", "users").unwrap_or(0), 0) as u64,
+            });
+        }
+        trend
+    };
 
     let total_events = count(database, "events", since_ts.map(|s| ("timestamp", s))).await?;
     let user_growth = compute_user_growth(database, None, None, since_ts, &bucket_expr).await?;
@@ -469,37 +483,57 @@ pub async fn application_stats(
     )
     .await?;
 
-    let mut trend_query = Query::select();
-    trend_query
-        .expr_as(Expr::cust(bucket_expr.to_string()), Alias::new("bucket_time"))
-        .expr_as(
-            Func::count(Expr::col(Alias::new("id"))),
-            Alias::new("events"),
-        )
-        .expr_as(
-            Expr::cust("COUNT(DISTINCT anonymous_id)"),
-            Alias::new("users"),
-        )
-        .from(Alias::new("events"))
-        .and_where(Expr::col(Alias::new("application_id")).eq(application_id));
-    if let Some(env_id) = environment_id {
-        trend_query.and_where(Expr::col(Alias::new("environment_id")).eq(env_id));
-    }
-    if let Some(since) = since_ts {
-        trend_query.and_where(Expr::col(Alias::new("timestamp")).gte(since));
-    }
-    trend_query
-        .group_by_col(Alias::new("bucket_time"))
-        .order_by(Alias::new("bucket_time"), sea_orm::sea_query::Order::Asc);
-    let trend_rows = database.query_all(&trend_query).await?;
-    let mut trend = Vec::with_capacity(trend_rows.len());
-    for row in trend_rows {
-        trend.push(DailyTrendPoint {
-            day: row.try_get("", "bucket_time")?,
-            events: std::cmp::max(row.try_get::<i64>("", "events").unwrap_or(0), 0) as u64,
-            users: std::cmp::max(row.try_get::<i64>("", "users").unwrap_or(0), 0) as u64,
-        });
-    }
+    let trend = if let Some(points) = super::trend_repo::application_daily_hybrid(
+        database,
+        application_id,
+        environment_id,
+        days,
+        since_ts,
+    )
+    .await?
+    {
+        points
+            .into_iter()
+            .map(|point| DailyTrendPoint {
+                day: point.day,
+                events: point.events,
+                users: point.users,
+            })
+            .collect()
+    } else {
+        let mut trend_query = Query::select();
+        trend_query
+            .expr_as(Expr::cust(bucket_expr.to_string()), Alias::new("bucket_time"))
+            .expr_as(
+                Func::count(Expr::col(Alias::new("id"))),
+                Alias::new("events"),
+            )
+            .expr_as(
+                Expr::cust("COUNT(DISTINCT anonymous_id)"),
+                Alias::new("users"),
+            )
+            .from(Alias::new("events"))
+            .and_where(Expr::col(Alias::new("application_id")).eq(application_id));
+        if let Some(env_id) = environment_id {
+            trend_query.and_where(Expr::col(Alias::new("environment_id")).eq(env_id));
+        }
+        if let Some(since) = since_ts {
+            trend_query.and_where(Expr::col(Alias::new("timestamp")).gte(since));
+        }
+        trend_query
+            .group_by_col(Alias::new("bucket_time"))
+            .order_by(Alias::new("bucket_time"), sea_orm::sea_query::Order::Asc);
+        let trend_rows = database.query_all(&trend_query).await?;
+        let mut trend = Vec::with_capacity(trend_rows.len());
+        for row in trend_rows {
+            trend.push(DailyTrendPoint {
+                day: row.try_get("", "bucket_time")?,
+                events: std::cmp::max(row.try_get::<i64>("", "events").unwrap_or(0), 0) as u64,
+                users: std::cmp::max(row.try_get::<i64>("", "users").unwrap_or(0), 0) as u64,
+            });
+        }
+        trend
+    };
 
     let days_count = std::cmp::max(trend.len(), 1) as u64;
     let avg_daily_events = total_events / days_count;
@@ -610,7 +644,6 @@ async fn compute_growth(
     if let (Some(since), Some(prev_since), Some(prev_until)) =
         (since_ts, prev_since_ts, prev_until_ts)
     {
-        // Current period events
         let mut curr_e_q = Query::select();
         curr_e_q
             .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("total"))
@@ -631,7 +664,6 @@ async fn compute_growth(
             0,
         ) as u64;
 
-        // Previous period events
         let mut prev_e_q = Query::select();
         prev_e_q
             .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("total"))
@@ -653,7 +685,6 @@ async fn compute_growth(
             0,
         ) as u64;
 
-        // Current period users
         let mut curr_u_q = Query::select();
         curr_u_q
             .expr_as(
@@ -678,7 +709,6 @@ async fn compute_growth(
             0,
         ) as u64;
 
-        // Previous period users
         let mut prev_u_q = Query::select();
         prev_u_q
             .expr_as(
@@ -718,7 +748,6 @@ async fn compute_growth(
             None
         };
 
-        // New users in period (first seen >= since)
         let mut new_u_q = Query::select();
         new_u_q
             .expr_as(
@@ -763,7 +792,6 @@ async fn compute_growth(
             returning_users,
         })
     } else {
-        // All time
         let total_users = count_distinct_users(database, application_id, environment_id, None).await?;
         Ok(GrowthMetrics {
             events_growth_pct: None,
@@ -781,7 +809,6 @@ async fn compute_user_growth(
     since_ts: Option<i64>,
     bucket_expr: &str,
 ) -> Result<Vec<UserGrowthPoint>, DbErr> {
-    // 1. First-seen per user
     let mut fs_q = Query::select();
     fs_q.column(Alias::new("anonymous_id"))
         .expr_as(
@@ -813,7 +840,6 @@ async fn compute_user_growth(
         }
     }
 
-    // 2. Active users per bucket
     let mut act_q = Query::select();
     act_q
         .expr_as(Expr::cust(bucket_expr.to_string()), Alias::new("bucket_time"))
@@ -943,7 +969,6 @@ async fn compute_version_series(
     since_ts: Option<i64>,
     bucket_expr: &str,
 ) -> Result<Vec<VersionSeries>, DbErr> {
-    // 1. Get Top 8 versions
     let mut top_v_q = Query::select();
     top_v_q
         .expr_as(
@@ -983,7 +1008,6 @@ async fn compute_version_series(
         return Ok(Vec::new());
     }
 
-    // 2. Query timeline breakdown for top versions
     let mut query = Query::select();
     query
         .expr_as(Expr::cust(bucket_expr.to_string()), Alias::new("bucket_time"))
