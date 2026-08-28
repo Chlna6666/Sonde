@@ -64,6 +64,7 @@ async fn update_existing(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use crate::database;
 
