@@ -206,6 +206,7 @@ impl AppState {
 fn spawn_background_workers(state: &InstalledState) {
     crate::services::retention::spawn_retention_worker(state.database.clone());
     crate::services::alerts::spawn_alert_evaluator_worker(state.database.clone());
+    crate::services::rollups::spawn_rollup_worker(state.database.clone());
 }
 
 async fn is_database_installed(database: &DatabaseConnection) -> bool {
