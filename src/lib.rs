@@ -27,10 +27,9 @@ pub async fn run() -> io::Result<()> {
             .map_err(io::Error::other)?,
     );
 
-    if let Ok(installed) = state.installed().await {
-        services::retention::spawn_retention_worker(installed.database.clone());
-        services::alerts::spawn_alert_evaluator_worker(installed.database.clone());
-    } else {
+    // AppState owns background-worker lifecycle. Keeping worker startup in one place prevents
+    // duplicate retention/alert/rollup loops after a normal restart.
+    if !state.is_installed().await {
         info!("Sonde is waiting for one-time web setup");
     }
     info!(address = %runtime.bind, "starting Sonde");
