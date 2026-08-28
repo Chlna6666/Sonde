@@ -17,11 +17,11 @@ impl MigrationTrait for DimensionRollups {
             manager,
             "telemetry_daily_dimensions",
             vec![
-                string("id").primary_key().to_owned(),
-                string("application_id"),
-                string("environment_id"),
-                string("day"),
-                string("dimension"),
+                bounded_string("id", 72).primary_key().to_owned(),
+                bounded_string("application_id", 64),
+                bounded_string("environment_id", 64),
+                bounded_string("day", 10),
+                bounded_string("dimension", 32),
                 string("dimension_value"),
                 bigint("count"),
                 bigint("updated_at"),
@@ -29,8 +29,9 @@ impl MigrationTrait for DimensionRollups {
         )
         .await?;
         // The deterministic SHA-256 primary key already enforces uniqueness for the full
-        // (app, env, day, dimension, value) tuple. Avoid a redundant five-VARCHAR unique index:
-        // with utf8mb4 it can exceed InnoDB's 3072-byte index-key budget.
+        // (app, env, day, dimension, value) tuple. Avoid a redundant five-VARCHAR unique index.
+        // Indexed scope fields are deliberately bounded so utf8mb4 cannot exceed InnoDB's key
+        // budget even when every indexed character uses four bytes.
         create_index(
             manager,
             "idx_telemetry_dim_scope_dimension_day",
@@ -59,4 +60,11 @@ impl MigrationTrait for DimensionRollups {
             )
             .await
     }
+}
+
+fn bounded_string(name: &str, length: u32) -> ColumnDef {
+    ColumnDef::new(Alias::new(name))
+        .string_len(length)
+        .not_null()
+        .to_owned()
 }
