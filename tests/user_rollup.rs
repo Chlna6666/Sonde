@@ -226,3 +226,73 @@ async fn user_rollup_chunks_large_daily_unique_sets_without_losing_users() {
         2_050
     );
 }
+
+#[tokio::test]
+async fn user_growth_projection_deduplicates_across_days_and_months() {
+    let database = database::connect("sqlite::memory:").await.unwrap();
+    database::migrate(&database).await.unwrap();
+    let scope = telemetry_repo::TelemetryScope {
+        application_id: "app-growth".into(),
+        environment_id: "prod".into(),
+    };
+    let august_31 = chrono::NaiveDate::from_ymd_opt(2026, 8, 31)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+    let september_1 = august_31 + 86_400_000;
+    let september_2 = september_1 + 86_400_000;
+
+    telemetry_repo::insert_events(
+        &database,
+        &scope,
+        &[
+            event(august_31 + 1_000, "growth-1", "user-a"),
+            event(august_31 + 2_000, "growth-2", "user-b"),
+            event(september_1 + 1_000, "growth-3", "user-b"),
+            event(september_1 + 2_000, "growth-4", "user-c"),
+            event(september_2 + 1_000, "growth-5", "user-d"),
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        user_rollup_repo::seed_historical_user_dirty_days_once(&database)
+            .await
+            .unwrap(),
+        3
+    );
+    for _ in 0..3 {
+        recompute_scope_day(&database, "app-growth", "prod").await;
+    }
+
+    let daily = user_rollup_repo::user_growth_hybrid(
+        &database,
+        Some("app-growth"),
+        Some("prod"),
+        Some(august_31),
+        false,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(daily.len(), 3);
+    assert_eq!((daily[0].new_users, daily[0].cumulative_users, daily[0].active_users), (2, 2, 2));
+    assert_eq!((daily[1].new_users, daily[1].cumulative_users, daily[1].active_users), (1, 3, 2));
+    assert_eq!((daily[2].new_users, daily[2].cumulative_users, daily[2].active_users), (1, 4, 1));
+
+    let monthly = user_rollup_repo::user_growth_hybrid(
+        &database,
+        Some("app-growth"),
+        Some("prod"),
+        Some(august_31),
+        true,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(monthly.len(), 2);
+    assert_eq!((monthly[0].new_users, monthly[0].cumulative_users, monthly[0].active_users), (2, 2, 2));
+    assert_eq!((monthly[1].new_users, monthly[1].cumulative_users, monthly[1].active_users), (2, 4, 3));
+}
