@@ -167,22 +167,15 @@ async fn deleting_application_removes_raw_and_derived_state_without_touching_oth
         assert_eq!(count_for_app(&database, table, &delete_app).await, 0, "{table}");
     }
     assert_eq!(count_for_app(&database, "events", &keep_app).await, 1);
-    assert!(!first_seen_repo::backfill_complete(&database).await.unwrap());
 
-    let first_seen_total = Query::select()
-        .expr_as(
-            Func::count(Expr::col(Alias::new("id"))),
-            Alias::new("total"),
-        )
-        .from(Alias::new("telemetry_user_first_seen"))
-        .to_owned();
+    // Application deletion invalidates the current first-seen epoch in O(1). Old rows may still be
+    // physically present but are unreachable; the next rebuild from surviving events makes a fresh
+    // epoch authoritative and then garbage-collects old epochs.
+    assert!(!first_seen_repo::backfill_complete(&database).await.unwrap());
+    finish_first_seen_backfill(&database).await;
     assert_eq!(
-        database
-            .query_one(&first_seen_total)
-            .await
-            .unwrap()
-            .and_then(|row| row.try_get::<i64>("", "total").ok())
-            .unwrap_or(0),
+        count_for_app(&database, "telemetry_user_first_seen", &delete_app).await,
         0
     );
+    assert!(count_for_app(&database, "telemetry_user_first_seen", &keep_app).await > 0);
 }
