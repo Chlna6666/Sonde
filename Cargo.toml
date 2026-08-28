@@ -2,7 +2,7 @@
 name = "sonde"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.94"
 build = "build.rs"
 description = "A self-hosted telemetry analytics platform for multiple applications"
 license = "MIT"
