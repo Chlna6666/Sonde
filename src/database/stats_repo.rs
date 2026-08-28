@@ -980,6 +980,45 @@ async fn compute_version_timeline(
     since_ts: Option<i64>,
     bucket_expr: &str,
 ) -> Result<Vec<VersionTimelinePoint>, DbErr> {
+    if super::version_dimension_repo::supports_daily_projection(bucket_expr) {
+        if let Some(points) = super::dimension_rollup_repo::event_dimension_timeline_hybrid(
+            database,
+            application_id,
+            environment_id,
+            since_ts,
+            super::dimension_rollup_repo::DIMENSION_APP_VERSION,
+        )
+        .await?
+        {
+            return Ok(super::version_dimension_repo::timeline(&points, bucket_expr)
+                .into_iter()
+                .map(|bucket| {
+                    let versions = bucket
+                        .versions
+                        .into_iter()
+                        .map(|(version, count)| {
+                            let percentage = if bucket.total > 0 {
+                                ((count as f64 / bucket.total as f64) * 1000.0).round() / 10.0
+                            } else {
+                                0.0
+                            };
+                            VersionShare {
+                                version,
+                                count,
+                                percentage,
+                            }
+                        })
+                        .collect();
+                    VersionTimelinePoint {
+                        bucket: bucket.bucket,
+                        total_events: bucket.total,
+                        versions,
+                    }
+                })
+                .collect());
+        }
+    }
+
     let mut query = Query::select();
     query
         .expr_as(Expr::cust(bucket_expr.to_string()), Alias::new("bucket_time"))
@@ -1057,6 +1096,31 @@ async fn compute_version_series(
     since_ts: Option<i64>,
     bucket_expr: &str,
 ) -> Result<Vec<VersionSeries>, DbErr> {
+    if super::version_dimension_repo::supports_daily_projection(bucket_expr) {
+        if let Some(points) = super::dimension_rollup_repo::event_dimension_timeline_hybrid(
+            database,
+            application_id,
+            environment_id,
+            since_ts,
+            super::dimension_rollup_repo::DIMENSION_APP_VERSION,
+        )
+        .await?
+        {
+            return Ok(super::version_dimension_repo::top_series(&points, bucket_expr)
+                .into_iter()
+                .map(|series| VersionSeries {
+                    version: series.version,
+                    total_count: series.total,
+                    data: series
+                        .points
+                        .into_iter()
+                        .map(|(day, count)| VersionSeriesPoint { day, count })
+                        .collect(),
+                })
+                .collect());
+        }
+    }
+
     let mut top_v_q = Query::select();
     top_v_q
         .expr_as(
