@@ -2,7 +2,8 @@ use std::{collections::BTreeMap, path::Path};
 
 use futures_util::Stream;
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DbErr, QueryResult, TransactionTrait,
+    AccessMode, ConnectionTrait, DatabaseConnection, DbBackend, DbErr, IsolationLevel, QueryResult,
+    TransactionTrait,
     sea_query::{Alias, Expr, ExprTrait, Order, Query, Value},
 };
 use serde::{Deserialize, Serialize};
@@ -130,7 +131,7 @@ pub struct BackupDailyRollup {
     pub updated_at: i64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum BackupV2Record {
     Manifest(BackupV2Manifest),
@@ -179,6 +180,16 @@ pub fn export_full_system_stream(
     database: DatabaseConnection,
 ) -> impl Stream<Item = Result<Vec<u8>, BackupV2Error>> {
     async_stream::try_stream! {
+        // Keep all cursor pages on one logical database snapshot. PostgreSQL defaults to
+        // READ COMMITTED, so long-running backups explicitly request REPEATABLE READ. SQLite's
+        // regular read transaction already pins its snapshot after the first read.
+        let transaction = match database.get_database_backend() {
+            DbBackend::Postgres | DbBackend::MySql => database
+                .begin_with_config(Some(IsolationLevel::RepeatableRead), Some(AccessMode::ReadOnly))
+                .await?,
+            _ => database.begin().await?,
+        };
+
         let manifest = BackupV2Record::Manifest(BackupV2Manifest {
             format_version: FORMAT_VERSION.to_owned(),
             backup_type: BACKUP_TYPE.to_owned(),
@@ -204,7 +215,7 @@ pub fn export_full_system_stream(
             let mut after_id: Option<String> = None;
             loop {
                 let rows = fetch_batch(
-                    &database,
+                    &transaction,
                     spec.table,
                     spec.columns,
                     after_id.as_deref(),
@@ -230,7 +241,9 @@ pub fn export_full_system_stream(
             records,
             sha256: hex::encode(digest.finalize()),
         });
-        yield encode_line(&end)?;
+        let end_line = encode_line(&end)?;
+        transaction.commit().await?;
+        yield end_line;
     }
 }
 
@@ -274,9 +287,9 @@ pub async fn validate_backup_file(path: &Path) -> Result<BackupV2Manifest, Backu
                 digest.update(&line);
             }
             BackupV2Record::End(end) => {
-                let Some(_) = manifest else {
+                if manifest.is_none() {
                     return Err(BackupV2Error::Invalid("missing manifest".into()));
-                };
+                }
                 if end.records != records {
                     return Err(BackupV2Error::Invalid(format!(
                         "record count mismatch: expected {}, got {}",
@@ -370,7 +383,7 @@ fn validate_manifest(manifest: &BackupV2Manifest) -> Result<(), BackupV2Error> {
 }
 
 async fn fetch_batch(
-    database: &DatabaseConnection,
+    database: &impl ConnectionTrait,
     table: &str,
     columns: &[&str],
     after_id: Option<&str>,
