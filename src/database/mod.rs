@@ -10,6 +10,7 @@ pub mod dimension_restore_repo;
 pub mod dimension_rollup_repo;
 pub mod error_query_repo;
 pub mod error_repo;
+pub mod event_count_repo;
 pub mod explorer_repo;
 pub mod first_seen_repo;
 pub mod import_repo;
@@ -43,11 +44,11 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
         .sqlx_logging(false);
 
     if is_sqlite {
-        options.after_connect(|connection| {
+        options.after_connect(|connection, _meta| {
             Box::pin(async move {
                 connection
                     .execute_unprepared(
-                        "PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA wal_autocheckpoint=1000;",
+                        "PRAGMA foreign_keys=ON;\nPRAGMA journal_mode=WAL;\nPRAGMA synchronous=NORMAL;\nPRAGMA busy_timeout=5000;\nPRAGMA wal_autocheckpoint=1000;",
                     )
                     .await?;
                 Ok(())
