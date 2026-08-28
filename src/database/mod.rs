@@ -8,6 +8,7 @@ pub mod error_repo;
 pub mod explorer_repo;
 pub mod import_repo;
 pub mod ingest_auth_repo;
+pub mod job_lease_repo;
 mod migration;
 pub mod query;
 pub mod rollup_repo;
