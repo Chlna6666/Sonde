@@ -1,5 +1,9 @@
 #![allow(clippy::unwrap_used)]
 
+use sea_orm::{
+    ConnectionTrait,
+    sea_query::{Alias, Expr, ExprTrait, Func, Query},
+};
 use sonde::{
     database::{self, rollup_repo, telemetry_repo, user_rollup_repo},
     domain::telemetry::{Attributes, EventInput},
@@ -151,5 +155,74 @@ async fn user_rollup_merges_clean_days_dirty_days_and_partial_boundaries() {
         .await
         .unwrap(),
         4
+    );
+}
+
+#[tokio::test]
+async fn user_rollup_chunks_large_daily_unique_sets_without_losing_users() {
+    let database = database::connect("sqlite::memory:").await.unwrap();
+    database::migrate(&database).await.unwrap();
+    let scope = telemetry_repo::TelemetryScope {
+        application_id: "app-chunk".into(),
+        environment_id: "prod".into(),
+    };
+    let start = chrono::NaiveDate::from_ymd_opt(2026, 8, 21)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+
+    let events = (0..2_050)
+        .map(|index| {
+            event(
+                start + index as i64,
+                &format!("evt-{index}"),
+                &format!("user-{index}"),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        telemetry_repo::insert_events(&database, &scope, &events)
+            .await
+            .unwrap(),
+        events.len()
+    );
+    assert_eq!(
+        user_rollup_repo::seed_historical_user_dirty_days_once(&database)
+            .await
+            .unwrap(),
+        1
+    );
+    recompute_scope_day(&database, "app-chunk", "prod").await;
+
+    let chunk_count_query = Query::select()
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("total"),
+        )
+        .from(Alias::new("telemetry_daily_user_sets"))
+        .and_where(Expr::col(Alias::new("application_id")).eq("app-chunk"))
+        .and_where(Expr::col(Alias::new("environment_id")).eq("prod"))
+        .to_owned();
+    let chunk_count = database
+        .query_one(&chunk_count_query)
+        .await
+        .unwrap()
+        .and_then(|row| row.try_get::<i64>("", "total").ok())
+        .unwrap_or(0);
+    assert_eq!(chunk_count, 2);
+
+    assert_eq!(
+        user_rollup_repo::unique_users_hybrid(
+            &database,
+            Some("app-chunk"),
+            Some("prod"),
+            Some(start),
+            Some(start + 86_400_000),
+        )
+        .await
+        .unwrap(),
+        2_050
     );
 }
