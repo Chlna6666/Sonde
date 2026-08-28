@@ -1,0 +1,56 @@
+[package]
+name = "sonde"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+build = "build.rs"
+description = "A self-hosted telemetry analytics platform for multiple applications"
+license = "MIT"
+repository = "https://github.com/Chlna6666/Sonde"
+readme = "README.md"
+keywords = ["telemetry", "analytics", "actix-web", "self-hosted"]
+categories = ["web-programming::http-server"]
+
+[dependencies]
+actix-web = "4.11"
+argon2 = "0.5"
+async-stream = "0.3"
+awc = { version = "3", features = ["rustls-0_23"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+futures-util = "0.3"
+hex = "0.4"
+mime_guess = "2"
+mimalloc = { version = "0.1", default-features = false }
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rust-embed = { version = "8.7", features = ["compression"] }
+sea-orm = { version = "2.0.0", features = ["runtime-tokio-rustls", "sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "with-json", "with-chrono", "macros"] }
+sea-orm-migration = { version = "2.0.0", features = ["runtime-tokio-rustls", "sqlx-mysql", "sqlx-postgres", "sqlx-sqlite"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+hmac = "0.12"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = "2"
+uuid = { version = "1", features = ["v7", "serde"] }
+
+[dev-dependencies]
+actix-http = "3"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+strip = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

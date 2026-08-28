@@ -1,0 +1,172 @@
+/* Sonde Explorer - macOS Sequoia / iOS 18 Apple Design */
+
+.explorer-tabs {
+  display: inline-flex;
+  gap: 2px;
+  margin-bottom: 16px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+}
+
+.explorer-tabs button {
+  min-width: 100px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 550;
+  cursor: pointer;
+  transition: all 120ms ease;
+  padding: 0 12px;
+}
+
+.explorer-tabs button:hover {
+  color: var(--text);
+}
+
+.explorer-tabs button[aria-selected="true"] {
+  background: var(--panel-strong);
+  color: var(--text);
+  font-weight: 650;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border);
+}
+
+.explorer-filter {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.explorer-filter > svg {
+  align-self: center;
+  color: var(--signal);
+  flex-shrink: 0;
+}
+
+.explorer-filter .field {
+  min-width: 140px;
+}
+
+.explorer-filter .explorer-search {
+  flex: 1;
+}
+
+.explorer-filter .primary-button {
+  min-height: 38px;
+}
+
+.explorer-results {
+  min-height: 350px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  overflow-x: auto;
+}
+
+.explorer-results table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.explorer-results th {
+  text-align: left;
+  padding: 12px 14px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-strong);
+}
+
+.explorer-results td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text);
+  max-width: 360px;
+}
+
+.explorer-results tr:hover td {
+  background: color-mix(in srgb, var(--signal) 4%, transparent);
+}
+
+.explorer-results code {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.explorer-loading {
+  padding: 40px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.82rem;
+}
+
+.log-level {
+  font: 0.68rem var(--font-mono);
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.log-level.error, .log-level.fatal {
+  color: var(--danger);
+  background: var(--danger-subtle);
+}
+
+.log-level.warn {
+  color: var(--amber);
+  background: var(--amber-subtle);
+}
+
+.log-level.info {
+  color: var(--blue);
+  background: var(--blue-subtle);
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.pagination span {
+  color: var(--muted);
+  font: 0.74rem var(--font-mono);
+}
+
+@media (max-width: 900px) {
+  .explorer-filter {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .explorer-filter > svg {
+    display: none;
+  }
+  .explorer-tabs {
+    width: 100%;
+  }
+  .explorer-tabs button {
+    flex: 1;
+    min-width: 0;
+  }
+}

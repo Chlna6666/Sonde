@@ -1,0 +1,158 @@
+/* Sonde Layout & Shell - macOS Sequoia / iOS 18 Apple Design */
+
+.app-shell {
+  min-height: 100dvh;
+  background: var(--bg);
+  display: flex;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* Page workspace container */
+.page-workspace {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  transition: margin-left 220ms var(--ease-apple);
+}
+
+/* Page Inner Content Container with Max-Width Constraint */
+.page-container {
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+
+@media (min-width: 640px) {
+  .page-container {
+    padding: 2rem 1.5rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .page-container {
+    padding: 2.25rem 2rem;
+  }
+}
+
+/* Page Header Typography Lockup */
+.page-header {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1.75rem;
+}
+
+@media (min-width: 640px) {
+  .page-header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+.page-header h1 {
+  margin: 0.15rem 0 0;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  color: var(--text);
+}
+
+@media (min-width: 640px) {
+  .page-header h1 {
+    font-size: 1.75rem;
+  }
+}
+
+.page-header p {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.5;
+  max-width: 680px;
+}
+
+/* Apple Segmented Control Container */
+.segmented-control {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-soft);
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.segmented-control-item {
+  position: relative;
+  z-index: 1;
+  padding: 6px 14px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border-radius: 9px;
+  color: var(--muted);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  transition: color 150ms var(--ease-apple);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.segmented-control-item:hover {
+  color: var(--text);
+}
+
+.segmented-control-item.active {
+  color: var(--text);
+}
+
+.segmented-control-pill {
+  position: absolute;
+  inset: 3px;
+  z-index: 0;
+  border-radius: 9px;
+  background: var(--panel-strong);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15), 0 0 0 1px var(--border);
+  transition: all 220ms var(--ease-apple);
+}
+
+/* Empty State Surface */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 3.5rem 1.5rem;
+  border-radius: 20px;
+  border: 1.5px dashed var(--border);
+  background: color-mix(in srgb, var(--panel) 40%, transparent);
+}
+
+.empty-state svg {
+  color: var(--faint);
+  margin-bottom: 1rem;
+}
+
+.empty-state h2, .empty-state h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.empty-state p {
+  margin: 0.4rem 0 1.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  max-width: 380px;
+}

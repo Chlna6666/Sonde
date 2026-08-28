@@ -1,0 +1,19 @@
+services:
+  sonde:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sonde
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - SONDE_BIND=0.0.0.0:8080
+      - SONDE_DATA_DIR=/app/data
+      - RUST_LOG=sonde=info,actix_web=info
+    volumes:
+      - sonde_data:/app/data
+
+volumes:
+  sonde_data:
+    driver: local

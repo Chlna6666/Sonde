@@ -1,0 +1,33 @@
+# Rust and frontend build output
+/target/
+/web/dist/
+/web/node_modules/
+
+# Runtime data: configuration, database files, and generated password pepper
+/data/
+
+# Local environment files. Keep the sanitized template available to contributors.
+.env
+.env.*
+*.env
+!.env.example
+
+# Local tooling and operating-system files
+/.idea/
+__pycache__/
+.DS_Store
+Thumbs.db
+
+# Logs and common local secret material
+*.log
+*.pem
+*.key
+*.p12
+*.pfx
+*.password-pepper
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.sonde.json
+/exports/

@@ -1,0 +1,190 @@
+/* Sonde Migration & Data Hub - macOS / iOS Apple Design */
+
+.migration-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(20rem, 0.95fr);
+  gap: 14px;
+}
+
+.migration-panel {
+  min-width: 0;
+  padding: 22px 24px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.panel-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.panel-heading > svg {
+  width: 20px;
+  height: 20px;
+  color: var(--signal);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.panel-heading h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.panel-heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.file-drop {
+  display: grid;
+  min-height: 160px;
+  place-content: center;
+  place-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+  border-radius: 12px;
+  border: 1.5px dashed var(--border);
+  background: var(--input-bg);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.file-drop:hover {
+  border-color: var(--signal);
+  background: var(--signal-subtle);
+}
+
+.file-drop:focus-within {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+.file-drop input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.file-drop svg {
+  color: var(--signal);
+  width: 28px;
+  height: 28px;
+}
+
+.file-drop span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 550;
+}
+
+.migration-panel > .primary-button {
+  width: 100%;
+  margin-top: 16px;
+}
+
+.migration-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.migration-stats div {
+  padding: 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  background: var(--panel-strong);
+}
+
+.migration-stats dt {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.migration-stats dd {
+  margin: 6px 0 0;
+  font-size: 1.6rem;
+  font-weight: 750;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.migration-range {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  color: var(--muted);
+  font: 0.75rem var(--font-mono);
+}
+
+.migration-range i {
+  flex: 1;
+  height: 1px;
+  background: var(--border-soft);
+}
+
+.migration-empty {
+  min-height: 240px;
+  display: grid;
+  place-content: center;
+  place-items: center;
+  gap: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.migration-empty svg {
+  width: 32px;
+  height: 32px;
+  opacity: 0.55;
+  color: var(--signal);
+}
+
+.import-success {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--signal) 40%, var(--border));
+  background: var(--signal-subtle);
+}
+
+.import-success svg {
+  color: var(--signal);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.import-success div {
+  display: grid;
+  gap: 3px;
+}
+
+.import-success span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.migration-history {
+  margin-top: 12px;
+  overflow-x: auto;
+}
+
+@media (max-width: 900px) {
+  .migration-layout {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,17 @@
+@import "tailwindcss";
+@import "./styles/tokens.css";
+@import "./styles/layout.css";
+@import "./styles/pages.css";
+@import "./styles/applications.css";
+
+/* Universal Smooth Scrolling & Scrollbar Hiding */
+html, body, #root, * {
+  scrollbar-width: none !important; /* Firefox */
+  -ms-overflow-style: none !important; /* IE/Edge */
+}
+
+*::-webkit-scrollbar {
+  display: none !important; /* Chrome, Safari, Opera */
+  width: 0 !important;
+  height: 0 !important;
+}
