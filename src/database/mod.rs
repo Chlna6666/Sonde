@@ -20,6 +20,7 @@ mod migration;
 pub mod query;
 pub mod rollup_repo;
 pub mod stats_repo;
+pub mod telemetry_count_repo;
 pub mod telemetry_repo;
 pub mod trend_repo;
 pub mod user_rollup_repo;
