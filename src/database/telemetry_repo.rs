@@ -360,6 +360,8 @@ pub async fn insert_errors(
 
 #[cfg(test)]
 mod tests {
+    use sha2::{Digest, Sha256};
+
     use super::{TelemetryScope, legacy_anonymous_hash, scoped_event_dedupe_key};
 
     #[test]
