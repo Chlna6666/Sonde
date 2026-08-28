@@ -7,7 +7,7 @@ use sea_orm::{
 };
 use sha2::{Digest, Sha256};
 
-use super::rollup_repo::DirtyDay;
+use super::rollup_repo::{self, DirtyDay};
 
 const GLOBAL_ENVIRONMENT: &str = "*";
 const USER_ROLLUP_BACKFILL_KEY: &str = "telemetry_user_rollup_backfill_v1";
@@ -322,7 +322,10 @@ async fn load_daily_user_sets_hybrid(
     dirty_query
         .columns(["application_id", "day"].map(Alias::new))
         .from(Alias::new("telemetry_dirty_days"))
-        .and_where(Expr::col(Alias::new("environment_id")).eq(rollup_environment));
+        .and_where(Expr::col(Alias::new("environment_id")).eq(rollup_environment))
+        .and_where(rollup_repo::dirty_source_condition(
+            rollup_repo::DIRTY_SOURCE_EVENT,
+        ));
     if let Some(application_id) = application_id {
         dirty_query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
     }
