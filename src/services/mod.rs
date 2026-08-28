@@ -4,6 +4,7 @@ pub mod applications;
 pub mod authentication;
 pub mod backup;
 pub mod explorer;
+pub mod ingest_writer;
 pub mod migrations;
 pub mod retention;
 pub mod setup;
