@@ -1,7 +1,10 @@
 use sha2::{Digest, Sha256};
 
 use crate::{
-    auth, database::app_repo, error::AppError, services::authentication::AuthenticatedUser,
+    auth,
+    database::{app_repo, application_delete_repo},
+    error::AppError,
+    services::authentication::AuthenticatedUser,
     state::InstalledState,
 };
 
@@ -225,7 +228,7 @@ pub async fn delete(
     application_id: &str,
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
-    app_repo::delete_application(&installed.database, application_id).await?;
+    application_delete_repo::delete_application_exact(&installed.database, application_id).await?;
     app_repo::audit(
         &installed.database,
         Some(&user.id),
