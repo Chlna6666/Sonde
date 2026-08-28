@@ -65,6 +65,7 @@ pub(super) async fn create_identity_tables(manager: &SchemaManager<'_>) -> Resul
     .await
 }
 
+/// Historical base application schema. Later columns are added by immutable follow-up migrations.
 pub(super) async fn create_application_tables(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     create_table(
         manager,
@@ -74,12 +75,6 @@ pub(super) async fn create_application_tables(manager: &SchemaManager<'_>) -> Re
             string("name"),
             string("slug").unique_key().to_owned(),
             integer("retention_days"),
-            nullable_string("owner_user_id"),
-            boolean("is_public"),
-            nullable_text("description"),
-            nullable_string("github_url"),
-            nullable_string("website_url"),
-            nullable_text("custom_header"),
             bigint("created_at"),
         ],
     )
@@ -225,7 +220,7 @@ pub(super) async fn create_telemetry_tables(manager: &SchemaManager<'_>) -> Resu
     .await
 }
 
-pub(super) async fn create_operations_tables(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+pub(super) async fn create_import_tables(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     create_table(
         manager,
         "import_runs",
@@ -242,7 +237,10 @@ pub(super) async fn create_operations_tables(manager: &SchemaManager<'_>) -> Res
             bigint("created_at"),
         ],
     )
-    .await?;
+    .await
+}
+
+pub(super) async fn create_alert_tables(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     create_table(
         manager,
         "alert_rules",

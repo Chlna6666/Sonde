@@ -3,9 +3,9 @@ use sea_orm_migration::prelude::*;
 mod columns;
 mod tables;
 
-use columns::{bigint, create_table, string};
+use columns::{bigint, create_index, create_table, string};
 use tables::{
-    create_application_tables, create_identity_tables, create_operations_tables,
+    create_alert_tables, create_application_tables, create_identity_tables, create_import_tables,
     create_telemetry_tables,
 };
 
@@ -20,19 +20,17 @@ impl MigratorTrait for Migrator {
             Box::new(ApplicationMultiUserAndShowcase),
             Box::new(TwoFactorAuthAndChannels),
             Box::new(AlertsAndAuditTables),
+            Box::new(OperationalIndexes),
         ]
     }
 }
 
 struct InitialSchema;
-
 struct EphemeralSessions;
-
 struct ApplicationMultiUserAndShowcase;
-
 struct TwoFactorAuthAndChannels;
-
 struct AlertsAndAuditTables;
+struct OperationalIndexes;
 
 impl MigrationName for AlertsAndAuditTables {
     fn name(&self) -> &str {
@@ -43,7 +41,79 @@ impl MigrationName for AlertsAndAuditTables {
 #[async_trait::async_trait]
 impl MigrationTrait for AlertsAndAuditTables {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        create_operations_tables(manager).await
+        create_alert_tables(manager).await
+    }
+
+    async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+        Ok(())
+    }
+}
+
+impl MigrationName for OperationalIndexes {
+    fn name(&self) -> &str {
+        "m20260828_000006_operational_indexes"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for OperationalIndexes {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        create_index(
+            manager,
+            "idx_events_scope_name_time",
+            "events",
+            &["application_id", "environment_id", "name", "timestamp"],
+            false,
+        )
+        .await?;
+        create_index(
+            manager,
+            "idx_metrics_scope_name_time",
+            "metric_points",
+            &["application_id", "environment_id", "name", "timestamp"],
+            false,
+        )
+        .await?;
+        create_index(
+            manager,
+            "idx_logs_scope_level_time",
+            "logs",
+            &["application_id", "environment_id", "level", "timestamp"],
+            false,
+        )
+        .await?;
+        create_index(
+            manager,
+            "idx_role_bindings_user_app",
+            "role_bindings",
+            &["user_id", "application_id"],
+            false,
+        )
+        .await?;
+        create_index(
+            manager,
+            "idx_alert_rules_app_enabled",
+            "alert_rules",
+            &["application_id", "enabled"],
+            false,
+        )
+        .await?;
+        create_index(
+            manager,
+            "idx_alert_deliveries_created",
+            "alert_deliveries",
+            &["created_at"],
+            false,
+        )
+        .await?;
+        create_index(
+            manager,
+            "idx_audit_log_created",
+            "audit_log",
+            &["created_at"],
+            false,
+        )
+        .await
     }
 
     async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
@@ -60,14 +130,20 @@ impl MigrationName for TwoFactorAuthAndChannels {
 #[async_trait::async_trait]
 impl MigrationTrait for TwoFactorAuthAndChannels {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        let conn = manager.get_connection();
-        let _ = conn
-            .execute_unprepared("ALTER TABLE users ADD COLUMN totp_secret TEXT")
-            .await;
-        let _ = conn
-            .execute_unprepared("ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0")
-            .await;
-        Ok(())
+        add_column_if_missing(
+            manager,
+            "users",
+            "totp_secret",
+            "ALTER TABLE users ADD COLUMN totp_secret TEXT",
+        )
+        .await?;
+        add_column_if_missing(
+            manager,
+            "users",
+            "totp_enabled",
+            "ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0",
+        )
+        .await
     }
 
     async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
@@ -77,7 +153,6 @@ impl MigrationTrait for TwoFactorAuthAndChannels {
 
 impl MigrationName for InitialSchema {
     fn name(&self) -> &str {
-        // Keep the historical name so existing installations do not replay the base schema.
         "migration"
     }
 }
@@ -97,27 +172,34 @@ impl MigrationName for ApplicationMultiUserAndShowcase {
 #[async_trait::async_trait]
 impl MigrationTrait for ApplicationMultiUserAndShowcase {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        let conn = manager.get_connection();
-        let _ = conn
-            .execute_unprepared("ALTER TABLE applications ADD COLUMN owner_user_id TEXT")
-            .await;
-        let _ = conn
-            .execute_unprepared(
+        for (column, sql) in [
+            (
+                "owner_user_id",
+                "ALTER TABLE applications ADD COLUMN owner_user_id TEXT",
+            ),
+            (
+                "is_public",
                 "ALTER TABLE applications ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0",
-            )
-            .await;
-        let _ = conn
-            .execute_unprepared("ALTER TABLE applications ADD COLUMN description TEXT")
-            .await;
-        let _ = conn
-            .execute_unprepared("ALTER TABLE applications ADD COLUMN github_url TEXT")
-            .await;
-        let _ = conn
-            .execute_unprepared("ALTER TABLE applications ADD COLUMN website_url TEXT")
-            .await;
-        let _ = conn
-            .execute_unprepared("ALTER TABLE applications ADD COLUMN custom_header TEXT")
-            .await;
+            ),
+            (
+                "description",
+                "ALTER TABLE applications ADD COLUMN description TEXT",
+            ),
+            (
+                "github_url",
+                "ALTER TABLE applications ADD COLUMN github_url TEXT",
+            ),
+            (
+                "website_url",
+                "ALTER TABLE applications ADD COLUMN website_url TEXT",
+            ),
+            (
+                "custom_header",
+                "ALTER TABLE applications ADD COLUMN custom_header TEXT",
+            ),
+        ] {
+            add_column_if_missing(manager, "applications", column, sql).await?;
+        }
         Ok(())
     }
 
@@ -176,7 +258,7 @@ impl MigrationTrait for InitialSchema {
         create_identity_tables(manager).await?;
         create_application_tables(manager).await?;
         create_telemetry_tables(manager).await?;
-        create_operations_tables(manager).await
+        create_import_tables(manager).await
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -210,4 +292,19 @@ impl MigrationTrait for InitialSchema {
         }
         Ok(())
     }
+}
+
+async fn add_column_if_missing(
+    manager: &SchemaManager<'_>,
+    table: &str,
+    column: &str,
+    statement: &str,
+) -> Result<(), DbErr> {
+    if !manager.has_column(table, column).await? {
+        manager
+            .get_connection()
+            .execute_unprepared(statement)
+            .await?;
+    }
+    Ok(())
 }
