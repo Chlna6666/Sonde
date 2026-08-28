@@ -77,13 +77,11 @@ mod tests {
     use crate::database::{self, app_repo};
 
     #[tokio::test]
-    async fn ingest_key_last_used_is_throttled() {
-        let database = database::connect("sqlite::memory:").await.unwrap();
-        database::migrate(&database).await.unwrap();
+    async fn ingest_key_last_used_is_throttled() -> Result<(), Box<dyn std::error::Error>> {
+        let database = database::connect("sqlite::memory:").await?;
+        database::migrate(&database).await?;
         let (app_id, env_id) =
-            app_repo::create_application(&database, "Demo", "demo", None)
-                .await
-                .unwrap();
+            app_repo::create_application(&database, "Demo", "demo", None).await?;
         let raw_key = "sonde_ingest_test_key";
         let key_hash = hex::encode(Sha256::digest(raw_key.as_bytes()));
         app_repo::create_api_key(
@@ -95,17 +93,13 @@ mod tests {
             "sonde_ingest",
             &["telemetry.events".into()],
         )
-        .await
-        .unwrap();
+        .await?;
 
         let now = chrono::Utc::now().timestamp_millis();
-        let first = super::api_key_context(&database, &key_hash, now)
-            .await
-            .unwrap();
+        let first = super::api_key_context(&database, &key_hash, now).await?;
         assert!(first.is_some());
-        let second = super::api_key_context(&database, &key_hash, now + 1_000)
-            .await
-            .unwrap();
+        let second = super::api_key_context(&database, &key_hash, now + 1_000).await?;
         assert!(second.is_some());
+        Ok(())
     }
 }
