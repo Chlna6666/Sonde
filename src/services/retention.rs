@@ -17,6 +17,8 @@ pub struct RetentionReport {
     pub error_occurrences_deleted: u64,
     pub error_groups_deleted: u64,
     pub rollups_deleted: u64,
+    pub dimension_rollups_deleted: u64,
+    pub user_rollups_deleted: u64,
     pub dirty_days_deleted: u64,
 }
 
@@ -70,6 +72,22 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             &cutoff_day,
         )
         .await?;
+        report.dimension_rollups_deleted += delete_string_in_batches(
+            database,
+            "telemetry_daily_dimensions",
+            "day",
+            &app_id,
+            &cutoff_day,
+        )
+        .await?;
+        report.user_rollups_deleted += delete_string_in_batches(
+            database,
+            "telemetry_daily_user_sets",
+            "day",
+            &app_id,
+            &cutoff_day,
+        )
+        .await?;
         report.dirty_days_deleted += delete_string_in_batches(
             database,
             "telemetry_dirty_days",
@@ -106,6 +124,8 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             error_occurrences_pruned = report.error_occurrences_deleted,
             error_groups_pruned = report.error_groups_deleted,
             rollups_pruned = report.rollups_deleted,
+            dimension_rollups_pruned = report.dimension_rollups_deleted,
+            user_rollups_pruned = report.user_rollups_deleted,
             dirty_days_pruned = report.dirty_days_deleted,
             "periodic data retention sweep summary"
         );
