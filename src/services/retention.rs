@@ -4,7 +4,9 @@ use sea_orm::{
 };
 use tracing::{info, warn};
 
-const DELETE_BATCH_SIZE: u64 = 5_000;
+/// Each deleted id becomes one bind variable in the follow-up `IN (...)` statement. Keep this
+/// comfortably below SQLite's historical 999-variable limit and leave room for driver-added binds.
+const DELETE_BATCH_SIZE: u64 = 500;
 
 #[derive(Debug, Default)]
 pub struct RetentionReport {
@@ -12,6 +14,8 @@ pub struct RetentionReport {
     pub events_deleted: u64,
     pub metrics_deleted: u64,
     pub logs_deleted: u64,
+    pub error_occurrences_deleted: u64,
+    pub error_groups_deleted: u64,
 }
 
 pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<RetentionReport, DbErr> {
@@ -43,6 +47,18 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             delete_in_batches(database, "metric_points", "timestamp", &app_id, cutoff).await?;
         report.logs_deleted +=
             delete_in_batches(database, "logs", "timestamp", &app_id, cutoff).await?;
+        report.error_occurrences_deleted += delete_in_batches(
+            database,
+            "error_occurrences",
+            "timestamp",
+            &app_id,
+            cutoff,
+        )
+        .await?;
+        // A group contains only derived/sample error metadata. Once its most recent occurrence is
+        // outside retention it must be removed as well, otherwise message samples survive forever.
+        report.error_groups_deleted +=
+            delete_in_batches(database, "error_groups", "last_seen", &app_id, cutoff).await?;
         let _ = delete_in_batches(
             database,
             "daily_aggregates",
@@ -66,6 +82,8 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             events_pruned = report.events_deleted,
             metrics_pruned = report.metrics_deleted,
             logs_pruned = report.logs_deleted,
+            error_occurrences_pruned = report.error_occurrences_deleted,
+            error_groups_pruned = report.error_groups_deleted,
             "periodic data retention sweep summary"
         );
     }
