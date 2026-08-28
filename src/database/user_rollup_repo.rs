@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
 use sea_orm::{
@@ -23,6 +23,19 @@ struct ScopedUserSet {
     application_id: String,
     day: String,
     fingerprints: Vec<Fingerprint>,
+}
+
+struct DailyUserSet {
+    day: String,
+    fingerprints: Vec<Fingerprint>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UserGrowthBucket {
+    pub bucket: String,
+    pub new_users: u64,
+    pub cumulative_users: u64,
+    pub active_users: u64,
 }
 
 pub async fn seed_historical_user_dirty_days_once(
@@ -165,10 +178,91 @@ pub async fn unique_users_hybrid(
     if matches!((since, until), (Some(start), Some(end)) if end <= start) {
         return Ok(0);
     }
+
+    if let Some(daily_sets) = load_daily_user_sets_hybrid(
+        database,
+        application_id,
+        environment_id,
+        since,
+        until,
+    )
+    .await?
+    {
+        let sets = daily_sets
+            .into_iter()
+            .map(|value| value.fingerprints)
+            .collect::<Vec<_>>();
+        return Ok(union_sorted_sets(sets).len() as u64);
+    }
+
+    Ok(raw_fingerprints(database, application_id, environment_id, since, until, None)
+        .await?
+        .len() as u64)
+}
+
+/// Projects the same hybrid daily user sets into daily or monthly growth buckets.
+///
+/// `monthly=false` matches normal multi-day statistics windows. `monthly=true` matches the existing
+/// 365-day/all-time month bucketing. Hourly one-day statistics deliberately remain on the raw path.
+pub async fn user_growth_hybrid(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since: Option<i64>,
+    monthly: bool,
+) -> Result<Option<Vec<UserGrowthBucket>>, DbErr> {
+    let Some(daily_sets) = load_daily_user_sets_hybrid(
+        database,
+        application_id,
+        environment_id,
+        since,
+        None,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    let mut grouped = BTreeMap::<String, Vec<Vec<Fingerprint>>>::new();
+    for daily in daily_sets {
+        let bucket = if monthly {
+            daily
+                .day
+                .get(..7)
+                .ok_or_else(|| DbErr::Custom("invalid daily user-set day".into()))?
+                .to_owned()
+        } else {
+            daily.day
+        };
+        grouped.entry(bucket).or_default().push(daily.fingerprints);
+    }
+
+    let mut cumulative = Vec::<Fingerprint>::new();
+    let mut result = Vec::with_capacity(grouped.len());
+    for (bucket, sets) in grouped {
+        let active = union_sorted_sets(sets);
+        let active_users = active.len() as u64;
+        let (next_cumulative, new_users) = merge_sorted_unique_count_new(cumulative, active);
+        cumulative = next_cumulative;
+        result.push(UserGrowthBucket {
+            bucket,
+            new_users: new_users as u64,
+            cumulative_users: cumulative.len() as u64,
+            active_users,
+        });
+    }
+    Ok(Some(result))
+}
+
+async fn load_daily_user_sets_hybrid(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since: Option<i64>,
+    until: Option<i64>,
+) -> Result<Option<Vec<DailyUserSet>>, DbErr> {
     if !user_backfill_seeded(database).await? {
-        return Ok(raw_fingerprints(database, application_id, environment_id, since, until, None)
-            .await?
-            .len() as u64);
+        return Ok(None);
     }
 
     let since_day = since.and_then(day_for_timestamp);
@@ -176,9 +270,7 @@ pub async fn unique_users_hybrid(
         .and_then(|value| value.checked_sub(1))
         .and_then(day_for_timestamp);
     if since.is_some() && since_day.is_none() || until.is_some() && until_day.is_none() {
-        return Ok(raw_fingerprints(database, application_id, environment_id, since, until, None)
-            .await?
-            .len() as u64);
+        return Ok(None);
     }
 
     let rollup_environment = environment_id.unwrap_or(GLOBAL_ENVIRONMENT);
@@ -252,55 +344,70 @@ pub async fn unique_users_hybrid(
         })
         .collect::<BTreeSet<_>>();
 
-    let boundary_days = partial_boundary_days(since, until)?;
-    let mut fallback_sets = Vec::new();
-    for day in boundary_days {
+    let mut fallback_sets = Vec::<ScopedUserSet>::new();
+    for day in partial_boundary_days(since, until)? {
         sets.retain(|stored| stored.day != day);
         dirty.retain(|(_, dirty_day)| dirty_day != &day);
         let (day_start, day_end) = day_bounds(&day)?;
         let range_start = since.map_or(day_start, |value| value.max(day_start));
         let range_end = until.map_or(day_end, |value| value.min(day_end));
         if range_start < range_end {
-            fallback_sets.push(
-                raw_fingerprints(
-                    database,
-                    application_id,
-                    environment_id,
-                    Some(range_start),
-                    Some(range_end),
-                    None,
-                )
-                .await?,
-            );
+            let fingerprints = raw_fingerprints(
+                database,
+                application_id,
+                environment_id,
+                Some(range_start),
+                Some(range_end),
+                None,
+            )
+            .await?;
+            if !fingerprints.is_empty() {
+                fallback_sets.push(ScopedUserSet {
+                    application_id: application_id.unwrap_or(GLOBAL_ENVIRONMENT).to_owned(),
+                    day,
+                    fingerprints,
+                });
+            }
         }
     }
 
     if dirty.len() > MAX_DIRTY_SCOPE_DAYS {
-        return Ok(raw_fingerprints(database, application_id, environment_id, since, until, None)
-            .await?
-            .len() as u64);
+        return Ok(None);
     }
     for (dirty_app, day) in dirty {
         sets.retain(|stored| stored.application_id != dirty_app || stored.day != day);
-        fallback_sets.push(
-            raw_fingerprints(
-                database,
-                Some(&dirty_app),
-                environment_id,
-                None,
-                None,
-                Some(&day),
-            )
-            .await?,
-        );
+        let fingerprints = raw_fingerprints(
+            database,
+            Some(&dirty_app),
+            environment_id,
+            None,
+            None,
+            Some(&day),
+        )
+        .await?;
+        if !fingerprints.is_empty() {
+            fallback_sets.push(ScopedUserSet {
+                application_id: dirty_app,
+                day,
+                fingerprints,
+            });
+        }
     }
+    sets.extend(fallback_sets);
 
-    let mut all_sets = sets
-        .into_iter()
-        .map(|value| value.fingerprints)
-        .collect::<Vec<_>>();
-    all_sets.extend(fallback_sets);
-    Ok(union_sorted_sets(all_sets).len() as u64)
+    let mut by_day = BTreeMap::<String, Vec<Vec<Fingerprint>>>::new();
+    for set in sets {
+        by_day.entry(set.day).or_default().push(set.fingerprints);
+    }
+    Ok(Some(
+        by_day
+            .into_iter()
+            .map(|(day, sets)| DailyUserSet {
+                day,
+                fingerprints: union_sorted_sets(sets),
+            })
+            .collect(),
+    ))
 }
 
 async fn raw_fingerprints(
@@ -419,7 +526,15 @@ fn union_sorted_sets(mut sets: Vec<Vec<Fingerprint>>) -> Vec<Fingerprint> {
 }
 
 fn merge_sorted_unique(left: Vec<Fingerprint>, right: Vec<Fingerprint>) -> Vec<Fingerprint> {
+    merge_sorted_unique_count_new(left, right).0
+}
+
+fn merge_sorted_unique_count_new(
+    left: Vec<Fingerprint>,
+    right: Vec<Fingerprint>,
+) -> (Vec<Fingerprint>, usize) {
     let mut merged = Vec::with_capacity(left.len().saturating_add(right.len()));
+    let mut new_items = 0_usize;
     let mut left_index = 0_usize;
     let mut right_index = 0_usize;
     while left_index < left.len() && right_index < right.len() {
@@ -431,6 +546,7 @@ fn merge_sorted_unique(left: Vec<Fingerprint>, right: Vec<Fingerprint>) -> Vec<F
             std::cmp::Ordering::Greater => {
                 merged.push(right[right_index]);
                 right_index += 1;
+                new_items = new_items.saturating_add(1);
             }
             std::cmp::Ordering::Equal => {
                 merged.push(left[left_index]);
@@ -440,8 +556,9 @@ fn merge_sorted_unique(left: Vec<Fingerprint>, right: Vec<Fingerprint>) -> Vec<F
         }
     }
     merged.extend_from_slice(&left[left_index..]);
+    new_items = new_items.saturating_add(right.len().saturating_sub(right_index));
     merged.extend_from_slice(&right[right_index..]);
-    merged
+    (merged, new_items)
 }
 
 async fn insert_user_set_rows(
@@ -601,7 +718,7 @@ fn saturating_i64(value: u64) -> i64 {
 mod tests {
     use super::{
         FINGERPRINTS_PER_CHUNK, decode_fingerprints, encode_fingerprints, fingerprint,
-        union_sorted_sets,
+        merge_sorted_unique_count_new, union_sorted_sets,
     };
 
     #[test]
@@ -618,6 +735,17 @@ mod tests {
         assert_eq!(merged.len(), 3);
         assert_eq!(decode_fingerprints(&encode_fingerprints(&merged)).unwrap(), merged);
         assert_eq!(fingerprint("alpha"), alpha);
+    }
+
+    #[test]
+    fn merge_reports_only_previously_unseen_fingerprints() {
+        let mut left = vec![fingerprint("a"), fingerprint("b")];
+        let mut right = vec![fingerprint("b"), fingerprint("c"), fingerprint("d")];
+        left.sort_unstable();
+        right.sort_unstable();
+        let (merged, new_items) = merge_sorted_unique_count_new(left, right);
+        assert_eq!(new_items, 2);
+        assert_eq!(merged.len(), 4);
     }
 
     #[test]
