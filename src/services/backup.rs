@@ -85,6 +85,7 @@ pub async fn restore_full_system(
     require_system_backup_access(user)?;
 
     backup_repo::restore_full_system(&installed.database, payload).await?;
+    dimension_restore_repo::reset_after_full_restore(&installed.database).await?;
 
     app_repo::audit(
         &installed.database,
