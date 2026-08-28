@@ -4,16 +4,23 @@ use sea_orm::DatabaseConnection;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::services::{alerts, job_lease, retention};
+use crate::{
+    database::first_seen_repo,
+    services::{alerts, job_lease, retention},
+};
 
 const ALERT_INTERVAL: Duration = Duration::from_secs(30);
 const ALERT_LEASE_TTL: Duration = Duration::from_secs(90);
 const RETENTION_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
 const RETENTION_LEASE_TTL: Duration = Duration::from_secs(4 * 60 * 60 + 5 * 60);
+const FIRST_SEEN_BACKFILL_INTERVAL: Duration = Duration::from_secs(10);
+const FIRST_SEEN_BACKFILL_LEASE_TTL: Duration = Duration::from_secs(60);
+const FIRST_SEEN_BACKFILL_BATCH: u64 = 32;
 
 pub fn spawn_leased_workers(database: DatabaseConnection) {
     spawn_alert_worker(database.clone());
-    spawn_retention_worker(database);
+    spawn_retention_worker(database.clone());
+    spawn_first_seen_backfill_worker(database);
 }
 
 fn spawn_alert_worker(database: DatabaseConnection) {
@@ -66,6 +73,34 @@ fn spawn_retention_worker(database: DatabaseConnection) {
                 Ok(None) => {}
                 Err(error) => {
                     warn!(error = %error, "leased retention worker encountered an error");
+                }
+            }
+        }
+    });
+}
+
+fn spawn_first_seen_backfill_worker(database: DatabaseConnection) {
+    let holder_id = format!("first-seen:{}", Uuid::now_v7());
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(FIRST_SEEN_BACKFILL_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            match job_lease::run_with_lease(
+                &database,
+                "first-seen-backfill-v1",
+                &holder_id,
+                FIRST_SEEN_BACKFILL_LEASE_TTL,
+                || first_seen_repo::run_backfill_batch(&database, FIRST_SEEN_BACKFILL_BATCH),
+            )
+            .await
+            {
+                Ok(Some(processed)) if processed > 0 => {
+                    info!(processed, "leased first-seen backfill batch completed");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    warn!(error = %error, "leased first-seen backfill worker encountered an error");
                 }
             }
         }
