@@ -119,6 +119,9 @@ async fn replace_dirty_days(
         .column(Alias::new("day"))
         .from(Alias::new("telemetry_dirty_days"))
         .and_where(Expr::col(Alias::new("environment_id")).eq(dirty_environment))
+        .and_where(rollup_repo::dirty_source_condition(
+            rollup_repo::DIRTY_SOURCE_EVENT,
+        ))
         .distinct();
     if let Some(application_id) = application_id {
         dirty.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
