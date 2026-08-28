@@ -227,3 +227,69 @@ async fn first_seen_index_moves_earlier_for_out_of_order_events() {
         0
     );
 }
+
+#[tokio::test]
+async fn invalidated_first_seen_falls_back_to_raw_until_new_epoch_completes() {
+    let database = database::connect("sqlite::memory:").await.unwrap();
+    database::migrate(&database).await.unwrap();
+    let scope = telemetry_repo::TelemetryScope {
+        application_id: "app-rebuild".into(),
+        environment_id: "prod".into(),
+    };
+    let start = chrono::NaiveDate::from_ymd_opt(2026, 8, 20)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+
+    telemetry_repo::insert_events(
+        &database,
+        &scope,
+        &[
+            event(start + 1_000, "before-a", "user-a"),
+            event(start + 2_000, "before-b", "user-b"),
+        ],
+    )
+    .await
+    .unwrap();
+    backfill_all(&database).await;
+
+    first_seen_repo::invalidate(&database).await.unwrap();
+    assert!(!first_seen_repo::backfill_complete(&database).await.unwrap());
+
+    // While no complete epoch exists, the query must remain authoritative via the raw fallback.
+    telemetry_repo::insert_events(
+        &database,
+        &scope,
+        &[event(start + 3_000, "during-rebuild", "user-c")],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        first_seen_repo::count_new_users_hybrid(
+            &database,
+            Some("app-rebuild"),
+            Some("prod"),
+            start,
+            None,
+        )
+        .await
+        .unwrap(),
+        3
+    );
+
+    backfill_all(&database).await;
+    assert_eq!(
+        first_seen_repo::count_new_users_hybrid(
+            &database,
+            Some("app-rebuild"),
+            Some("prod"),
+            start,
+            None,
+        )
+        .await
+        .unwrap(),
+        3
+    );
+}
