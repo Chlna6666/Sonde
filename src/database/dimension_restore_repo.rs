@@ -1,6 +1,6 @@
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbErr,
-    sea_query::{Alias, Expr, Query},
+    sea_query::{Alias, Expr, ExprTrait, Query},
 };
 
 use super::dimension_rollup_repo;
