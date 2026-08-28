@@ -5,6 +5,7 @@ mod columns;
 mod daily_rollups;
 mod dimension_rollups;
 mod error_model;
+mod first_seen_epoch;
 mod first_seen_index;
 mod job_leases;
 mod rollup_generation;
@@ -17,6 +18,7 @@ use columns::{bigint, create_index, create_table, string};
 use daily_rollups::DailyRollups;
 use dimension_rollups::DimensionRollups;
 use error_model::ErrorTelemetryModel;
+use first_seen_epoch::FirstSeenEpoch;
 use first_seen_index::FirstSeenIndex;
 use job_leases::JobLeases;
 use rollup_generation::RollupGeneration;
@@ -48,6 +50,7 @@ impl MigratorTrait for Migrator {
             Box::new(UserRollups),
             Box::new(UserRollupChunks),
             Box::new(FirstSeenIndex),
+            Box::new(FirstSeenEpoch),
         ]
     }
 }
