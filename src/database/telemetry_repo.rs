@@ -87,9 +87,10 @@ pub async fn insert_events(
         .await?;
     }
     if inserted > 0 {
-        rollup_repo::mark_dirty_timestamps(
+        rollup_repo::mark_dirty_timestamps_for_source(
             &transaction,
             scope,
+            rollup_repo::DIRTY_SOURCE_EVENT,
             events
                 .iter()
                 .map(|event| event.timestamp.unwrap_or(received_at)),
@@ -146,9 +147,10 @@ pub async fn insert_metrics(
         }
         insert_batch(&transaction, "metric_points", &columns, rows).await?;
     }
-    rollup_repo::mark_dirty_timestamps(
+    rollup_repo::mark_dirty_timestamps_for_source(
         &transaction,
         scope,
+        rollup_repo::DIRTY_SOURCE_METRIC,
         metrics
             .iter()
             .map(|metric| metric.timestamp.unwrap_or(received_at)),
@@ -206,9 +208,10 @@ pub async fn insert_logs(
         }
         insert_batch(&transaction, "logs", &columns, rows).await?;
     }
-    rollup_repo::mark_dirty_timestamps(
+    rollup_repo::mark_dirty_timestamps_for_source(
         &transaction,
         scope,
+        rollup_repo::DIRTY_SOURCE_LOG,
         logs.iter().map(|log| log.timestamp.unwrap_or(received_at)),
     )
     .await?;
@@ -273,7 +276,13 @@ pub async fn insert_migrated_event(
     .await?
         > 0;
     if inserted {
-        rollup_repo::mark_dirty_timestamps(&transaction, scope, [timestamp]).await?;
+        rollup_repo::mark_dirty_timestamps_for_source(
+            &transaction,
+            scope,
+            rollup_repo::DIRTY_SOURCE_EVENT,
+            [timestamp],
+        )
+        .await?;
     }
     transaction.commit().await?;
     Ok(inserted)
@@ -389,9 +398,10 @@ pub async fn insert_errors(
     }
 
     super::error_repo::insert_error_index(&transaction, scope, errors, received_at).await?;
-    rollup_repo::mark_dirty_timestamps(
+    rollup_repo::mark_dirty_timestamps_for_source(
         &transaction,
         scope,
+        rollup_repo::DIRTY_SOURCE_LOG | rollup_repo::DIRTY_SOURCE_ERROR,
         errors
             .iter()
             .map(|error| error.timestamp.unwrap_or(received_at)),
