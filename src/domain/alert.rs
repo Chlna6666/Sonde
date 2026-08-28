@@ -76,7 +76,7 @@ impl AlertExpression {
     }
 
     fn allowed_filter_fields(&self) -> &'static [&'static str] {
-        match self.source {
+        match &self.source {
             AlertSource::EventCount | AlertSource::MissingData | AlertSource::ChangeRate => &[
                 "environment_id",
                 "name",
