@@ -1,4 +1,5 @@
 use std::sync::Arc;
+
 use crate::{
     auth,
     config::InstallationConfig,
@@ -64,12 +65,9 @@ pub async fn complete(state: &AppState, input: SetupInput<'_>) -> Result<(), App
     config
         .write_atomic(&state.runtime.config_path)
         .map_err(|_| AppError::Internal)?;
+    let auth_security = Arc::new(AuthSecurity::new(state.runtime.password_pepper.as_bytes())?);
     state
-        .finish_setup(InstalledState {
-            database,
-            config,
-            auth_security: Arc::new(AuthSecurity::new(state.runtime.password_pepper.as_bytes())?),
-        })
+        .finish_setup(InstalledState::new(database, config, auth_security))
         .await
 }
 
