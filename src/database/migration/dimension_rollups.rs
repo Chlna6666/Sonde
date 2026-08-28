@@ -28,20 +28,9 @@ impl MigrationTrait for DimensionRollups {
             ],
         )
         .await?;
-        create_index(
-            manager,
-            "uq_telemetry_dim_scope_day_value",
-            "telemetry_daily_dimensions",
-            &[
-                "application_id",
-                "environment_id",
-                "day",
-                "dimension",
-                "dimension_value",
-            ],
-            true,
-        )
-        .await?;
+        // The deterministic SHA-256 primary key already enforces uniqueness for the full
+        // (app, env, day, dimension, value) tuple. Avoid a redundant five-VARCHAR unique index:
+        // with utf8mb4 it can exceed InnoDB's 3072-byte index-key budget.
         create_index(
             manager,
             "idx_telemetry_dim_scope_dimension_day",
