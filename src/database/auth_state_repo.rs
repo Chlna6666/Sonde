@@ -137,28 +137,34 @@ pub async fn consume_2fa_temp_token(
 ) -> Result<Option<String>, DbErr> {
     let token_hash = auth::token_hash(token);
     let now = chrono::Utc::now().timestamp_millis();
+    let query = Query::select()
+        .columns(["user_id", "expires_at", "consumed_at"].map(Alias::new))
+        .from(Alias::new("auth_2fa_pending"))
+        .and_where(Expr::col(Alias::new("token_hash")).eq(&token_hash))
+        .limit(1)
+        .to_owned();
+    let Some(row) = database.query_one(&query).await? else {
+        return Ok(None);
+    };
+    let expires_at: i64 = row.try_get("", "expires_at")?;
+    let consumed_at: Option<i64> = row.try_get("", "consumed_at")?;
+    if expires_at <= now || consumed_at.is_some() {
+        return Ok(None);
+    }
+    let user_id: String = row.try_get("", "user_id")?;
+
     let consume = Query::update()
         .table(Alias::new("auth_2fa_pending"))
         .value(Alias::new("consumed_at"), now)
-        .and_where(Expr::col(Alias::new("token_hash")).eq(&token_hash))
+        .and_where(Expr::col(Alias::new("token_hash")).eq(token_hash))
         .and_where(Expr::col(Alias::new("consumed_at")).is_null())
         .and_where(Expr::col(Alias::new("expires_at")).gt(now))
         .to_owned();
-    if database.execute(&consume).await?.rows_affected() != 1 {
-        return Ok(None);
+    if database.execute(&consume).await?.rows_affected() == 1 {
+        Ok(Some(user_id))
+    } else {
+        Ok(None)
     }
-
-    let query = Query::select()
-        .column(Alias::new("user_id"))
-        .from(Alias::new("auth_2fa_pending"))
-        .and_where(Expr::col(Alias::new("token_hash")).eq(token_hash))
-        .limit(1)
-        .to_owned();
-    Ok(database
-        .query_one(&query)
-        .await?
-        .map(|row| row.try_get("", "user_id"))
-        .transpose()?)
 }
 
 pub async fn consume_totp_step(
@@ -208,6 +214,18 @@ async fn advance_totp_step(
         .and_where(Expr::col(Alias::new("last_step")).lt(step))
         .to_owned();
     Ok(database.execute(&update).await?.rows_affected() == 1)
+}
+
+pub async fn clear_totp_replay(
+    database: &DatabaseConnection,
+    user_id: &str,
+) -> Result<(), DbErr> {
+    let delete = Query::delete()
+        .from_table(Alias::new("auth_totp_replay"))
+        .and_where(Expr::col(Alias::new("user_id")).eq(user_id))
+        .to_owned();
+    database.execute(&delete).await?;
+    Ok(())
 }
 
 pub async fn cleanup_expired(database: &DatabaseConnection) -> Result<(), DbErr> {
