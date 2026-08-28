@@ -16,6 +16,8 @@ pub struct RetentionReport {
     pub logs_deleted: u64,
     pub error_occurrences_deleted: u64,
     pub error_groups_deleted: u64,
+    pub rollups_deleted: u64,
+    pub dirty_days_deleted: u64,
 }
 
 pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<RetentionReport, DbErr> {
@@ -39,6 +41,9 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
         }
 
         let cutoff = now - (retention_days as i64) * 86_400_000;
+        let cutoff_day = chrono::DateTime::from_timestamp_millis(cutoff)
+            .map(|value| value.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| "1970-01-01".into());
         report.apps_processed += 1;
 
         report.events_deleted +=
@@ -57,6 +62,22 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
         .await?;
         report.error_groups_deleted +=
             delete_in_batches(database, "error_groups", "last_seen", &app_id, cutoff).await?;
+        report.rollups_deleted += delete_string_in_batches(
+            database,
+            "telemetry_daily_rollups",
+            "day",
+            &app_id,
+            &cutoff_day,
+        )
+        .await?;
+        report.dirty_days_deleted += delete_string_in_batches(
+            database,
+            "telemetry_dirty_days",
+            "day",
+            &app_id,
+            &cutoff_day,
+        )
+        .await?;
         let _ = delete_in_batches(
             database,
             "daily_aggregates",
@@ -84,6 +105,8 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             logs_pruned = report.logs_deleted,
             error_occurrences_pruned = report.error_occurrences_deleted,
             error_groups_pruned = report.error_groups_deleted,
+            rollups_pruned = report.rollups_deleted,
+            dirty_days_pruned = report.dirty_days_deleted,
             "periodic data retention sweep summary"
         );
     }
@@ -98,6 +121,37 @@ async fn delete_in_batches(
     application_id: &str,
     cutoff: i64,
 ) -> Result<u64, DbErr> {
+    delete_matching_ids(
+        database,
+        table,
+        Expr::col(Alias::new(timestamp_column)).lt(cutoff),
+        application_id,
+    )
+    .await
+}
+
+async fn delete_string_in_batches(
+    database: &DatabaseConnection,
+    table: &str,
+    column: &str,
+    application_id: &str,
+    cutoff: &str,
+) -> Result<u64, DbErr> {
+    delete_matching_ids(
+        database,
+        table,
+        Expr::col(Alias::new(column)).lt(cutoff),
+        application_id,
+    )
+    .await
+}
+
+async fn delete_matching_ids(
+    database: &DatabaseConnection,
+    table: &str,
+    cutoff_condition: sea_orm::sea_query::SimpleExpr,
+    application_id: &str,
+) -> Result<u64, DbErr> {
     let mut deleted = 0_u64;
 
     loop {
@@ -105,7 +159,7 @@ async fn delete_in_batches(
             .column(Alias::new("id"))
             .from(Alias::new(table))
             .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
-            .and_where(Expr::col(Alias::new(timestamp_column)).lt(cutoff))
+            .and_where(cutoff_condition.clone())
             .limit(DELETE_BATCH_SIZE)
             .to_owned();
         let rows = database.query_all(&select).await?;
