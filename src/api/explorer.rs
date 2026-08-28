@@ -82,23 +82,62 @@ async fn authorize(
             "the start time must be before the end time".into(),
         ));
     }
+    let application_id = required_limited(query.application_id, 128, "applicationId")?;
+    let environment_id = optional_limited(query.environment_id, 128, "environmentId")?;
+    let name = optional_limited(query.name, 128, "name")?;
+    let text = optional_limited(query.text, 512, "text")?;
+    let level = optional_limited(query.level, 16, "level")?;
+    if let Some(level) = level.as_deref()
+        && !matches!(level, "trace" | "debug" | "info" | "warn" | "error" | "fatal")
+    {
+        return Err(AppError::Validation("invalid log level".into()));
+    }
+
     Ok((
         installed,
         user,
         ExplorerFilter {
-            application_id: query.application_id,
-            environment_id: query.environment_id,
+            application_id,
+            environment_id,
             from: query.from,
             to: query.to,
-            name: clean(query.name),
-            level: clean(query.level),
-            text: clean(query.text),
+            name,
+            level,
+            text,
             page: query.page.unwrap_or(1).max(1),
             page_size: query.page_size.unwrap_or(50).clamp(1, 200),
         },
     ))
 }
 
-fn clean(value: Option<String>) -> Option<String> {
-    value.filter(|value| !value.trim().is_empty())
+fn required_limited(value: String, max_len: usize, field: &str) -> Result<String, AppError> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > max_len {
+        return Err(AppError::Validation(format!(
+            "{field} must be 1..{max_len} bytes"
+        )));
+    }
+    Ok(value.to_owned())
+}
+
+fn optional_limited(
+    value: Option<String>,
+    max_len: usize,
+    field: &str,
+) -> Result<Option<String>, AppError> {
+    value
+        .map(|value| {
+            let value = value.trim();
+            if value.is_empty() {
+                Ok(None)
+            } else if value.len() > max_len {
+                Err(AppError::Validation(format!(
+                    "{field} must be at most {max_len} bytes"
+                )))
+            } else {
+                Ok(Some(value.to_owned()))
+            }
+        })
+        .transpose()
+        .map(Option::flatten)
 }
