@@ -164,8 +164,24 @@ pub async fn overview(
         None,
     )
     .await?;
-    let metrics_24h = count(database, "metric_points", Some(("timestamp", since_24h))).await?;
-    let logs_24h = count(database, "logs", Some(("timestamp", since_24h))).await?;
+    let metrics_24h = super::telemetry_count_repo::count_hybrid(
+        database,
+        super::telemetry_count_repo::RollupCountKind::Metrics,
+        None,
+        None,
+        Some(since_24h),
+        None,
+    )
+    .await?;
+    let logs_24h = super::telemetry_count_repo::count_hybrid(
+        database,
+        super::telemetry_count_repo::RollupCountKind::Logs,
+        None,
+        None,
+        Some(since_24h),
+        None,
+    )
+    .await?;
     let errors_24h = filtered_count(database, "logs", since_24h, "level", &["error", "fatal"]).await?;
     let active_users_24h = distinct_users(database, since_24h, None, None).await?;
 
