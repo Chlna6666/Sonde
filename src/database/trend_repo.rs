@@ -140,14 +140,16 @@ pub async fn global_daily_hybrid(
         );
     }
 
-    // If any app is dirty for a day, replace the whole global event count for that day from raw
-    // events. User counts are filled separately from the global user-set union below, which avoids
-    // the old incorrect SUM(per-app daily users) behavior.
+    // If any app has event-dirty data for a day, replace the whole global event count for that day
+    // from raw events. Metric/log/error-only markers must not invalidate event trend caches.
     let dirty = Query::select()
         .column(Alias::new("day"))
         .from(Alias::new("telemetry_dirty_days"))
         .and_where(Expr::col(Alias::new("environment_id")).eq(GLOBAL_ENVIRONMENT))
         .and_where(Expr::col(Alias::new("day")).gte(&since_day))
+        .and_where(rollup_repo::dirty_source_condition(
+            rollup_repo::DIRTY_SOURCE_EVENT,
+        ))
         .distinct()
         .limit((MAX_DIRTY_DAY_BINDS + 1) as u64)
         .to_owned();
@@ -233,6 +235,9 @@ async fn application_dirty_backlog_exceeds(
         .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
         .and_where(Expr::col(Alias::new("environment_id")).eq(rollup_environment))
         .and_where(Expr::col(Alias::new("day")).gte(since_day))
+        .and_where(rollup_repo::dirty_source_condition(
+            rollup_repo::DIRTY_SOURCE_EVENT,
+        ))
         .limit((MAX_DIRTY_DAY_BINDS + 1) as u64)
         .to_owned();
     Ok(database.query_all(&query).await?.len() > MAX_DIRTY_DAY_BINDS)
