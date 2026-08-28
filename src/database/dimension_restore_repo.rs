@@ -3,7 +3,7 @@ use sea_orm::{
     sea_query::{Alias, Query},
 };
 
-use super::{dimension_rollup_repo, first_seen_repo, user_rollup_repo};
+use super::{dimension_rollup_repo, first_seen_repo, rollup_repo, user_rollup_repo};
 
 /// Telemetry rollups and first-seen indexes are derived state, not authoritative backup data.
 ///
@@ -23,5 +23,15 @@ pub async fn reset_after_full_restore(database: &DatabaseConnection) -> Result<u
     let dimension_days =
         dimension_rollup_repo::seed_historical_dimension_dirty_days_once(database).await?;
     let user_days = user_rollup_repo::seed_historical_user_dirty_days_once(database).await?;
+    if dimension_days > 0 || user_days > 0 {
+        // Backfill helpers predate source masks. If their insert collides with a metric/log-only
+        // marker, explicitly promote pending work to EVENT so event-derived caches cannot be skipped.
+        database
+            .execute_unprepared(&format!(
+                "UPDATE telemetry_dirty_days SET source_mask = source_mask | {}",
+                rollup_repo::DIRTY_SOURCE_EVENT
+            ))
+            .await?;
+    }
     Ok(dimension_days.max(user_days))
 }
