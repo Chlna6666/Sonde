@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use sea_orm::{
@@ -6,9 +6,10 @@ use sea_orm::{
     sea_query::{Alias, Expr, ExprTrait, Func, Order, Query},
 };
 
-use super::rollup_repo;
+use super::{rollup_repo, user_rollup_repo};
 
 const GLOBAL_ENVIRONMENT: &str = "*";
+const MAX_DIRTY_DAY_BINDS: usize = 400;
 
 #[derive(Clone, Debug)]
 pub struct TrendPoint {
@@ -17,10 +18,11 @@ pub struct TrendPoint {
     pub users: u64,
 }
 
-/// Returns a rollup-backed trend only when the requested window has daily semantics.
+/// Returns a rollup-backed trend for every non-hourly statistics window.
 ///
-/// `1d` remains raw/hourly. `365d` and all-time remain raw/monthly because exact monthly
-/// distinct users cannot be derived by summing per-day distinct counts.
+/// Normal multi-day windows retain daily buckets. `365d` and all-time project daily event rollups
+/// into months and derive exact monthly active users by unioning the compact daily user sets instead
+/// of summing daily distinct counts.
 pub async fn application_daily_hybrid(
     database: &DatabaseConnection,
     application_id: &str,
@@ -28,7 +30,7 @@ pub async fn application_daily_hybrid(
     days: Option<u32>,
     since_ts: Option<i64>,
 ) -> Result<Option<Vec<TrendPoint>>, DbErr> {
-    if !supports_daily_rollup(days) {
+    if !supports_rollup(days) {
         return Ok(None);
     }
 
@@ -71,6 +73,21 @@ pub async fn application_daily_hybrid(
         .await?;
     }
 
+    if monthly_buckets(days) {
+        let Some(users) = user_rollup_repo::user_growth_hybrid(
+            database,
+            Some(application_id),
+            environment_id,
+            since_ts,
+            true,
+        )
+        .await?
+        else {
+            return Ok(None);
+        };
+        return project_monthly(points, users).map(Some);
+    }
+
     Ok(Some(points.into_values().collect()))
 }
 
@@ -79,7 +96,7 @@ pub async fn global_daily_hybrid(
     days: Option<u32>,
     since_ts: Option<i64>,
 ) -> Result<Option<Vec<TrendPoint>>, DbErr> {
-    if !supports_daily_rollup(days) || !rollup_repo::rollup_backfill_seeded(database).await? {
+    if !supports_rollup(days) || !rollup_repo::rollup_backfill_seeded(database).await? {
         return Ok(None);
     }
 
@@ -89,8 +106,10 @@ pub async fn global_daily_hybrid(
 
     let rollups = Query::select()
         .column(Alias::new("day"))
-        .expr_as(Func::sum(Expr::col(Alias::new("events"))), Alias::new("events"))
-        .expr_as(Func::sum(Expr::col(Alias::new("users"))), Alias::new("users"))
+        .expr_as(
+            Func::sum(Expr::col(Alias::new("events"))),
+            Alias::new("events"),
+        )
         .from(Alias::new("telemetry_daily_rollups"))
         .and_where(Expr::col(Alias::new("environment_id")).eq(GLOBAL_ENVIRONMENT))
         .and_where(Expr::col(Alias::new("day")).gte(&since_day))
@@ -106,19 +125,21 @@ pub async fn global_daily_hybrid(
             TrendPoint {
                 day,
                 events: positive_u64(row.try_get::<i64>("", "events").unwrap_or(0)),
-                users: positive_u64(row.try_get::<i64>("", "users").unwrap_or(0)),
+                users: 0,
             },
         );
     }
 
-    // If any app is dirty for a day, replace the whole global day from raw events. This avoids
-    // mixing stale rollup values for one app with fresh values for another.
+    // If any app is dirty for a day, replace the whole global event count for that day from raw
+    // events. User counts are filled separately from the global user-set union below, which avoids
+    // the old incorrect SUM(per-app daily users) behavior.
     let dirty = Query::select()
         .column(Alias::new("day"))
         .from(Alias::new("telemetry_dirty_days"))
         .and_where(Expr::col(Alias::new("environment_id")).eq(GLOBAL_ENVIRONMENT))
         .and_where(Expr::col(Alias::new("day")).gte(&since_day))
         .distinct()
+        .limit((MAX_DIRTY_DAY_BINDS + 1) as u64)
         .to_owned();
     let dirty_days = database
         .query_all(&dirty)
@@ -126,21 +147,23 @@ pub async fn global_daily_hybrid(
         .into_iter()
         .filter_map(|row| row.try_get::<String>("", "day").ok())
         .collect::<Vec<_>>();
+    if dirty_days.len() > MAX_DIRTY_DAY_BINDS {
+        return Ok(None);
+    }
 
     if !dirty_days.is_empty() {
         let raw = Query::select()
             .column(Alias::new("day"))
-            .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("events"))
             .expr_as(
-                Expr::cust("COUNT(DISTINCT anonymous_id)"),
-                Alias::new("users"),
+                Func::count(Expr::col(Alias::new("id"))),
+                Alias::new("events"),
             )
             .from(Alias::new("events"))
             .and_where(Expr::col(Alias::new("day")).is_in(dirty_days.iter().map(String::as_str)))
             .group_by_col(Alias::new("day"))
             .to_owned();
 
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         for row in database.query_all(&raw).await? {
             let day: String = row.try_get("", "day")?;
             seen.insert(day.clone());
@@ -149,7 +172,7 @@ pub async fn global_daily_hybrid(
                 TrendPoint {
                     day,
                     events: positive_u64(row.try_get::<i64>("", "events").unwrap_or(0)),
-                    users: positive_u64(row.try_get::<i64>("", "users").unwrap_or(0)),
+                    users: 0,
                 },
             );
         }
@@ -161,14 +184,70 @@ pub async fn global_daily_hybrid(
     }
 
     if let Some(since) = since_ts {
-        replace_partial_start_day(database, &mut points, None, None, since).await?;
+        replace_partial_start_events(database, &mut points, since).await?;
     }
 
+    let monthly = monthly_buckets(days);
+    let Some(users) = user_rollup_repo::user_growth_hybrid(database, None, None, since_ts, monthly)
+        .await?
+    else {
+        return Ok(None);
+    };
+
+    if monthly {
+        return project_monthly(points, users).map(Some);
+    }
+
+    apply_user_counts(&mut points, users);
     Ok(Some(points.into_values().collect()))
 }
 
-fn supports_daily_rollup(days: Option<u32>) -> bool {
-    matches!(days, Some(days) if days > 1 && days != 365)
+fn supports_rollup(days: Option<u32>) -> bool {
+    days != Some(1)
+}
+
+fn monthly_buckets(days: Option<u32>) -> bool {
+    matches!(days, Some(365) | None)
+}
+
+fn apply_user_counts(
+    points: &mut BTreeMap<String, TrendPoint>,
+    users: Vec<user_rollup_repo::UserGrowthBucket>,
+) {
+    for user_bucket in users {
+        points
+            .entry(user_bucket.bucket.clone())
+            .and_modify(|point| point.users = user_bucket.active_users)
+            .or_insert(TrendPoint {
+                day: user_bucket.bucket,
+                events: 0,
+                users: user_bucket.active_users,
+            });
+    }
+}
+
+fn project_monthly(
+    daily: BTreeMap<String, TrendPoint>,
+    users: Vec<user_rollup_repo::UserGrowthBucket>,
+) -> Result<Vec<TrendPoint>, DbErr> {
+    let mut monthly = BTreeMap::<String, TrendPoint>::new();
+    for point in daily.into_values() {
+        let month = point
+            .day
+            .get(..7)
+            .ok_or_else(|| DbErr::Custom("invalid daily trend day".into()))?
+            .to_owned();
+        monthly
+            .entry(month.clone())
+            .and_modify(|value| value.events = value.events.saturating_add(point.events))
+            .or_insert(TrendPoint {
+                day: month,
+                events: point.events,
+                users: 0,
+            });
+    }
+    apply_user_counts(&mut monthly, users);
+    Ok(monthly.into_values().collect())
 }
 
 async fn replace_partial_start_day(
@@ -187,7 +266,10 @@ async fn replace_partial_start_day(
 
     let mut query = Query::select();
     query
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("events"))
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("events"),
+        )
         .expr_as(
             Expr::cust("COUNT(DISTINCT anonymous_id)"),
             Alias::new("users"),
@@ -222,8 +304,50 @@ async fn replace_partial_start_day(
     Ok(())
 }
 
+async fn replace_partial_start_events(
+    database: &DatabaseConnection,
+    points: &mut BTreeMap<String, TrendPoint>,
+    since_ts: i64,
+) -> Result<(), DbErr> {
+    let Some(day) = day_for_timestamp(since_ts) else {
+        return Ok(());
+    };
+    let Some(next_day_ts) = next_day_timestamp(&day) else {
+        return Ok(());
+    };
+    let query = Query::select()
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("events"),
+        )
+        .from(Alias::new("events"))
+        .and_where(Expr::col(Alias::new("timestamp")).gte(since_ts))
+        .and_where(Expr::col(Alias::new("timestamp")).lt(next_day_ts))
+        .to_owned();
+    let events = database
+        .query_one(&query)
+        .await?
+        .and_then(|row| row.try_get::<i64>("", "events").ok())
+        .map(positive_u64)
+        .unwrap_or(0);
+    if events == 0 {
+        points.remove(&day);
+    } else {
+        points.insert(
+            day.clone(),
+            TrendPoint {
+                day,
+                events,
+                users: 0,
+            },
+        );
+    }
+    Ok(())
+}
+
 fn day_for_timestamp(timestamp: i64) -> Option<String> {
-    DateTime::<Utc>::from_timestamp_millis(timestamp).map(|value| value.format("%Y-%m-%d").to_string())
+    DateTime::<Utc>::from_timestamp_millis(timestamp)
+        .map(|value| value.format("%Y-%m-%d").to_string())
 }
 
 fn next_day_timestamp(day: &str) -> Option<i64> {
