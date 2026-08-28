@@ -849,14 +849,18 @@ async fn compute_user_growth(
     }
 
     // Raw fallback is retained for one-day hourly statistics and while historical user-set backfill
-    // is incomplete. Build the first-seen timestamp in a valid grouped subquery first; applying the
-    // bucket expression to `first_ts` in the outer query also keeps this path valid on PostgreSQL.
+    // is incomplete. The grouped subquery deliberately reuses the names `timestamp` and `day`, so
+    // the existing backend-specific bucket expression can be applied unchanged in the outer query.
     let mut first_seen = Query::select();
     first_seen
         .column(Alias::new("anonymous_id"))
         .expr_as(
             Func::min(Expr::col(Alias::new("timestamp"))),
-            Alias::new("first_ts"),
+            Alias::new("timestamp"),
+        )
+        .expr_as(
+            Func::min(Expr::col(Alias::new("day"))),
+            Alias::new("day"),
         )
         .from(Alias::new("events"))
         .and_where(Expr::col(Alias::new("anonymous_id")).is_not_null());
@@ -871,11 +875,16 @@ async fn compute_user_growth(
     }
     first_seen.group_by_col(Alias::new("anonymous_id"));
 
-    let first_bucket_expr = bucket_expr.replace("timestamp", "first_ts");
     let mut fs_q = Query::select();
     fs_q
-        .expr_as(Expr::cust(first_bucket_expr), Alias::new("first_bucket"))
-        .expr_as(Func::count(Expr::col(Alias::new("anonymous_id"))), Alias::new("new_users"))
+        .expr_as(
+            Expr::cust(bucket_expr.to_string()),
+            Alias::new("first_bucket"),
+        )
+        .expr_as(
+            Func::count(Expr::col(Alias::new("anonymous_id"))),
+            Alias::new("new_users"),
+        )
         .from_subquery(first_seen.take(), Alias::new("first_seen"))
         .group_by_col(Alias::new("first_bucket"));
 
