@@ -1,9 +1,11 @@
 use sea_orm_migration::prelude::*;
 
+mod auth_shared_state;
 mod columns;
 mod error_model;
 mod tables;
 
+use auth_shared_state::SharedAuthState;
 use columns::{bigint, create_index, create_table, string};
 use error_model::ErrorTelemetryModel;
 use tables::{
@@ -24,6 +26,7 @@ impl MigratorTrait for Migrator {
             Box::new(AlertsAndAuditTables),
             Box::new(OperationalIndexes),
             Box::new(ErrorTelemetryModel),
+            Box::new(SharedAuthState),
         ]
     }
 }
@@ -266,6 +269,9 @@ impl MigrationTrait for InitialSchema {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for table in [
+            "auth_totp_replay",
+            "auth_2fa_pending",
+            "auth_sessions",
             "error_occurrences",
             "error_groups",
             "audit_log",
