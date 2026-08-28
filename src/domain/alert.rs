@@ -61,6 +61,70 @@ impl AlertExpression {
         if !self.threshold.is_finite() {
             return Err("threshold must be finite");
         }
+        if self.filters.len() > 8 {
+            return Err("at most 8 alert filters are allowed");
+        }
+        for filter in &self.filters {
+            if filter.value.is_empty() || filter.value.len() > 256 {
+                return Err("alert filter values must be 1..256 bytes");
+            }
+            if !self.allowed_filter_fields().contains(&filter.field.as_str()) {
+                return Err("alert filter field is not supported for this source");
+            }
+        }
         Ok(())
+    }
+
+    fn allowed_filter_fields(&self) -> &'static [&'static str] {
+        match self.source {
+            AlertSource::EventCount | AlertSource::MissingData | AlertSource::ChangeRate => &[
+                "environment_id",
+                "name",
+                "app_version",
+                "launcher_version",
+                "os",
+            ],
+            AlertSource::MetricAverage | AlertSource::MetricSum => {
+                &["environment_id", "name", "metric_type", "unit"]
+            }
+            AlertSource::LogCount => &[
+                "environment_id",
+                "level",
+                "logger",
+                "trace_id",
+                "span_id",
+            ],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AlertExpression, AlertFilter, AlertSource, Comparison};
+
+    fn expression(source: AlertSource, field: &str) -> AlertExpression {
+        AlertExpression {
+            source,
+            operator: Comparison::GreaterOrEqual,
+            threshold: 1.0,
+            window_minutes: 5,
+            consecutive_hits: 1,
+            filters: vec![AlertFilter {
+                field: field.into(),
+                value: "value".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_filter_columns() {
+        assert!(expression(AlertSource::EventCount, "password_hash").validate().is_err());
+        assert!(expression(AlertSource::MetricAverage, "message").validate().is_err());
+    }
+
+    #[test]
+    fn accepts_supported_filter_columns() {
+        assert!(expression(AlertSource::EventCount, "app_version").validate().is_ok());
+        assert!(expression(AlertSource::LogCount, "level").validate().is_ok());
     }
 }

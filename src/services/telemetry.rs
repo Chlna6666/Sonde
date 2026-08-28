@@ -36,15 +36,17 @@ pub struct IngestTokenResponse {
     pub scopes: Vec<String>,
 }
 
+/// Return the transport peer address used by Actix.
+///
+/// Forwarded/X-Forwarded-For are deliberately not trusted by default: accepting them without a
+/// configured trusted-proxy boundary would allow a direct client to bypass IP based throttling by
+/// spoofing request headers. Reverse proxies should therefore enforce rate limits themselves until
+/// Sonde grows an explicit trusted-proxy configuration.
 pub fn extract_client_ip(request: &HttpRequest) -> String {
     request
-        .connection_info()
-        .realip_remote_addr()
-        .unwrap_or("127.0.0.1")
-        .split(':')
-        .next()
-        .unwrap_or("127.0.0.1")
-        .to_string()
+        .peer_addr()
+        .map(|address| address.ip().to_string())
+        .unwrap_or_else(|| "unknown".into())
 }
 
 pub fn extract_raw_key(request: &HttpRequest) -> Option<&str> {
