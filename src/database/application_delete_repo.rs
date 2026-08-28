@@ -61,17 +61,10 @@ pub async fn delete_application_exact(
         transaction.execute(&delete).await?;
     }
 
-    // The global first-seen scope deduplicates the same anonymous user across applications. Once one
-    // application disappears, a global row may need to move to that user's next surviving event.
-    // Rebuild the compact derived index from authoritative remaining events rather than trying to
-    // infer provenance from its hashed row id.
-    for table in [
-        "telemetry_first_seen_backfill_days",
-        "telemetry_user_first_seen",
-    ] {
-        let delete = Query::delete().from_table(Alias::new(table)).to_owned();
-        transaction.execute(&delete).await?;
-    }
+    // The global first-seen scope deduplicates the same anonymous user across applications. Instead
+    // of deleting the potentially huge derived index synchronously, invalidate its epoch in this
+    // transaction. Queries immediately fall back to raw events; the leased rebuild creates a fresh
+    // epoch from surviving applications and garbage-collects the old rows after completion.
     let clear_first_seen_state = Query::delete()
         .from_table(Alias::new("system_state"))
         .and_where(Expr::col(Alias::new("key")).eq(FIRST_SEEN_BACKFILL_KEY))
