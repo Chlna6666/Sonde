@@ -8,6 +8,7 @@ mod error_model;
 mod job_leases;
 mod rollup_generation;
 mod tables;
+mod user_rollup_chunks;
 mod user_rollups;
 
 use auth_shared_state::SharedAuthState;
@@ -21,6 +22,7 @@ use tables::{
     create_alert_tables, create_application_tables, create_identity_tables, create_import_tables,
     create_telemetry_tables,
 };
+use user_rollup_chunks::UserRollupChunks;
 use user_rollups::UserRollups;
 
 pub struct Migrator;
@@ -42,6 +44,7 @@ impl MigratorTrait for Migrator {
             Box::new(JobLeases),
             Box::new(DimensionRollups),
             Box::new(UserRollups),
+            Box::new(UserRollupChunks),
         ]
     }
 }
