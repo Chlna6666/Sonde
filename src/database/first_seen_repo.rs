@@ -178,21 +178,17 @@ pub async fn count_new_users_hybrid(
     raw_new_users(database, application_id, environment_id, since, until).await
 }
 
+/// Invalidation is an epoch switch, not a physical cache purge. Removing the authoritative state
+/// makes every query fall back to raw events immediately; the next backfill creates a fresh epoch,
+/// and successful completion garbage-collects older epochs. This keeps retention/restore O(1) with
+/// respect to first-seen index size and avoids a long writer lock on large installations.
 pub async fn invalidate(database: &DatabaseConnection) -> Result<(), DbErr> {
-    let transaction = database.begin().await?;
     let clear_state = Query::delete()
         .from_table(Alias::new("system_state"))
         .and_where(Expr::col(Alias::new("key")).eq(BACKFILL_STATE_KEY))
         .to_owned();
-    transaction.execute(&clear_state).await?;
-    for table in [
-        "telemetry_first_seen_backfill_days",
-        "telemetry_user_first_seen",
-    ] {
-        let delete = Query::delete().from_table(Alias::new(table)).to_owned();
-        transaction.execute(&delete).await?;
-    }
-    transaction.commit().await
+    database.execute(&clear_state).await?;
+    Ok(())
 }
 
 pub async fn backfill_complete(database: &DatabaseConnection) -> Result<bool, DbErr> {
@@ -221,14 +217,6 @@ async fn seed_new_epoch(database: &DatabaseConnection) -> Result<(), DbErr> {
     if read_backfill_state(&transaction).await?.is_some() {
         transaction.rollback().await?;
         return Ok(());
-    }
-
-    for table in [
-        "telemetry_first_seen_backfill_days",
-        "telemetry_user_first_seen",
-    ] {
-        let delete = Query::delete().from_table(Alias::new(table)).to_owned();
-        transaction.execute(&delete).await?;
     }
 
     let query = Query::select()
