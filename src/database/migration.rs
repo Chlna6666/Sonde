@@ -2,11 +2,13 @@ use sea_orm_migration::prelude::*;
 
 mod auth_shared_state;
 mod columns;
+mod daily_rollups;
 mod error_model;
 mod tables;
 
 use auth_shared_state::SharedAuthState;
 use columns::{bigint, create_index, create_table, string};
+use daily_rollups::DailyRollups;
 use error_model::ErrorTelemetryModel;
 use tables::{
     create_alert_tables, create_application_tables, create_identity_tables, create_import_tables,
@@ -27,6 +29,7 @@ impl MigratorTrait for Migrator {
             Box::new(OperationalIndexes),
             Box::new(ErrorTelemetryModel),
             Box::new(SharedAuthState),
+            Box::new(DailyRollups),
         ]
     }
 }
@@ -269,6 +272,8 @@ impl MigrationTrait for InitialSchema {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for table in [
+            "telemetry_daily_rollups",
+            "telemetry_dirty_days",
             "auth_totp_replay",
             "auth_2fa_pending",
             "auth_sessions",
