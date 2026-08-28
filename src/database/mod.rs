@@ -10,6 +10,7 @@ pub mod import_repo;
 pub mod ingest_auth_repo;
 mod migration;
 pub mod query;
+pub mod rollup_repo;
 pub mod stats_repo;
 pub mod telemetry_repo;
 
