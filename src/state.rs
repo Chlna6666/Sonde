@@ -47,7 +47,7 @@ impl AppState {
         } else if let Some(url) = &runtime.database_url_override {
             match database::connect(url).await {
                 Ok(database) => {
-                    let _ = database::migrate(&database).await;
+                    database::migrate(&database).await?;
                     if is_database_installed(&database).await {
                         let config = InstallationConfig {
                             database_url: url.clone(),
@@ -55,7 +55,9 @@ impl AppState {
                             timezone: "UTC".into(),
                             secure_cookie: false,
                         };
-                        let _ = config.write_atomic(&runtime.config_path);
+                        config
+                            .write_atomic(&runtime.config_path)
+                            .map_err(|_| AppError::Internal)?;
                         let auth_security = AuthSecurity::new(runtime.password_pepper.as_bytes())?;
                         Some(Arc::new(InstalledState {
                             database,
@@ -75,7 +77,7 @@ impl AppState {
                 let db_url = format!("sqlite://{path_str}?mode=rwc");
                 match database::connect(&db_url).await {
                     Ok(database) => {
-                        let _ = database::migrate(&database).await;
+                        database::migrate(&database).await?;
                         if is_database_installed(&database).await {
                             let config = InstallationConfig {
                                 database_url: db_url,
@@ -83,7 +85,9 @@ impl AppState {
                                 timezone: "UTC".into(),
                                 secure_cookie: false,
                             };
-                            let _ = config.write_atomic(&runtime.config_path);
+                            config
+                                .write_atomic(&runtime.config_path)
+                                .map_err(|_| AppError::Internal)?;
                             let auth_security =
                                 AuthSecurity::new(runtime.password_pepper.as_bytes())?;
                             Some(Arc::new(InstalledState {
@@ -101,6 +105,11 @@ impl AppState {
                 None
             }
         };
+
+        if let Some(installed) = installed.as_deref() {
+            spawn_background_workers(installed);
+        }
+
         let (live_updates, _) = broadcast::channel(256);
         Ok(Self {
             runtime,
@@ -168,11 +177,15 @@ impl AppState {
         if guard.is_some() {
             return Err(AppError::AlreadyInitialized);
         }
-        crate::services::retention::spawn_retention_worker(state.database.clone());
-        crate::services::alerts::spawn_alert_evaluator_worker(state.database.clone());
+        spawn_background_workers(&state);
         *guard = Some(Arc::new(state));
         Ok(())
     }
+}
+
+fn spawn_background_workers(state: &InstalledState) {
+    crate::services::retention::spawn_retention_worker(state.database.clone());
+    crate::services::alerts::spawn_alert_evaluator_worker(state.database.clone());
 }
 
 async fn is_database_installed(database: &DatabaseConnection) -> bool {
