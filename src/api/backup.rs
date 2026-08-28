@@ -1,9 +1,11 @@
-use actix_web::{HttpRequest, HttpResponse, Responder, web};
+use actix_web::{HttpRequest, HttpResponse, Responder, error as web_error, web};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 
 use crate::{
-    database::backup_repo,
+    database::{backup_repo, backup_v2_repo},
     error::AppError,
     services::{authentication, backup},
     state::AppState,
@@ -41,6 +43,14 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     .route(
         "/api/v1/admin/system/restore",
         web::post().to(restore_system_backup),
+    )
+    .route(
+        "/api/v1/admin/system/backup/v2",
+        web::get().to(export_system_backup_v2),
+    )
+    .route(
+        "/api/v1/admin/system/restore/v2",
+        web::post().to(restore_system_backup_v2),
     )
     .route(
         "/api/v1/admin/system/settings",
@@ -148,5 +158,83 @@ async fn restore_system_backup(
     backup::restore_full_system(&installed, &user, body.into_inner()).await?;
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "ok": true
+    })))
+}
+
+async fn export_system_backup_v2(
+    state: web::Data<Arc<AppState>>,
+    req: HttpRequest,
+) -> Result<HttpResponse, AppError> {
+    let installed = state.installed().await?;
+    let user = authentication::authenticate(&installed, &req).await?;
+    let stream = backup::export_full_system_v2(&installed, &user).await?;
+    let body = stream.map(|chunk| {
+        chunk
+            .map(web::Bytes::from)
+            .map_err(web_error::ErrorInternalServerError)
+    });
+    let date = chrono::Utc::now().format("%Y-%m-%d");
+
+    Ok(HttpResponse::Ok()
+        .insert_header(("content-type", backup_v2_repo::CONTENT_TYPE))
+        .insert_header(("cache-control", "no-store"))
+        .insert_header((
+            "content-disposition",
+            format!(
+                "attachment; filename=\"sonde-full-backup-{date}.{}\"",
+                backup_v2_repo::FILE_EXTENSION
+            ),
+        ))
+        .streaming(body))
+}
+
+async fn restore_system_backup_v2(
+    state: web::Data<Arc<AppState>>,
+    req: HttpRequest,
+    mut body: web::Payload,
+) -> Result<HttpResponse, AppError> {
+    let installed = state.installed().await?;
+    let user = authentication::authenticate_mutation(&installed, &req).await?;
+
+    // NamedTempFile owns deletion. The async handle returned by reopen writes to the same inode,
+    // while the guard keeps the path alive for the validation and restore passes.
+    let staging = tempfile::NamedTempFile::new().map_err(|_| AppError::Internal)?;
+    let staging_file = staging.reopen().map_err(|_| AppError::Internal)?;
+    let mut staging_file = tokio::fs::File::from_std(staging_file);
+    let mut current_record_bytes = 0_usize;
+
+    while let Some(chunk) = body.next().await {
+        let chunk = chunk
+            .map_err(|_| AppError::Validation("backup upload was interrupted".into()))?;
+        for byte in chunk.as_ref() {
+            if *byte == b'\n' {
+                current_record_bytes = 0;
+            } else {
+                current_record_bytes = current_record_bytes.saturating_add(1);
+                if current_record_bytes > backup_v2_repo::MAX_RECORD_BYTES {
+                    return Err(AppError::PayloadTooLarge);
+                }
+            }
+        }
+        staging_file
+            .write_all(&chunk)
+            .await
+            .map_err(|_| AppError::Internal)?;
+    }
+    staging_file
+        .flush()
+        .await
+        .map_err(|_| AppError::Internal)?;
+    staging_file
+        .sync_all()
+        .await
+        .map_err(|_| AppError::Internal)?;
+    drop(staging_file);
+
+    let restored = backup::restore_full_system_v2(&installed, &user, staging.path()).await?;
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "ok": true,
+        "restoredRecords": restored,
+        "formatVersion": backup_v2_repo::FORMAT_VERSION,
     })))
 }
