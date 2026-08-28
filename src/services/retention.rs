@@ -4,7 +4,7 @@ use sea_orm::{
 };
 use tracing::{info, warn};
 
-use crate::database::{rollup_repo, telemetry_repo::TelemetryScope};
+use crate::database::{first_seen_repo, rollup_repo, telemetry_repo::TelemetryScope};
 
 /// Each deleted id becomes one bind variable in the follow-up `IN (...)` statement. Keep this
 /// comfortably below SQLite's historical 999-variable limit and leave room for driver-added binds.
@@ -33,6 +33,7 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
 
     let app_rows = database.query_all(&select_apps).await?;
     let mut report = RetentionReport::default();
+    let mut first_seen_needs_rebuild = false;
     let now = chrono::Utc::now().timestamp_millis();
 
     for row in app_rows {
@@ -64,6 +65,7 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             cutoff,
         )
         .await?;
+        first_seen_needs_rebuild |= events_deleted > 0;
         report.events_deleted = report.events_deleted.saturating_add(events_deleted);
         report.metrics_deleted = report.metrics_deleted.saturating_add(metrics_deleted);
         report.logs_deleted = report.logs_deleted.saturating_add(logs_deleted);
@@ -131,6 +133,14 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             retention_days = %retention_days,
             "retention sweep completed for application"
         );
+    }
+
+    // First-seen is a derived index over retained events. Deleting an old event can move a user's
+    // first retained occurrence forward, so a monotonic MIN-only incremental update is insufficient.
+    // Rebuild asynchronously from the remaining authoritative rows instead of preserving deleted
+    // user history past the configured retention boundary.
+    if first_seen_needs_rebuild {
+        first_seen_repo::invalidate(database).await?;
     }
 
     crate::database::auth_state_repo::cleanup_expired(database).await?;
