@@ -243,7 +243,7 @@ pub async fn overview(
     };
 
     let total_events = count(database, "events", since_ts.map(|s| ("timestamp", s))).await?;
-    let user_growth = compute_user_growth(database, None, None, since_ts, &bucket_expr).await?;
+    let user_growth = compute_user_growth(database, None, None, since_ts, days, &bucket_expr).await?;
     let version_timeline = compute_version_timeline(database, None, None, since_ts, &bucket_expr).await?;
     let version_series = compute_version_series(database, None, None, since_ts, &bucket_expr).await?;
 
@@ -529,6 +529,7 @@ pub async fn application_stats(
         Some(application_id),
         environment_id,
         since_ts,
+        days,
         &bucket_expr,
     )
     .await?;
@@ -821,37 +822,68 @@ async fn compute_user_growth(
     application_id: Option<&str>,
     environment_id: Option<&str>,
     since_ts: Option<i64>,
+    days: Option<u32>,
     bucket_expr: &str,
 ) -> Result<Vec<UserGrowthPoint>, DbErr> {
-    let mut fs_q = Query::select();
-    fs_q.column(Alias::new("anonymous_id"))
+    if days != Some(1) {
+        let monthly = matches!(days, Some(365) | None);
+        if let Some(points) = super::user_rollup_repo::user_growth_hybrid(
+            database,
+            application_id,
+            environment_id,
+            since_ts,
+            monthly,
+        )
+        .await?
+        {
+            return Ok(points
+                .into_iter()
+                .map(|point| UserGrowthPoint {
+                    bucket: point.bucket,
+                    new_users: point.new_users,
+                    cumulative_users: point.cumulative_users,
+                    active_users: point.active_users,
+                })
+                .collect());
+        }
+    }
+
+    // Raw fallback is retained for one-day hourly statistics and while historical user-set backfill
+    // is incomplete. Build the first-seen timestamp in a valid grouped subquery first; applying the
+    // bucket expression to `first_ts` in the outer query also keeps this path valid on PostgreSQL.
+    let mut first_seen = Query::select();
+    first_seen
+        .column(Alias::new("anonymous_id"))
         .expr_as(
             Func::min(Expr::col(Alias::new("timestamp"))),
             Alias::new("first_ts"),
         )
-        .expr_as(
-            Expr::cust(bucket_expr.to_string()),
-            Alias::new("first_bucket"),
-        )
         .from(Alias::new("events"))
         .and_where(Expr::col(Alias::new("anonymous_id")).is_not_null());
     if let Some(id) = application_id {
-        fs_q.and_where(Expr::col(Alias::new("application_id")).eq(id));
+        first_seen.and_where(Expr::col(Alias::new("application_id")).eq(id));
     }
     if let Some(env) = environment_id {
-        fs_q.and_where(Expr::col(Alias::new("environment_id")).eq(env));
+        first_seen.and_where(Expr::col(Alias::new("environment_id")).eq(env));
     }
     if let Some(since) = since_ts {
-        fs_q.and_where(Expr::col(Alias::new("timestamp")).gte(since));
+        first_seen.and_where(Expr::col(Alias::new("timestamp")).gte(since));
     }
-    fs_q.group_by_col(Alias::new("anonymous_id"));
+    first_seen.group_by_col(Alias::new("anonymous_id"));
+
+    let first_bucket_expr = bucket_expr.replace("timestamp", "first_ts");
+    let mut fs_q = Query::select();
+    fs_q
+        .expr_as(Expr::cust(first_bucket_expr), Alias::new("first_bucket"))
+        .expr_as(Func::count(Expr::col(Alias::new("anonymous_id"))), Alias::new("new_users"))
+        .from_subquery(first_seen.take(), Alias::new("first_seen"))
+        .group_by_col(Alias::new("first_bucket"));
 
     let mut new_users_by_bucket: HashMap<String, u64> = HashMap::new();
-    let fs_rows = database.query_all(&fs_q).await?;
-    for row in fs_rows {
-        if let Ok(b) = row.try_get::<String>("", "first_bucket") {
-            *new_users_by_bucket.entry(b).or_insert(0) += 1;
-        }
+    for row in database.query_all(&fs_q).await? {
+        let bucket: String = row.try_get("", "first_bucket")?;
+        let count = std::cmp::max(row.try_get::<i64>("", "new_users").unwrap_or(0), 0) as u64;
+        new_users_by_bucket.insert(bucket, count);
     }
 
     let mut act_q = Query::select();
@@ -887,7 +919,7 @@ async fn compute_user_growth(
             0,
         ) as u64;
         let new_u = new_users_by_bucket.get(&bucket).copied().unwrap_or(0);
-        cumulative += new_u;
+        cumulative = cumulative.saturating_add(new_u);
         points.push(UserGrowthPoint {
             bucket,
             new_users: new_u,
