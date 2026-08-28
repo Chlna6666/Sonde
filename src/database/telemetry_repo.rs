@@ -4,7 +4,10 @@ use uuid::Uuid;
 
 use crate::domain::telemetry::{EventInput, LogInput, MetricInput};
 
-use super::query::{insert_batch, insert_batch_ignore_conflicts};
+use super::{
+    query::{insert_batch, insert_batch_ignore_conflicts},
+    rollup_repo,
+};
 
 #[derive(Clone, Debug)]
 pub struct TelemetryScope {
@@ -83,6 +86,16 @@ pub async fn insert_events(
         )
         .await?;
     }
+    if inserted > 0 {
+        rollup_repo::mark_dirty_timestamps(
+            &transaction,
+            scope,
+            events
+                .iter()
+                .map(|event| event.timestamp.unwrap_or(received_at)),
+        )
+        .await?;
+    }
     transaction.commit().await?;
     Ok(inserted as usize)
 }
@@ -133,6 +146,14 @@ pub async fn insert_metrics(
         }
         insert_batch(&transaction, "metric_points", &columns, rows).await?;
     }
+    rollup_repo::mark_dirty_timestamps(
+        &transaction,
+        scope,
+        metrics
+            .iter()
+            .map(|metric| metric.timestamp.unwrap_or(received_at)),
+    )
+    .await?;
     transaction.commit().await?;
     Ok(metrics.len())
 }
@@ -185,6 +206,12 @@ pub async fn insert_logs(
         }
         insert_batch(&transaction, "logs", &columns, rows).await?;
     }
+    rollup_repo::mark_dirty_timestamps(
+        &transaction,
+        scope,
+        logs.iter().map(|log| log.timestamp.unwrap_or(received_at)),
+    )
+    .await?;
     transaction.commit().await?;
     Ok(logs.len())
 }
@@ -195,6 +222,7 @@ pub async fn insert_migrated_event(
     event: &EventInput,
     dedupe_key: &str,
 ) -> Result<bool, DbErr> {
+    let transaction = database.begin().await?;
     let received_at = chrono::Utc::now().timestamp_millis();
     let timestamp = event.timestamp.unwrap_or(received_at);
     let day = chrono::DateTime::from_timestamp_millis(timestamp)
@@ -234,8 +262,8 @@ pub async fn insert_migrated_event(
         dedupe_key.into(),
         received_at.into(),
     ]];
-    Ok(insert_batch_ignore_conflicts(
-        database,
+    let inserted = insert_batch_ignore_conflicts(
+        &transaction,
         "events",
         &columns,
         rows,
@@ -243,7 +271,12 @@ pub async fn insert_migrated_event(
         "id",
     )
     .await?
-        > 0)
+        > 0;
+    if inserted {
+        rollup_repo::mark_dirty_timestamps(&transaction, scope, [timestamp]).await?;
+    }
+    transaction.commit().await?;
+    Ok(inserted)
 }
 
 fn scoped_event_dedupe_key(scope: &TelemetryScope, idempotency_key: &str) -> String {
@@ -356,6 +389,14 @@ pub async fn insert_errors(
     }
 
     super::error_repo::insert_error_index(&transaction, scope, errors, received_at).await?;
+    rollup_repo::mark_dirty_timestamps(
+        &transaction,
+        scope,
+        errors
+            .iter()
+            .map(|error| error.timestamp.unwrap_or(received_at)),
+    )
+    .await?;
     transaction.commit().await?;
     Ok(errors.len())
 }
