@@ -23,6 +23,7 @@ async fn overview(
     request: HttpRequest,
     query: web::Query<OverviewQuery>,
 ) -> Result<HttpResponse, AppError> {
+    let _permit = state.try_acquire_analytics()?;
     let installed = state.installed().await?;
     let user = authentication::authenticate(&installed, &request).await?;
     Ok(HttpResponse::Ok().json(statistics::overview(&installed, &user, query.days).await?))

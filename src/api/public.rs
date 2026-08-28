@@ -34,13 +34,15 @@ async fn get_public_application(
     path: web::Path<String>,
     query: web::Query<PublicStatsQuery>,
 ) -> Result<impl Responder, AppError> {
+    let _permit = state.try_acquire_analytics()?;
     let installed = state.installed().await?;
     let slug = path.into_inner();
     let app = app_repo::get_public_application_by_slug(&installed.database, &slug)
         .await?
         .ok_or(AppError::NotFound)?;
 
-    let stats = stats_repo::application_stats(&installed.database, &app.id, None, query.days).await?;
+    let stats =
+        stats_repo::application_stats(&installed.database, &app.id, None, query.days).await?;
 
     Ok(HttpResponse::Ok().json(PublicApplicationDetails {
         application: app,

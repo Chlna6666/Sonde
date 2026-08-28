@@ -38,6 +38,7 @@ async fn events(
     request: HttpRequest,
     query: web::Query<ExplorerQuery>,
 ) -> Result<HttpResponse, AppError> {
+    let _permit = state.try_acquire_analytics()?;
     let (installed, user, filter) = authorize(&state, &request, query.into_inner()).await?;
     Ok(HttpResponse::Ok().json(explorer::events(&installed, &user, &filter).await?))
 }
@@ -47,6 +48,7 @@ async fn metrics(
     request: HttpRequest,
     query: web::Query<ExplorerQuery>,
 ) -> Result<HttpResponse, AppError> {
+    let _permit = state.try_acquire_analytics()?;
     let (installed, user, filter) = authorize(&state, &request, query.into_inner()).await?;
     Ok(HttpResponse::Ok().json(explorer::metrics(&installed, &user, &filter).await?))
 }
@@ -56,6 +58,7 @@ async fn logs(
     request: HttpRequest,
     query: web::Query<ExplorerQuery>,
 ) -> Result<HttpResponse, AppError> {
+    let _permit = state.try_acquire_analytics()?;
     let (installed, user, filter) = authorize(&state, &request, query.into_inner()).await?;
     Ok(HttpResponse::Ok().json(explorer::logs(&installed, &user, &filter).await?))
 }

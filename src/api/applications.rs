@@ -280,6 +280,7 @@ async fn stats(
     path: web::Path<String>,
     query: web::Query<StatsQuery>,
 ) -> Result<HttpResponse, AppError> {
+    let _permit = state.try_acquire_analytics()?;
     let installed = state.installed().await?;
     let user = authentication::authenticate(&installed, &request).await?;
     let stats = statistics::application_stats(

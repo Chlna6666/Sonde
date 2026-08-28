@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
-use tokio::sync::{Mutex, RwLock, broadcast};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore, broadcast};
 
 use crate::{
     config::{InstallationConfig, RuntimeConfig},
@@ -9,6 +9,9 @@ use crate::{
     error::AppError,
     security::AuthSecurity,
 };
+
+const MAX_IN_FLIGHT_INGEST_REQUESTS: usize = 64;
+const MAX_IN_FLIGHT_ANALYTICS_QUERIES: usize = 8;
 
 pub struct InstalledState {
     pub database: DatabaseConnection,
@@ -21,6 +24,8 @@ pub struct AppState {
     installed: RwLock<Option<Arc<InstalledState>>>,
     pub setup_lock: Mutex<()>,
     pub live_updates: broadcast::Sender<String>,
+    ingest_gate: Arc<Semaphore>,
+    analytics_gate: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -102,6 +107,8 @@ impl AppState {
             installed: RwLock::new(installed),
             setup_lock: Mutex::new(()),
             live_updates,
+            ingest_gate: Arc::new(Semaphore::new(MAX_IN_FLIGHT_INGEST_REQUESTS)),
+            analytics_gate: Arc::new(Semaphore::new(MAX_IN_FLIGHT_ANALYTICS_QUERIES)),
         })
     }
 
@@ -117,8 +124,24 @@ impl AppState {
         self.installed.read().await.is_some()
     }
 
-    
-    pub async fn update_installed_config<F>(&self, update_fn: F) -> Result<InstallationConfig, AppError>
+    pub fn try_acquire_ingest(&self) -> Result<OwnedSemaphorePermit, AppError> {
+        self.ingest_gate
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| AppError::TooManyRequests)
+    }
+
+    pub fn try_acquire_analytics(&self) -> Result<OwnedSemaphorePermit, AppError> {
+        self.analytics_gate
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| AppError::TooManyRequests)
+    }
+
+    pub async fn update_installed_config<F>(
+        &self,
+        update_fn: F,
+    ) -> Result<InstallationConfig, AppError>
     where
         F: FnOnce(&mut InstallationConfig),
     {

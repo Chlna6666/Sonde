@@ -28,6 +28,7 @@ async fn token(
     request: HttpRequest,
     body: web::Json<IngestTokenRequest>,
 ) -> Result<HttpResponse, AppError> {
+    let _permit = state.try_acquire_ingest()?;
     let installed = state.installed().await?;
     let response =
         telemetry::issue_token_from_request(&installed, &request, body.into_inner()).await?;
@@ -40,6 +41,7 @@ async fn events(
     body: web::Bytes,
 ) -> Result<HttpResponse, AppError> {
     ensure_body_size(&body)?;
+    let _permit = state.try_acquire_ingest()?;
     let installed = state.installed().await?;
     let scope = telemetry::scope_from_request_with_permission(
         &installed,
@@ -60,6 +62,7 @@ async fn metrics(
     body: web::Bytes,
 ) -> Result<HttpResponse, AppError> {
     ensure_body_size(&body)?;
+    let _permit = state.try_acquire_ingest()?;
     let installed = state.installed().await?;
     let scope = telemetry::scope_from_request_with_permission(
         &installed,
@@ -80,6 +83,7 @@ async fn logs(
     body: web::Bytes,
 ) -> Result<HttpResponse, AppError> {
     ensure_body_size(&body)?;
+    let _permit = state.try_acquire_ingest()?;
     let installed = state.installed().await?;
     let scope = telemetry::scope_from_request_with_permission(
         &installed,
@@ -100,6 +104,7 @@ async fn errors(
     body: web::Bytes,
 ) -> Result<HttpResponse, AppError> {
     ensure_body_size(&body)?;
+    let _permit = state.try_acquire_ingest()?;
     let installed = state.installed().await?;
     let scope = telemetry::scope_from_request_with_permission(
         &installed,

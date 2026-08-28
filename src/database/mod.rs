@@ -16,21 +16,22 @@ use std::time::Duration;
 pub use migration::Migrator;
 
 pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
+    let is_sqlite = database_url.starts_with("sqlite:");
     let mut options = ConnectOptions::new(database_url);
     options
-        .max_connections(50)
-        .min_connections(2)
+        .max_connections(if is_sqlite { 8 } else { 50 })
+        .min_connections(if is_sqlite { 1 } else { 2 })
         .connect_timeout(Duration::from_secs(10))
         .acquire_timeout(Duration::from_secs(10))
         .idle_timeout(Duration::from_secs(300))
         .max_lifetime(Duration::from_secs(1800))
         .sqlx_logging(false);
     let db = Database::connect(options).await?;
-    if database_url.starts_with("sqlite:") {
+    if is_sqlite {
         use sea_orm::ConnectionTrait;
         let _ = db
             .execute_unprepared(
-                "PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+                "PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA wal_autocheckpoint=1000;",
             )
             .await;
     }

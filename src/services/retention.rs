@@ -4,6 +4,8 @@ use sea_orm::{
 };
 use tracing::{info, warn};
 
+const DELETE_BATCH_SIZE: u64 = 5_000;
+
 #[derive(Debug, Default)]
 pub struct RetentionReport {
     pub apps_processed: usize,
@@ -35,43 +37,20 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
         let cutoff = now - (retention_days as i64) * 86_400_000;
         report.apps_processed += 1;
 
-        // Delete from events
-        let del_events = Query::delete()
-            .from_table(Alias::new("events"))
-            .and_where(Expr::col(Alias::new("application_id")).eq(&app_id))
-            .and_where(Expr::col(Alias::new("timestamp")).lt(cutoff))
-            .to_owned();
-        if let Ok(res) = database.execute(&del_events).await {
-            report.events_deleted += res.rows_affected();
-        }
-
-        // Delete from metric_points
-        let del_metrics = Query::delete()
-            .from_table(Alias::new("metric_points"))
-            .and_where(Expr::col(Alias::new("application_id")).eq(&app_id))
-            .and_where(Expr::col(Alias::new("timestamp")).lt(cutoff))
-            .to_owned();
-        if let Ok(res) = database.execute(&del_metrics).await {
-            report.metrics_deleted += res.rows_affected();
-        }
-
-        // Delete from logs
-        let del_logs = Query::delete()
-            .from_table(Alias::new("logs"))
-            .and_where(Expr::col(Alias::new("application_id")).eq(&app_id))
-            .and_where(Expr::col(Alias::new("timestamp")).lt(cutoff))
-            .to_owned();
-        if let Ok(res) = database.execute(&del_logs).await {
-            report.logs_deleted += res.rows_affected();
-        }
-
-        // Delete from daily_aggregates
-        let del_aggregates = Query::delete()
-            .from_table(Alias::new("daily_aggregates"))
-            .and_where(Expr::col(Alias::new("application_id")).eq(&app_id))
-            .and_where(Expr::col(Alias::new("updated_at")).lt(cutoff))
-            .to_owned();
-        let _ = database.execute(&del_aggregates).await;
+        report.events_deleted +=
+            delete_in_batches(database, "events", "timestamp", &app_id, cutoff).await?;
+        report.metrics_deleted +=
+            delete_in_batches(database, "metric_points", "timestamp", &app_id, cutoff).await?;
+        report.logs_deleted +=
+            delete_in_batches(database, "logs", "timestamp", &app_id, cutoff).await?;
+        let _ = delete_in_batches(
+            database,
+            "daily_aggregates",
+            "updated_at",
+            &app_id,
+            cutoff,
+        )
+        .await?;
 
         info!(
             app_id = %app_id,
@@ -92,6 +71,49 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
     }
 
     Ok(report)
+}
+
+async fn delete_in_batches(
+    database: &DatabaseConnection,
+    table: &str,
+    timestamp_column: &str,
+    application_id: &str,
+    cutoff: i64,
+) -> Result<u64, DbErr> {
+    let mut deleted = 0_u64;
+
+    loop {
+        let select = Query::select()
+            .column(Alias::new("id"))
+            .from(Alias::new(table))
+            .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
+            .and_where(Expr::col(Alias::new(timestamp_column)).lt(cutoff))
+            .limit(DELETE_BATCH_SIZE)
+            .to_owned();
+        let rows = database.query_all(&select).await?;
+        if rows.is_empty() {
+            break;
+        }
+
+        let ids = rows
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "id"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let batch_len = ids.len();
+        let delete = Query::delete()
+            .from_table(Alias::new(table))
+            .and_where(Expr::col(Alias::new("id")).is_in(ids))
+            .to_owned();
+        let affected = database.execute(&delete).await?.rows_affected();
+        deleted = deleted.saturating_add(affected);
+
+        if affected == 0 || batch_len < DELETE_BATCH_SIZE as usize {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+
+    Ok(deleted)
 }
 
 pub fn spawn_retention_worker(database: DatabaseConnection) {
