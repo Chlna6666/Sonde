@@ -115,16 +115,24 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
         )
         .await?;
 
-        // Raw retention is millisecond-precise while rollups are day-scoped. If rows from the
-        // cutoff day were removed, its cached aggregates still contain those rows until recomputed.
-        // Mark every application environment dirty after pruning; mark_dirty_timestamps also marks
-        // the application-global scope, so the normal generation-safe worker repairs all caches.
-        if events_deleted > 0
-            || metrics_deleted > 0
-            || logs_deleted > 0
-            || error_occurrences_deleted > 0
-        {
-            mark_retention_boundary_dirty(database, &app_id, cutoff).await?;
+        // Raw retention is millisecond-precise while rollups are day-scoped. Recompute only the
+        // data sources whose rows were actually removed from the cutoff day; this avoids forcing
+        // event/user/dimension scans after a metric-only or log-only retention change.
+        let mut source_mask = 0_i64;
+        if events_deleted > 0 {
+            source_mask |= rollup_repo::DIRTY_SOURCE_EVENT;
+        }
+        if metrics_deleted > 0 {
+            source_mask |= rollup_repo::DIRTY_SOURCE_METRIC;
+        }
+        if logs_deleted > 0 {
+            source_mask |= rollup_repo::DIRTY_SOURCE_LOG;
+        }
+        if error_occurrences_deleted > 0 {
+            source_mask |= rollup_repo::DIRTY_SOURCE_ERROR;
+        }
+        if source_mask != 0 {
+            mark_retention_boundary_dirty(database, &app_id, cutoff, source_mask).await?;
         }
 
         info!(
@@ -168,6 +176,7 @@ async fn mark_retention_boundary_dirty(
     database: &DatabaseConnection,
     application_id: &str,
     cutoff: i64,
+    source_mask: i64,
 ) -> Result<(), DbErr> {
     let query = Query::select()
         .column(Alias::new("id"))
@@ -179,7 +188,8 @@ async fn mark_retention_boundary_dirty(
             application_id: application_id.to_owned(),
             environment_id: row.try_get("", "id")?,
         };
-        rollup_repo::mark_dirty_timestamps(database, &scope, [cutoff]).await?;
+        rollup_repo::mark_dirty_timestamps_for_source(database, &scope, source_mask, [cutoff])
+            .await?;
     }
     Ok(())
 }
