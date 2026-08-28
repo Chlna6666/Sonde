@@ -5,6 +5,7 @@ mod columns;
 mod daily_rollups;
 mod dimension_rollups;
 mod error_model;
+mod first_seen_index;
 mod job_leases;
 mod rollup_generation;
 mod tables;
@@ -16,6 +17,7 @@ use columns::{bigint, create_index, create_table, string};
 use daily_rollups::DailyRollups;
 use dimension_rollups::DimensionRollups;
 use error_model::ErrorTelemetryModel;
+use first_seen_index::FirstSeenIndex;
 use job_leases::JobLeases;
 use rollup_generation::RollupGeneration;
 use tables::{
@@ -45,6 +47,7 @@ impl MigratorTrait for Migrator {
             Box::new(DimensionRollups),
             Box::new(UserRollups),
             Box::new(UserRollupChunks),
+            Box::new(FirstSeenIndex),
         ]
     }
 }
@@ -287,6 +290,8 @@ impl MigrationTrait for InitialSchema {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for table in [
+            "telemetry_first_seen_backfill_days",
+            "telemetry_user_first_seen",
             "telemetry_daily_user_sets",
             "telemetry_daily_dimensions",
             "job_leases",
