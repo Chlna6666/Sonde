@@ -3,7 +3,9 @@ use std::time::Duration;
 use sea_orm::{DatabaseConnection, DbErr};
 use tracing::{info, warn};
 
-use crate::database::{dimension_rollup_repo, rollup_repo, user_rollup_repo};
+use crate::database::{
+    dimension_rollup_repo, first_seen_repo, rollup_repo, user_rollup_repo,
+};
 
 const ROLLUP_INTERVAL: Duration = Duration::from_secs(2);
 const ROLLUP_SETTLE_MILLIS: i64 = 2_000;
@@ -65,6 +67,10 @@ async fn process_ready_rollups(database: &DatabaseConnection) -> Result<usize, D
     let mut processed = 0_usize;
     for dirty in dirty_days {
         if !dimension_rollup_repo::recompute_claimed_day_dimensions(database, &dirty).await? {
+            tokio::task::yield_now().await;
+            continue;
+        }
+        if !first_seen_repo::refresh_dirty_day(database, &dirty).await? {
             tokio::task::yield_now().await;
             continue;
         }
