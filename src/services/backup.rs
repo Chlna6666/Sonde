@@ -3,7 +3,7 @@ use std::path::Path;
 use futures_util::Stream;
 
 use crate::{
-    database::{app_repo, backup_repo, backup_v2_repo},
+    database::{app_repo, backup_repo, backup_v2_repo, backup_v2_restore_repo},
     error::AppError,
     services::{applications::ensure_app_access, authentication::AuthenticatedUser},
     state::InstalledState,
@@ -123,13 +123,15 @@ pub async fn restore_full_system_v2(
 ) -> Result<u64, AppError> {
     require_system_backup_access(user)?;
 
-    let restored = backup_v2_repo::restore_full_system_from_file(&installed.database, path)
+    let restored = backup_v2_restore_repo::restore_full_system_exact(&installed.database, path)
         .await
         .map_err(map_backup_v2_error)?;
 
+    // Full restore intentionally clears auth_sessions and may replace the account that initiated the
+    // request. Record the successful operation as a system actor instead of persisting a dangling id.
     app_repo::audit(
         &installed.database,
-        Some(&user.id),
+        None,
         "system.backup_v2_restored",
         "system",
         None,
