@@ -4,6 +4,8 @@ use sea_orm::{
 };
 use tracing::{info, warn};
 
+use crate::database::{rollup_repo, telemetry_repo::TelemetryScope};
+
 /// Each deleted id becomes one bind variable in the follow-up `IN (...)` statement. Keep this
 /// comfortably below SQLite's historical 999-variable limit and leave room for driver-added binds.
 const DELETE_BATCH_SIZE: u64 = 500;
@@ -48,13 +50,13 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             .unwrap_or_else(|| "1970-01-01".into());
         report.apps_processed += 1;
 
-        report.events_deleted +=
+        let events_deleted =
             delete_in_batches(database, "events", "timestamp", &app_id, cutoff).await?;
-        report.metrics_deleted +=
+        let metrics_deleted =
             delete_in_batches(database, "metric_points", "timestamp", &app_id, cutoff).await?;
-        report.logs_deleted +=
+        let logs_deleted =
             delete_in_batches(database, "logs", "timestamp", &app_id, cutoff).await?;
-        report.error_occurrences_deleted += delete_in_batches(
+        let error_occurrences_deleted = delete_in_batches(
             database,
             "error_occurrences",
             "timestamp",
@@ -62,6 +64,12 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             cutoff,
         )
         .await?;
+        report.events_deleted = report.events_deleted.saturating_add(events_deleted);
+        report.metrics_deleted = report.metrics_deleted.saturating_add(metrics_deleted);
+        report.logs_deleted = report.logs_deleted.saturating_add(logs_deleted);
+        report.error_occurrences_deleted = report
+            .error_occurrences_deleted
+            .saturating_add(error_occurrences_deleted);
         report.error_groups_deleted +=
             delete_in_batches(database, "error_groups", "last_seen", &app_id, cutoff).await?;
         report.rollups_deleted += delete_string_in_batches(
@@ -105,6 +113,18 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
         )
         .await?;
 
+        // Raw retention is millisecond-precise while rollups are day-scoped. If rows from the
+        // cutoff day were removed, its cached aggregates still contain those rows until recomputed.
+        // Mark every application environment dirty after pruning; mark_dirty_timestamps also marks
+        // the application-global scope, so the normal generation-safe worker repairs all caches.
+        if events_deleted > 0
+            || metrics_deleted > 0
+            || logs_deleted > 0
+            || error_occurrences_deleted > 0
+        {
+            mark_retention_boundary_dirty(database, &app_id, cutoff).await?;
+        }
+
         info!(
             app_id = %app_id,
             app_name = %app_name,
@@ -132,6 +152,26 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
     }
 
     Ok(report)
+}
+
+async fn mark_retention_boundary_dirty(
+    database: &DatabaseConnection,
+    application_id: &str,
+    cutoff: i64,
+) -> Result<(), DbErr> {
+    let query = Query::select()
+        .column(Alias::new("id"))
+        .from(Alias::new("environments"))
+        .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
+        .to_owned();
+    for row in database.query_all(&query).await? {
+        let scope = TelemetryScope {
+            application_id: application_id.to_owned(),
+            environment_id: row.try_get("", "id")?,
+        };
+        rollup_repo::mark_dirty_timestamps(database, &scope, [cutoff]).await?;
+    }
+    Ok(())
 }
 
 async fn delete_in_batches(
