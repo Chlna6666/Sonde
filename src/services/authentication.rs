@@ -1,8 +1,12 @@
 use actix_web::HttpRequest;
 
 use crate::{
-    auth, database::auth_repo, domain::permission::PermissionGrant, error::AppError,
-    security::LoginGate, state::InstalledState,
+    auth,
+    database::{auth_repo, auth_state_repo},
+    domain::permission::PermissionGrant,
+    error::AppError,
+    security::LoginGate,
+    state::InstalledState,
 };
 
 pub struct LoginInput<'a> {
@@ -22,9 +26,7 @@ pub struct LoginOutcome {
 
 pub enum LoginResult {
     Success(LoginOutcome),
-    RequiresTwoFactor {
-        temp_token: String,
-    },
+    RequiresTwoFactor { temp_token: String },
 }
 
 #[derive(serde::Serialize)]
@@ -136,14 +138,17 @@ pub async fn login(
         .await;
 
     if credential.totp_enabled {
-        let temp_token = installed
-            .auth_security
-            .issue_2fa_temp_token(&credential.id)
-            .await;
+        let temp_token = auth_state_repo::issue_2fa_temp_token(&installed.database, &credential.id)
+            .await
+            .map_err(AppError::from)
+            .map_err(LoginFailure::Application)?;
         return Ok(LoginResult::RequiresTwoFactor { temp_token });
     }
 
-    let (session_token, csrf_token) = installed.auth_security.create_session(&credential.id).await;
+    let (session_token, csrf_token) = auth_state_repo::create_session(&installed.database, &credential.id)
+        .await
+        .map_err(AppError::from)
+        .map_err(LoginFailure::Application)?;
     let user = load_user(installed, credential)
         .await
         .map_err(LoginFailure::Application)?;
@@ -159,17 +164,15 @@ pub async fn verify_2fa_login(
     temp_token: &str,
     code: &str,
 ) -> Result<LoginOutcome, AppError> {
-    let user_id = installed
-        .auth_security
-        .consume_2fa_temp_token(temp_token)
-        .await
+    let user_id = auth_state_repo::consume_2fa_temp_token(&installed.database, temp_token)
+        .await?
         .ok_or(AppError::Unauthorized)?;
 
     let (enabled, secret_opt) = auth_repo::get_totp_info(&installed.database, &user_id).await?;
     let Some(secret) = secret_opt else {
         return Err(AppError::Unauthorized);
     };
-    if !enabled || !installed.auth_security.verify_and_consume_totp(&user_id, &secret, code).await {
+    if !enabled || !verify_totp_once(installed, &user_id, &secret, code).await? {
         return Err(AppError::Validation("Invalid 2FA verification code".into()));
     }
 
@@ -178,7 +181,8 @@ pub async fn verify_2fa_login(
         .filter(|u| u.active)
         .ok_or(AppError::Unauthorized)?;
 
-    let (session_token, csrf_token) = installed.auth_security.create_session(&credential.id).await;
+    let (session_token, csrf_token) =
+        auth_state_repo::create_session(&installed.database, &credential.id).await?;
     let user = load_user(installed, credential).await?;
     Ok(LoginOutcome {
         session_token,
@@ -194,6 +198,9 @@ pub async fn setup_2fa(
     let credential = auth_repo::user_by_id(&installed.database, &user.id)
         .await?
         .ok_or(AppError::NotFound)?;
+    if credential.totp_enabled {
+        return Err(AppError::Validation("2FA is already enabled".into()));
+    }
     let secret = crate::totp::generate_totp_secret();
     let otpauth_uri = crate::totp::build_otpauth_uri(&credential.username, &secret);
     Ok(TwoFactorSetup { secret, otpauth_uri })
@@ -210,12 +217,15 @@ pub async fn enable_2fa(
     let credential = auth_repo::user_by_id(&installed.database, &user.id)
         .await?
         .ok_or(AppError::NotFound)?;
+    if credential.totp_enabled {
+        return Err(AppError::Validation("2FA is already enabled".into()));
+    }
 
-    if !auth::verify_password(password, &credential.password_hash, pepper) {
+    if !verify_account_password(password, &credential.password_hash, pepper).await? {
         return Err(AppError::Validation("Invalid account password".into()));
     }
 
-    if !installed.auth_security.verify_and_consume_totp(&user.id, secret, code).await {
+    if !verify_totp_once(installed, &user.id, secret, code).await? {
         return Err(AppError::Validation("Invalid 2FA verification code".into()));
     }
 
@@ -243,20 +253,24 @@ pub async fn disable_2fa(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    if !auth::verify_password(password, &credential.password_hash, pepper) {
+    if !verify_account_password(password, &credential.password_hash, pepper).await? {
         return Err(AppError::Validation("Invalid account password".into()));
     }
 
-    let (_, secret_opt) = auth_repo::get_totp_info(&installed.database, &user.id).await?;
+    let (enabled, secret_opt) = auth_repo::get_totp_info(&installed.database, &user.id).await?;
     let Some(secret) = secret_opt else {
         return Err(AppError::Validation("2FA is not enabled".into()));
     };
+    if !enabled {
+        return Err(AppError::Validation("2FA is not enabled".into()));
+    }
 
-    if !installed.auth_security.verify_and_consume_totp(&user.id, &secret, code).await {
+    if !verify_totp_once(installed, &user.id, &secret, code).await? {
         return Err(AppError::Validation("Invalid 2FA verification code".into()));
     }
 
     auth_repo::disable_totp(&installed.database, &user.id).await?;
+    auth_state_repo::clear_totp_replay(&installed.database, &user.id).await?;
     crate::database::app_repo::audit(
         &installed.database,
         Some(&user.id),
@@ -301,13 +315,11 @@ pub async fn authenticate_mutation(
     Ok(user)
 }
 
-pub async fn logout(installed: &InstalledState, request: &HttpRequest) {
+pub async fn logout(installed: &InstalledState, request: &HttpRequest) -> Result<(), AppError> {
     if let Some(token) = auth::session_token(request) {
-        installed
-            .auth_security
-            .revoke_session(&auth::token_hash(&token))
-            .await;
+        auth_state_repo::revoke_session(&installed.database, &auth::token_hash(&token)).await?;
     }
+    Ok(())
 }
 
 async fn require_login_gate(
@@ -347,16 +359,17 @@ async fn authenticate_session(
     request: &HttpRequest,
 ) -> Result<(AuthenticatedUser, String), AppError> {
     let token = auth::session_token(request).ok_or(AppError::Unauthorized)?;
-    let session = installed
-        .auth_security
-        .session(&auth::token_hash(&token))
-        .await
+    let session = auth_state_repo::session(&installed.database, &auth::token_hash(&token))
+        .await?
         .ok_or(AppError::Unauthorized)?;
     let credential = auth_repo::user_by_id(&installed.database, &session.user_id)
         .await?
         .filter(|user| user.active)
         .ok_or(AppError::Unauthorized)?;
-    Ok((load_user(installed, credential).await?, session.csrf_token))
+    Ok((
+        load_user(installed, credential).await?,
+        session.csrf_token,
+    ))
 }
 
 async fn load_user(
@@ -400,4 +413,29 @@ async fn login_challenge(
         },
         LoginGate::Allowed => LoginFailure::Application(AppError::Unauthorized),
     }
+}
+
+async fn verify_account_password(
+    password: &str,
+    password_hash: &str,
+    pepper: &[u8],
+) -> Result<bool, AppError> {
+    let password = password.to_owned();
+    let password_hash = password_hash.to_owned();
+    let pepper = pepper.to_vec();
+    tokio::task::spawn_blocking(move || auth::verify_password(&password, &password_hash, &pepper))
+        .await
+        .map_err(|_| AppError::Internal)
+}
+
+async fn verify_totp_once(
+    installed: &InstalledState,
+    user_id: &str,
+    secret: &str,
+    code: &str,
+) -> Result<bool, AppError> {
+    let Some(step) = crate::totp::verify_totp_step(secret, code) else {
+        return Ok(false);
+    };
+    Ok(auth_state_repo::consume_totp_step(&installed.database, user_id, step).await?)
 }
