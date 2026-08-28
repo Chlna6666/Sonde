@@ -9,7 +9,7 @@ use crate::{
         ValidateTelemetry,
     },
     error::AppError,
-    security::IngestSecurity,
+    ingest_signature,
     state::InstalledState,
 };
 
@@ -30,6 +30,7 @@ pub struct IngestTokenResponse {
     pub expires_in: i64,
     pub expires_at: i64,
     pub signing_key: String,
+    pub signature_version: &'static str,
     pub scopes: Vec<String>,
 }
 
@@ -170,6 +171,7 @@ pub async fn issue_token_from_request(
         expires_in: 120,
         expires_at,
         signing_key,
+        signature_version: ingest_signature::SIGNATURE_VERSION,
         scopes: context.scopes,
     })
 }
@@ -231,10 +233,12 @@ pub async fn scope_from_request_with_permission(
             .auth_security
             .ingest
             .signing_key_for_claims(&claims, installed.auth_security.pepper());
-        IngestSecurity::verify_request_signature(
+        ingest_signature::verify(
             &signing_key,
             timestamp,
             nonce,
+            request.method().as_str(),
+            request.path(),
             raw_body,
             signature,
         )?;
@@ -243,7 +247,7 @@ pub async fn scope_from_request_with_permission(
         if !installed
             .auth_security
             .ingest
-            .check_and_record_nonce(&claims.application_id, nonce, now + 120_000)
+            .check_and_record_nonce(&claims.token_id, nonce, now + 120_000)
             .await
         {
             return Err(AppError::Forbidden);
