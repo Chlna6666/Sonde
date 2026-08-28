@@ -66,17 +66,22 @@ async fn process_ready_rollups(database: &DatabaseConnection) -> Result<usize, D
         rollup_repo::list_dirty_days(database, ROLLUP_BATCH_SIZE, marked_before).await?;
     let mut processed = 0_usize;
     for dirty in dirty_days {
-        if !dimension_rollup_repo::recompute_claimed_day_dimensions(database, &dirty).await? {
-            tokio::task::yield_now().await;
-            continue;
-        }
-        if !first_seen_repo::refresh_dirty_day(database, &dirty).await? {
-            tokio::task::yield_now().await;
-            continue;
-        }
-        if !user_rollup_repo::recompute_claimed_day_user_set(database, &dirty).await? {
-            tokio::task::yield_now().await;
-            continue;
+        // Dimensions, first-seen and exact daily user sets are all event-derived. Metric/log/error
+        // ingestion must not force those comparatively expensive scans or make their query paths
+        // fall back to raw events.
+        if dirty.has_source(rollup_repo::DIRTY_SOURCE_EVENT) {
+            if !dimension_rollup_repo::recompute_claimed_day_dimensions(database, &dirty).await? {
+                tokio::task::yield_now().await;
+                continue;
+            }
+            if !first_seen_repo::refresh_dirty_day(database, &dirty).await? {
+                tokio::task::yield_now().await;
+                continue;
+            }
+            if !user_rollup_repo::recompute_claimed_day_user_set(database, &dirty).await? {
+                tokio::task::yield_now().await;
+                continue;
+            }
         }
         if rollup_repo::recompute_claimed_day(database, dirty).await? {
             processed = processed.saturating_add(1);
