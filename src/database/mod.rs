@@ -2,6 +2,7 @@ pub mod alert_repo;
 pub mod app_repo;
 pub mod auth_repo;
 pub mod backup_repo;
+pub mod error_repo;
 pub mod explorer_repo;
 pub mod import_repo;
 pub mod ingest_auth_repo;
