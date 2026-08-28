@@ -5,6 +5,7 @@ use sea_orm::{
 
 const DELETE_ID_CHUNK: usize = 500;
 const FIRST_SEEN_BACKFILL_KEY: &str = "telemetry_first_seen_backfill_v1";
+const FIRST_SEEN_CURSOR_KEY: &str = "telemetry_first_seen_backfill_cursor_v1";
 
 pub async fn delete_application_exact(
     database: &DatabaseConnection,
@@ -62,14 +63,16 @@ pub async fn delete_application_exact(
     }
 
     // The global first-seen scope deduplicates the same anonymous user across applications. Instead
-    // of deleting the potentially huge derived index synchronously, invalidate its epoch in this
-    // transaction. Queries immediately fall back to raw events; the leased rebuild creates a fresh
-    // epoch from surviving applications and garbage-collects the old rows after completion.
-    let clear_first_seen_state = Query::delete()
-        .from_table(Alias::new("system_state"))
-        .and_where(Expr::col(Alias::new("key")).eq(FIRST_SEEN_BACKFILL_KEY))
-        .to_owned();
-    transaction.execute(&clear_first_seen_state).await?;
+    // of deleting the potentially huge derived index synchronously, invalidate its epoch and paging
+    // cursor in this transaction. Queries immediately fall back to raw events; the leased rebuild
+    // starts from the beginning and garbage-collects the old rows after completion.
+    for key in [FIRST_SEEN_BACKFILL_KEY, FIRST_SEEN_CURSOR_KEY] {
+        let clear = Query::delete()
+            .from_table(Alias::new("system_state"))
+            .and_where(Expr::col(Alias::new("key")).eq(key))
+            .to_owned();
+        transaction.execute(&clear).await?;
+    }
 
     let delete_app = Query::delete()
         .from_table(Alias::new("applications"))
