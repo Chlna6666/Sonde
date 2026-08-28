@@ -4,6 +4,7 @@ pub mod auth_repo;
 pub mod backup_repo;
 pub mod explorer_repo;
 pub mod import_repo;
+pub mod ingest_auth_repo;
 mod migration;
 pub mod query;
 pub mod stats_repo;
