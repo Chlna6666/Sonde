@@ -3,6 +3,7 @@ mod alerts;
 mod applications;
 mod authentication;
 mod backup;
+mod errors;
 mod explorer;
 mod ingest;
 mod migrations;
@@ -28,6 +29,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
         .configure(backup::configure)
         .configure(public::configure)
         .configure(explorer::configure)
+        .configure(errors::configure)
         .configure(ingest::configure)
         .configure(migrations::configure)
         .configure(stats::configure)
