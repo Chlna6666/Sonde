@@ -3,7 +3,7 @@ use std::time::Duration;
 use sea_orm::{DatabaseConnection, DbErr};
 use tracing::{info, warn};
 
-use crate::database::rollup_repo;
+use crate::database::{dimension_rollup_repo, rollup_repo};
 
 const ROLLUP_INTERVAL: Duration = Duration::from_secs(2);
 const ROLLUP_SETTLE_MILLIS: i64 = 2_000;
@@ -18,6 +18,15 @@ pub fn spawn_rollup_worker(database: DatabaseConnection) {
             Ok(_) => {}
             Err(error) => {
                 warn!(error = %error, "failed to seed historical telemetry rollups");
+            }
+        }
+        match dimension_rollup_repo::seed_historical_dimension_dirty_days_once(&database).await {
+            Ok(seed_count) if seed_count > 0 => {
+                info!(scope_days = seed_count, "seeded historical telemetry dimension rollup work");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                warn!(error = %error, "failed to seed historical telemetry dimension rollups");
             }
         }
 
@@ -46,6 +55,10 @@ async fn process_ready_rollups(database: &DatabaseConnection) -> Result<usize, D
         rollup_repo::list_dirty_days(database, ROLLUP_BATCH_SIZE, marked_before).await?;
     let mut processed = 0_usize;
     for dirty in dirty_days {
+        if !dimension_rollup_repo::recompute_claimed_day_dimensions(database, &dirty).await? {
+            tokio::task::yield_now().await;
+            continue;
+        }
         if rollup_repo::recompute_claimed_day(database, dirty).await? {
             processed = processed.saturating_add(1);
         }
