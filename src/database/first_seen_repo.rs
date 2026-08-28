@@ -5,6 +5,7 @@ use sea_orm::{
     sea_query::{Alias, Expr, ExprTrait, Func, Order, Query, Value},
 };
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use super::{query::insert_batch_ignore_conflicts, rollup_repo::DirtyDay};
 
@@ -14,6 +15,27 @@ const APP_SCOPE: &str = "app";
 const ENV_SCOPE: &str = "env";
 const GLOBAL_VALUE: &str = "*";
 const EXISTING_LOOKUP_CHUNK: usize = 500;
+
+#[derive(Clone, Debug)]
+enum BackfillState {
+    Seeded(String),
+    Complete(String),
+}
+
+impl BackfillState {
+    fn epoch(&self) -> &str {
+        match self {
+            Self::Seeded(epoch) | Self::Complete(epoch) => epoch,
+        }
+    }
+
+    fn value(&self) -> String {
+        match self {
+            Self::Seeded(epoch) => format!("seeded:{epoch}"),
+            Self::Complete(epoch) => format!("complete:{epoch}"),
+        }
+    }
+}
 
 #[derive(Debug)]
 struct FirstSeenCandidate {
@@ -37,14 +59,15 @@ pub async fn run_backfill_batch(
     database: &DatabaseConnection,
     limit: u64,
 ) -> Result<usize, DbErr> {
-    ensure_backfill_seeded(database).await?;
-    if backfill_complete(database).await? {
+    let state = ensure_backfill_seeded(database).await?;
+    let BackfillState::Seeded(epoch) = state else {
         return Ok(0);
-    }
+    };
 
     let query = Query::select()
         .columns(["id", "application_id", "environment_id", "day"].map(Alias::new))
         .from(Alias::new("telemetry_first_seen_backfill_days"))
+        .and_where(Expr::col(Alias::new("epoch")).eq(&epoch))
         .order_by(Alias::new("day"), Order::Asc)
         .order_by(Alias::new("application_id"), Order::Asc)
         .order_by(Alias::new("environment_id"), Order::Asc)
@@ -64,14 +87,21 @@ pub async fn run_backfill_batch(
         })
         .collect::<Result<Vec<_>, DbErr>>()?;
 
+    let mut processed = 0_usize;
     for day in &days {
-        recompute_backfill_day(database, day).await?;
+        if !recompute_backfill_day(database, day, &epoch).await? {
+            break;
+        }
+        processed = processed.saturating_add(1);
         tokio::task::yield_now().await;
     }
-    if !has_pending_backfill(database).await? {
-        set_backfill_state(database, "complete").await?;
+
+    if !has_pending_backfill(database, &epoch).await?
+        && mark_complete_if_current(database, &epoch).await?
+    {
+        cleanup_other_epochs(database, &epoch).await?;
     }
-    Ok(days.len())
+    Ok(processed)
 }
 
 pub async fn refresh_dirty_day(
@@ -81,6 +111,10 @@ pub async fn refresh_dirty_day(
     if dirty.environment_id == GLOBAL_VALUE {
         return Ok(true);
     }
+    let Some(state) = read_backfill_state(database).await? else {
+        return Ok(false);
+    };
+    let epoch = state.epoch().to_owned();
 
     let transaction = database.begin().await?;
     let marker = Query::select()
@@ -93,7 +127,9 @@ pub async fn refresh_dirty_day(
         .query_one(&marker)
         .await?
         .and_then(|row| row.try_get::<i64>("", "generation").ok());
-    if generation != Some(dirty.generation) {
+    if generation != Some(dirty.generation)
+        || !backfill_epoch_is_current(&transaction, &epoch).await?
+    {
         transaction.rollback().await?;
         return Ok(false);
     }
@@ -103,11 +139,12 @@ pub async fn refresh_dirty_day(
         &dirty.application_id,
         &dirty.environment_id,
         &dirty.day,
+        &epoch,
     )
     .await?;
     delete_pending_day(
         &transaction,
-        &backfill_day_id(&dirty.application_id, &dirty.environment_id, &dirty.day),
+        &backfill_day_id(&epoch, &dirty.application_id, &dirty.environment_id, &dirty.day),
     )
     .await?;
     transaction.commit().await?;
@@ -125,17 +162,29 @@ pub async fn count_new_users_hybrid(
         return Ok(0);
     }
 
-    if backfill_complete(database).await?
+    if let Some(BackfillState::Complete(epoch)) = read_backfill_state(database).await?
         && !relevant_dirty_exists(database, application_id, environment_id, until).await?
     {
-        return count_indexed_new_users(database, application_id, environment_id, since, until)
-            .await;
+        return count_indexed_new_users(
+            database,
+            &epoch,
+            application_id,
+            environment_id,
+            since,
+            until,
+        )
+        .await;
     }
     raw_new_users(database, application_id, environment_id, since, until).await
 }
 
 pub async fn invalidate(database: &DatabaseConnection) -> Result<(), DbErr> {
     let transaction = database.begin().await?;
+    let clear_state = Query::delete()
+        .from_table(Alias::new("system_state"))
+        .and_where(Expr::col(Alias::new("key")).eq(BACKFILL_STATE_KEY))
+        .to_owned();
+    transaction.execute(&clear_state).await?;
     for table in [
         "telemetry_first_seen_backfill_days",
         "telemetry_user_first_seen",
@@ -143,37 +192,43 @@ pub async fn invalidate(database: &DatabaseConnection) -> Result<(), DbErr> {
         let delete = Query::delete().from_table(Alias::new(table)).to_owned();
         transaction.execute(&delete).await?;
     }
-    let clear_state = Query::delete()
-        .from_table(Alias::new("system_state"))
-        .and_where(Expr::col(Alias::new("key")).eq(BACKFILL_STATE_KEY))
-        .to_owned();
-    transaction.execute(&clear_state).await?;
     transaction.commit().await
 }
 
 pub async fn backfill_complete(database: &DatabaseConnection) -> Result<bool, DbErr> {
-    let query = Query::select()
-        .column(Alias::new("value"))
-        .from(Alias::new("system_state"))
-        .and_where(Expr::col(Alias::new("key")).eq(BACKFILL_STATE_KEY))
-        .limit(1)
-        .to_owned();
-    Ok(database
-        .query_one(&query)
-        .await?
-        .and_then(|row| row.try_get::<String>("", "value").ok())
-        .is_some_and(|value| value == "complete"))
+    Ok(matches!(
+        read_backfill_state(database).await?,
+        Some(BackfillState::Complete(_))
+    ))
 }
 
-async fn ensure_backfill_seeded(database: &DatabaseConnection) -> Result<(), DbErr> {
-    let state = Query::select()
-        .column(Alias::new("value"))
-        .from(Alias::new("system_state"))
-        .and_where(Expr::col(Alias::new("key")).eq(BACKFILL_STATE_KEY))
-        .limit(1)
-        .to_owned();
-    if database.query_one(&state).await?.is_some() {
+async fn ensure_backfill_seeded(database: &DatabaseConnection) -> Result<BackfillState, DbErr> {
+    loop {
+        if let Some(state) = read_backfill_state(database).await? {
+            return Ok(state);
+        }
+        seed_new_epoch(database).await?;
+        if let Some(state) = read_backfill_state(database).await? {
+            return Ok(state);
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn seed_new_epoch(database: &DatabaseConnection) -> Result<(), DbErr> {
+    let epoch = Uuid::now_v7().to_string();
+    let transaction = database.begin().await?;
+    if read_backfill_state(&transaction).await?.is_some() {
+        transaction.rollback().await?;
         return Ok(());
+    }
+
+    for table in [
+        "telemetry_first_seen_backfill_days",
+        "telemetry_user_first_seen",
+    ] {
+        let delete = Query::delete().from_table(Alias::new(table)).to_owned();
+        transaction.execute(&delete).await?;
     }
 
     let query = Query::select()
@@ -184,52 +239,82 @@ async fn ensure_backfill_seeded(database: &DatabaseConnection) -> Result<(), DbE
         .to_owned();
     let now = chrono::Utc::now().timestamp_millis();
     let mut rows = Vec::new();
-    for row in database.query_all(&query).await? {
+    for row in transaction.query_all(&query).await? {
         let application_id: String = row.try_get("", "application_id")?;
         let environment_id: String = row.try_get("", "environment_id")?;
         let day: String = row.try_get("", "day")?;
         rows.push(vec![
-            Value::from(backfill_day_id(&application_id, &environment_id, &day)),
+            Value::from(backfill_day_id(
+                &epoch,
+                &application_id,
+                &environment_id,
+                &day,
+            )),
+            Value::from(epoch.clone()),
             Value::from(application_id),
             Value::from(environment_id),
             Value::from(day),
             Value::from(now),
         ]);
     }
+    let has_pending = !rows.is_empty();
     insert_batch_ignore_conflicts(
-        database,
+        &transaction,
         "telemetry_first_seen_backfill_days",
-        &["id", "application_id", "environment_id", "day", "created_at"],
+        &[
+            "id",
+            "epoch",
+            "application_id",
+            "environment_id",
+            "day",
+            "created_at",
+        ],
         rows,
         "id",
         "id",
     )
     .await?;
-    set_backfill_state(
-        database,
-        if has_pending_backfill(database).await? {
-            "seeded"
-        } else {
-            "complete"
-        },
+    let state = if has_pending {
+        BackfillState::Seeded(epoch)
+    } else {
+        BackfillState::Complete(epoch)
+    };
+    insert_batch_ignore_conflicts(
+        &transaction,
+        "system_state",
+        &["key", "value"],
+        vec![vec![
+            Value::from(BACKFILL_STATE_KEY.to_owned()),
+            Value::from(state.value()),
+        ]],
+        "key",
+        "key",
     )
-    .await
+    .await?;
+    transaction.commit().await
 }
 
 async fn recompute_backfill_day(
     database: &DatabaseConnection,
     day: &BackfillDay,
-) -> Result<(), DbErr> {
+    epoch: &str,
+) -> Result<bool, DbErr> {
     let transaction = database.begin().await?;
+    if !backfill_epoch_is_current(&transaction, epoch).await? {
+        transaction.rollback().await?;
+        return Ok(false);
+    }
     recompute_scope_day(
         &transaction,
         &day.application_id,
         &day.environment_id,
         &day.day,
+        epoch,
     )
     .await?;
     delete_pending_day(&transaction, &day.id).await?;
-    transaction.commit().await
+    transaction.commit().await?;
+    Ok(true)
 }
 
 async fn recompute_scope_day(
@@ -237,6 +322,7 @@ async fn recompute_scope_day(
     application_id: &str,
     environment_id: &str,
     day: &str,
+    epoch: &str,
 ) -> Result<(), DbErr> {
     let query = Query::select()
         .column(Alias::new("anonymous_id"))
@@ -262,7 +348,7 @@ async fn recompute_scope_day(
             (APP_SCOPE, application_id, GLOBAL_VALUE),
             (GLOBAL_SCOPE, GLOBAL_VALUE, GLOBAL_VALUE),
         ] {
-            let id = first_seen_id(scope_kind, scope_app, scope_env, &anonymous_id);
+            let id = first_seen_id(epoch, scope_kind, scope_app, scope_env, &anonymous_id);
             let candidate = FirstSeenCandidate {
                 id: id.clone(),
                 scope_kind,
@@ -292,6 +378,7 @@ async fn recompute_scope_day(
         .map(|candidate| {
             vec![
                 Value::from(candidate.id.clone()),
+                Value::from(epoch.to_owned()),
                 Value::from(candidate.scope_kind.to_owned()),
                 Value::from(candidate.application_id.clone()),
                 Value::from(candidate.environment_id.clone()),
@@ -306,6 +393,7 @@ async fn recompute_scope_day(
         "telemetry_user_first_seen",
         &[
             "id",
+            "epoch",
             "scope_kind",
             "application_id",
             "environment_id",
@@ -319,8 +407,6 @@ async fn recompute_scope_day(
     )
     .await?;
 
-    // Existing rows are normally older and require no write. Read current timestamps in bounded
-    // chunks, then issue a conditional update only for genuinely earlier out-of-order events.
     let ids = candidates.keys().cloned().collect::<Vec<_>>();
     for chunk in ids.chunks(EXISTING_LOOKUP_CHUNK) {
         let lookup = Query::select()
@@ -355,6 +441,7 @@ async fn recompute_scope_day(
                 .value(Alias::new("first_seen_day"), candidate.first_seen_day.clone())
                 .value(Alias::new("updated_at"), now)
                 .and_where(Expr::col(Alias::new("id")).eq(id))
+                .and_where(Expr::col(Alias::new("epoch")).eq(epoch))
                 .and_where(
                     Expr::col(Alias::new("first_seen_at")).gt(candidate.first_seen_at),
                 )
@@ -367,6 +454,7 @@ async fn recompute_scope_day(
 
 async fn count_indexed_new_users(
     database: &DatabaseConnection,
+    epoch: &str,
     application_id: Option<&str>,
     environment_id: Option<&str>,
     since: i64,
@@ -380,6 +468,7 @@ async fn count_indexed_new_users(
             Alias::new("total"),
         )
         .from(Alias::new("telemetry_user_first_seen"))
+        .and_where(Expr::col(Alias::new("epoch")).eq(epoch))
         .and_where(Expr::col(Alias::new("scope_kind")).eq(scope_kind))
         .and_where(Expr::col(Alias::new("application_id")).eq(scope_app))
         .and_where(Expr::col(Alias::new("environment_id")).eq(scope_env))
@@ -453,24 +542,98 @@ async fn relevant_dirty_exists(
     if let Some(environment_id) = environment_id {
         query.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
     }
-    if let Some(until) = until {
-        if let Some(day) = until
-            .checked_sub(1)
-            .and_then(day_for_timestamp)
-        {
-            query.and_where(Expr::col(Alias::new("day")).lte(day));
-        }
+    if let Some(until) = until
+        && let Some(day) = until.checked_sub(1).and_then(day_for_timestamp)
+    {
+        query.and_where(Expr::col(Alias::new("day")).lte(day));
     }
     Ok(database.query_one(&query).await?.is_some())
 }
 
-async fn has_pending_backfill(database: &DatabaseConnection) -> Result<bool, DbErr> {
+async fn read_backfill_state(
+    database: &impl ConnectionTrait,
+) -> Result<Option<BackfillState>, DbErr> {
+    let query = Query::select()
+        .column(Alias::new("value"))
+        .from(Alias::new("system_state"))
+        .and_where(Expr::col(Alias::new("key")).eq(BACKFILL_STATE_KEY))
+        .limit(1)
+        .to_owned();
+    database
+        .query_one(&query)
+        .await?
+        .map(|row| row.try_get::<String>("", "value"))
+        .transpose()?
+        .map(|value| parse_backfill_state(&value))
+        .transpose()
+}
+
+fn parse_backfill_state(value: &str) -> Result<BackfillState, DbErr> {
+    if let Some(epoch) = value.strip_prefix("seeded:")
+        && !epoch.is_empty()
+    {
+        return Ok(BackfillState::Seeded(epoch.to_owned()));
+    }
+    if let Some(epoch) = value.strip_prefix("complete:")
+        && !epoch.is_empty()
+    {
+        return Ok(BackfillState::Complete(epoch.to_owned()));
+    }
+    Err(DbErr::Custom("invalid first-seen backfill state".into()))
+}
+
+async fn backfill_epoch_is_current(
+    database: &impl ConnectionTrait,
+    epoch: &str,
+) -> Result<bool, DbErr> {
+    Ok(read_backfill_state(database)
+        .await?
+        .is_some_and(|state| state.epoch() == epoch))
+}
+
+async fn has_pending_backfill(
+    database: &DatabaseConnection,
+    epoch: &str,
+) -> Result<bool, DbErr> {
     let query = Query::select()
         .column(Alias::new("id"))
         .from(Alias::new("telemetry_first_seen_backfill_days"))
+        .and_where(Expr::col(Alias::new("epoch")).eq(epoch))
         .limit(1)
         .to_owned();
     Ok(database.query_one(&query).await?.is_some())
+}
+
+async fn mark_complete_if_current(
+    database: &DatabaseConnection,
+    epoch: &str,
+) -> Result<bool, DbErr> {
+    let seeded = BackfillState::Seeded(epoch.to_owned()).value();
+    let complete = BackfillState::Complete(epoch.to_owned()).value();
+    let update = Query::update()
+        .table(Alias::new("system_state"))
+        .value(Alias::new("value"), complete)
+        .and_where(Expr::col(Alias::new("key")).eq(BACKFILL_STATE_KEY))
+        .and_where(Expr::col(Alias::new("value")).eq(seeded))
+        .to_owned();
+    Ok(database.execute(&update).await?.rows_affected() == 1)
+}
+
+async fn cleanup_other_epochs(
+    database: &DatabaseConnection,
+    epoch: &str,
+) -> Result<(), DbErr> {
+    for table in [
+        "telemetry_first_seen_backfill_days",
+        "telemetry_user_first_seen",
+    ] {
+        let delete = Query::delete()
+            .from_table(Alias::new(table))
+            .and_where(Expr::col(Alias::new("epoch")).ne(epoch))
+            .to_owned();
+        database.execute(&delete).await?;
+    }
+    Ok(())
 }
 
 async fn delete_pending_day(
@@ -482,30 +645,6 @@ async fn delete_pending_day(
         .and_where(Expr::col(Alias::new("id")).eq(id))
         .to_owned();
     database.execute(&delete).await?;
-    Ok(())
-}
-
-async fn set_backfill_state(
-    database: &impl ConnectionTrait,
-    value: &str,
-) -> Result<(), DbErr> {
-    let existing = Query::delete()
-        .from_table(Alias::new("system_state"))
-        .and_where(Expr::col(Alias::new("key")).eq(BACKFILL_STATE_KEY))
-        .to_owned();
-    database.execute(&existing).await?;
-    insert_batch_ignore_conflicts(
-        database,
-        "system_state",
-        &["key", "value"],
-        vec![vec![
-            Value::from(BACKFILL_STATE_KEY.to_owned()),
-            Value::from(value.to_owned()),
-        ]],
-        "key",
-        "key",
-    )
-    .await?;
     Ok(())
 }
 
@@ -526,13 +665,16 @@ fn scope<'a>(
 }
 
 fn first_seen_id(
+    epoch: &str,
     scope_kind: &str,
     application_id: &str,
     environment_id: &str,
     anonymous_id: &str,
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"sonde:first-seen:v1\0");
+    hasher.update(b"sonde:first-seen:v2\0");
+    hasher.update(epoch.as_bytes());
+    hasher.update(b"\0");
     hasher.update(scope_kind.as_bytes());
     hasher.update(b"\0");
     hasher.update(application_id.as_bytes());
@@ -543,9 +685,11 @@ fn first_seen_id(
     format!("fs_{}", hex::encode(hasher.finalize()))
 }
 
-fn backfill_day_id(application_id: &str, environment_id: &str, day: &str) -> String {
+fn backfill_day_id(epoch: &str, application_id: &str, environment_id: &str, day: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"sonde:first-seen:v1\0backfill\0");
+    hasher.update(b"sonde:first-seen:v2\0backfill\0");
+    hasher.update(epoch.as_bytes());
+    hasher.update(b"\0");
     hasher.update(application_id.as_bytes());
     hasher.update(b"\0");
     hasher.update(environment_id.as_bytes());
