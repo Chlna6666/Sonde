@@ -47,6 +47,19 @@ async fn count_for_app(
         .unwrap_or(0)
 }
 
+async fn finish_first_seen_backfill(database: &sea_orm::DatabaseConnection) {
+    loop {
+        if first_seen_repo::run_backfill_batch(database, 32)
+            .await
+            .unwrap()
+            == 0
+        {
+            break;
+        }
+    }
+    assert!(first_seen_repo::backfill_complete(database).await.unwrap());
+}
+
 async fn process_all_rollups(database: &sea_orm::DatabaseConnection) {
     loop {
         let dirty = rollup_repo::list_dirty_days(database, 64, i64::MAX)
@@ -120,17 +133,11 @@ async fn deleting_application_removes_raw_and_derived_state_without_touching_oth
     .await
     .unwrap();
 
+    // The production workers run independently. Seed/finish first-seen before consuming the shared
+    // dirty markers so refresh_dirty_day has a current epoch and cannot intentionally defer them.
+    finish_first_seen_backfill(&database).await;
     process_all_rollups(&database).await;
-    loop {
-        if first_seen_repo::run_backfill_batch(&database, 32)
-            .await
-            .unwrap()
-            == 0
-        {
-            break;
-        }
-    }
-    assert!(first_seen_repo::backfill_complete(&database).await.unwrap());
+
     assert!(count_for_app(&database, "telemetry_daily_rollups", &delete_app).await > 0);
     assert!(count_for_app(&database, "telemetry_daily_dimensions", &delete_app).await > 0);
     assert!(count_for_app(&database, "telemetry_daily_user_sets", &delete_app).await > 0);
