@@ -123,6 +123,12 @@ pub async fn insert_metrics(
         "timestamp",
         "attributes",
         "received_at",
+        "histogram_count",
+        "histogram_sum",
+        "histogram_min",
+        "histogram_max",
+        "histogram_bounds",
+        "histogram_bucket_counts",
     ];
 
     for chunk in metrics.chunks(100) {
@@ -133,17 +139,25 @@ pub async fn insert_metrics(
             } else {
                 serde_json::to_string(&metric.attributes).map_err(json_error)?
             };
+            let (histogram_count, histogram_sum, histogram_min, histogram_max, histogram_bounds, histogram_bucket_counts) =
+                encode_histogram(metric)?;
             rows.push(vec![
                 Uuid::now_v7().to_string().into(),
                 scope.application_id.clone().into(),
                 scope.environment_id.clone().into(),
                 metric.name.clone().into(),
                 format!("{:?}", metric.metric_type).to_lowercase().into(),
-                metric.value.into(),
+                metric.compatibility_value().into(),
                 metric.unit.clone().into(),
                 metric.timestamp.unwrap_or(received_at).into(),
                 attributes_json.into(),
                 received_at.into(),
+                histogram_count.into(),
+                histogram_sum.into(),
+                histogram_min.into(),
+                histogram_max.into(),
+                histogram_bounds.into(),
+                histogram_bucket_counts.into(),
             ]);
         }
         insert_batch(&transaction, "metric_points", &columns, rows).await?;
@@ -159,6 +173,36 @@ pub async fn insert_metrics(
     .await?;
     transaction.commit().await?;
     Ok(metrics.len())
+}
+
+fn encode_histogram(
+    metric: &MetricInput,
+) -> Result<
+    (
+        Option<i64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<String>,
+        Option<String>,
+    ),
+    DbErr,
+> {
+    let Some(histogram) = metric.normalized_histogram() else {
+        return Ok((None, None, None, None, None, None));
+    };
+    let count = i64::try_from(histogram.count)
+        .map_err(|_| DbErr::Custom("histogram count exceeds supported range".into()))?;
+    let bounds = serde_json::to_string(&histogram.explicit_bounds).map_err(json_error)?;
+    let bucket_counts = serde_json::to_string(&histogram.bucket_counts).map_err(json_error)?;
+    Ok((
+        Some(count),
+        histogram.sum,
+        histogram.min,
+        histogram.max,
+        Some(bounds),
+        Some(bucket_counts),
+    ))
 }
 
 pub async fn insert_logs(
@@ -385,7 +429,7 @@ pub async fn insert_errors(
                 attrs.insert("os".into(), serde_json::Value::String(os.clone()));
             }
             let attributes_json = serde_json::to_string(&attrs).map_err(json_error)?;
-            let level_str = match err.severity {
+            let level_str = match err.severity.as_ref() {
                 Some(ErrorSeverity::Fatal) => "fatal",
                 Some(ErrorSeverity::Warning) => "warn",
                 _ => "error",
