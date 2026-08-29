@@ -540,9 +540,9 @@ pub async fn application_event_trend_hybrid(
         .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
         .and_where(Expr::col(Alias::new("day")).is_in(dirty_days.iter().map(String::as_str)))
         .group_by_col(Alias::new("day"));
-    if let Some(environment_id) = environment_id {
-        raw.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
-    }
+        if let Some(environment_id) = environment_id {
+            raw.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
+        }
         for row in database.query_all(&raw).await? {
             let day: String = row.try_get("", "day")?;
             let existing = points.remove(&day);
@@ -749,7 +749,10 @@ mod tests {
     fn dirty_source_masks_are_independent_bits() {
         assert_eq!(DIRTY_SOURCE_EVENT & DIRTY_SOURCE_LOG, 0);
         assert_eq!(DIRTY_SOURCE_LOG_ERROR & DIRTY_SOURCE_LOG, 0);
-        assert_eq!(DIRTY_SOURCE_VALID & DIRTY_SOURCE_LOG_ERROR, DIRTY_SOURCE_LOG_ERROR);
+        assert_eq!(
+            DIRTY_SOURCE_VALID & DIRTY_SOURCE_LOG_ERROR,
+            DIRTY_SOURCE_LOG_ERROR
+        );
         let _ = dirty_source_condition(DIRTY_SOURCE_EVENT | DIRTY_SOURCE_LOG_ERROR);
     }
 }
