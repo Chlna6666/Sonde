@@ -18,19 +18,36 @@ impl MigrationTrait for MetricsV2LegacyHistogramRepair {
             return Ok(());
         }
 
-        // Metrics v2 initially normalized a legacy `histogram + value` observation to count=1 with
-        // no finite bounds but accidentally persisted `bucket_counts=[]`. Explicit histograms always
-        // have bounds.len()+1 buckets, so the no-boundary form must contain one +Inf bucket `[1]`.
-        manager
-            .get_connection()
-            .execute_unprepared(
-                "UPDATE metric_points SET histogram_bucket_counts = '[1]' \
-                 WHERE metric_type = 'histogram' \
-                   AND histogram_count = 1 \
-                   AND histogram_bounds = '[]' \
-                   AND histogram_bucket_counts = '[]'",
-            )
-            .await?;
+        // Metrics v2 initially allowed no-boundary histograms to persist `bucket_counts=[]` for any
+        // population size. Explicit histograms always have bounds.len()+1 buckets, so each affected
+        // row needs one +Inf bucket whose count equals the complete population.
+        let select = Query::select()
+            .columns([Alias::new("id"), Alias::new("histogram_count")])
+            .from(Alias::new("metric_points"))
+            .and_where(Expr::col(Alias::new("metric_type")).eq("histogram"))
+            .and_where(Expr::col(Alias::new("histogram_count")).is_not_null())
+            .and_where(Expr::col(Alias::new("histogram_bounds")).eq("[]"))
+            .and_where(Expr::col(Alias::new("histogram_bucket_counts")).eq("[]"))
+            .to_owned();
+        let rows = manager.get_connection().query_all(&select).await?;
+        for row in rows {
+            let id: String = row.try_get("", "id")?;
+            let count: i64 = row.try_get("", "histogram_count")?;
+            if count < 0 {
+                return Err(DbErr::Custom(
+                    "negative histogram count found during metrics v2 repair".into(),
+                ));
+            }
+            let update = Query::update()
+                .table(Alias::new("metric_points"))
+                .value(
+                    Alias::new("histogram_bucket_counts"),
+                    format!("[{count}]"),
+                )
+                .and_where(Expr::col(Alias::new("id")).eq(id))
+                .to_owned();
+            manager.get_connection().execute(&update).await?;
+        }
         Ok(())
     }
 
