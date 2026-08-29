@@ -29,7 +29,8 @@ fn metric(timestamp: i64) -> MetricInput {
     MetricInput {
         name: "cpu.usage".into(),
         metric_type: MetricType::Gauge,
-        value: 42.0,
+        value: Some(42.0),
+        histogram: None,
         unit: Some("percent".into()),
         timestamp: Some(timestamp),
         attributes: Attributes::new(),
