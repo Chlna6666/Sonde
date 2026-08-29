@@ -31,6 +31,8 @@ pub async fn validate_backup_file_semantics(path: &Path) -> Result<(), BackupV2E
     let file = File::open(path).await?;
     let mut reader = BufReader::new(file);
     let mut line = Vec::with_capacity(4096);
+    let mut last_table_order: Option<u8> = None;
+    let mut last_id: Option<String> = None;
     loop {
         line.clear();
         let read = reader.read_until(b'\n', &mut line).await?;
@@ -44,11 +46,54 @@ pub async fn validate_backup_file_semantics(path: &Path) -> Result<(), BackupV2E
             )));
         }
         let record: BackupV2Record = serde_json::from_slice(record_payload(&line)?)?;
-        if let BackupV2Record::MetricPoint(metric) = record {
-            validate_metric(&metric)?;
+        if let Some((table_order, id)) = record_identity(&record) {
+            if id.is_empty() {
+                return invalid("backup record id must not be empty");
+            }
+            if let Some(previous_order) = last_table_order {
+                if table_order < previous_order {
+                    return invalid("backup table sections are out of order");
+                }
+                if table_order == previous_order {
+                    if last_id.as_deref().is_some_and(|previous_id| id <= previous_id) {
+                        return invalid("backup record ids must be strictly increasing per table");
+                    }
+                } else {
+                    last_id = None;
+                }
+            }
+            last_table_order = Some(table_order);
+            last_id = Some(id.to_owned());
+        }
+        if let BackupV2Record::MetricPoint(metric) = &record {
+            validate_metric(metric)?;
         }
     }
     Ok(())
+}
+
+fn record_identity(record: &BackupV2Record) -> Option<(u8, &str)> {
+    match record {
+        BackupV2Record::Manifest(_) | BackupV2Record::End(_) => None,
+        BackupV2Record::Role(value) => Some((0, &value.id)),
+        BackupV2Record::User(value) => Some((1, &value.id)),
+        BackupV2Record::Application(value) => Some((2, &value.id)),
+        BackupV2Record::RoleBinding(value) => Some((3, &value.id)),
+        BackupV2Record::Environment(value) => Some((4, &value.id)),
+        BackupV2Record::ApiKey(value) => Some((5, &value.id)),
+        BackupV2Record::AlertRule(value) => Some((6, &value.id)),
+        BackupV2Record::NotificationChannel(value) => Some((7, &value.id)),
+        BackupV2Record::AlertDelivery(value) => Some((8, &value.id)),
+        BackupV2Record::ImportRun(value) => Some((9, &value.id)),
+        BackupV2Record::Event(value) => Some((10, &value.id)),
+        BackupV2Record::MetricPoint(value) => Some((11, &value.id)),
+        BackupV2Record::Log(value) => Some((12, &value.id)),
+        BackupV2Record::ErrorGroup(value) => Some((13, &value.id)),
+        BackupV2Record::ErrorOccurrence(value) => Some((14, &value.id)),
+        BackupV2Record::DailyAggregate(value) => Some((15, &value.id)),
+        BackupV2Record::DailyRollup(value) => Some((16, &value.id)),
+        BackupV2Record::AuditLog(value) => Some((17, &value.id)),
+    }
 }
 
 fn validate_metric(metric: &BackupMetricPointV2) -> Result<(), BackupV2Error> {
