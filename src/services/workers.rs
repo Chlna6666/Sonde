@@ -1,11 +1,11 @@
 use std::time::Duration;
 
-use sea_orm::DatabaseConnection;
+use sea_orm::{DatabaseConnection, DbErr};
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{
-    database::first_seen_repo,
+    database::{alert_delivery_repo, first_seen_repo},
     services::{alerts, job_lease, retention},
 };
 
@@ -14,6 +14,8 @@ const ALERT_LEASE_TTL: Duration = Duration::from_secs(90);
 const ALERT_DELIVERY_INTERVAL: Duration = Duration::from_secs(1);
 const ALERT_DELIVERY_LEASE_TTL: Duration = Duration::from_secs(90);
 const ALERT_DELIVERY_BATCH: u64 = 4;
+const ALERT_DELIVERY_HISTORY_RETENTION_MILLIS: i64 = 90 * 86_400_000;
+const ALERT_DELIVERY_HISTORY_PRUNE_MAX: u64 = 5_000;
 const RETENTION_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
 const RETENTION_LEASE_TTL: Duration = Duration::from_secs(4 * 60 * 60 + 5 * 60);
 const FIRST_SEEN_BACKFILL_INTERVAL: Duration = Duration::from_secs(10);
@@ -95,7 +97,7 @@ fn spawn_retention_worker(database: DatabaseConnection) {
                 "retention-sweep-v1",
                 &holder_id,
                 RETENTION_LEASE_TTL,
-                || retention::run_retention_sweep(&database),
+                || run_retention_cycle(&database),
             )
             .await
             {
@@ -109,6 +111,25 @@ fn spawn_retention_worker(database: DatabaseConnection) {
             }
         }
     });
+}
+
+async fn run_retention_cycle(
+    database: &DatabaseConnection,
+) -> Result<retention::RetentionReport, DbErr> {
+    let report = retention::run_retention_sweep(database).await?;
+    let cutoff = chrono::Utc::now()
+        .timestamp_millis()
+        .saturating_sub(ALERT_DELIVERY_HISTORY_RETENTION_MILLIS);
+    let pruned = alert_delivery_repo::prune_terminal_before(
+        database,
+        cutoff,
+        ALERT_DELIVERY_HISTORY_PRUNE_MAX,
+    )
+    .await?;
+    if pruned > 0 {
+        info!(pruned, "pruned terminal alert delivery history");
+    }
+    Ok(report)
 }
 
 fn spawn_first_seen_backfill_worker(database: DatabaseConnection) {
