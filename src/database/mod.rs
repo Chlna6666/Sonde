@@ -6,6 +6,7 @@ pub mod auth_state_repo;
 pub mod backup_repo;
 pub mod backup_v2_repo;
 pub mod backup_v2_restore_repo;
+pub mod backup_v2_validation_repo;
 pub mod dimension_restore_repo;
 pub mod dimension_rollup_repo;
 pub mod error_query_repo;
