@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use sonde::{
-    database::{self, event_count_repo, rollup_repo, telemetry_repo},
+    database::{self, rollup_repo, telemetry_count_repo, telemetry_repo},
     domain::telemetry::{Attributes, EventInput},
 };
 
@@ -33,6 +33,25 @@ async fn flush_daily_rollups(database: &sea_orm::DatabaseConnection) {
                 .unwrap();
         }
     }
+}
+
+async fn event_count(
+    database: &sea_orm::DatabaseConnection,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since: Option<i64>,
+    until: Option<i64>,
+) -> u64 {
+    telemetry_count_repo::count_hybrid(
+        database,
+        telemetry_count_repo::RollupCountKind::Events,
+        application_id,
+        environment_id,
+        since,
+        until,
+    )
+    .await
+    .unwrap()
 }
 
 #[tokio::test]
@@ -94,47 +113,32 @@ async fn event_count_hybrid_matches_exact_windows_and_dirty_fallback() {
     flush_daily_rollups(&database).await;
 
     assert_eq!(
-        event_count_repo::event_count_hybrid(
+        event_count(
             &database,
             Some("app-a"),
             Some("prod"),
             Some(day1),
             Some(day3),
         )
-        .await
-        .unwrap(),
+        .await,
         4
     );
     assert_eq!(
-        event_count_repo::event_count_hybrid(
-            &database,
-            Some("app-a"),
-            None,
-            Some(day1),
-            Some(day3),
-        )
-        .await
-        .unwrap(),
+        event_count(&database, Some("app-a"), None, Some(day1), Some(day3)).await,
         5
     );
-    assert_eq!(
-        event_count_repo::event_count_hybrid(&database, None, None, Some(day1), Some(day3))
-            .await
-            .unwrap(),
-        7
-    );
+    assert_eq!(event_count(&database, None, None, Some(day1), Some(day3)).await, 7);
 
     // Both boundaries are partial. Only a2 and a3 fall inside this exact interval.
     assert_eq!(
-        event_count_repo::event_count_hybrid(
+        event_count(
             &database,
             Some("app-a"),
             Some("prod"),
             Some(day1 + 10_000),
             Some(day2 + 10_000),
         )
-        .await
-        .unwrap(),
+        .await,
         2
     );
 
@@ -148,21 +152,15 @@ async fn event_count_hybrid_matches_exact_windows_and_dirty_fallback() {
     .await
     .unwrap();
     assert_eq!(
-        event_count_repo::event_count_hybrid(
+        event_count(
             &database,
             Some("app-a"),
             Some("prod"),
             Some(day1),
             Some(day3),
         )
-        .await
-        .unwrap(),
+        .await,
         5
     );
-    assert_eq!(
-        event_count_repo::event_count_hybrid(&database, None, None, Some(day1), Some(day3))
-            .await
-            .unwrap(),
-        8
-    );
+    assert_eq!(event_count(&database, None, None, Some(day1), Some(day3)).await, 8);
 }
