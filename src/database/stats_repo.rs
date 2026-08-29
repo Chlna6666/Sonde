@@ -156,8 +156,9 @@ pub async fn overview(
     let since_30d = now - 30 * 86_400_000;
 
     let applications = count(database, "applications", None).await?;
-    let events_24h = super::event_count_repo::event_count_hybrid(
+    let events_24h = super::telemetry_count_repo::count_hybrid(
         database,
+        super::telemetry_count_repo::RollupCountKind::Events,
         None,
         None,
         Some(since_24h),
@@ -182,7 +183,15 @@ pub async fn overview(
         None,
     )
     .await?;
-    let errors_24h = filtered_count(database, "logs", since_24h, "level", &["error", "fatal"]).await?;
+    let errors_24h = super::telemetry_count_repo::count_hybrid(
+        database,
+        super::telemetry_count_repo::RollupCountKind::ErrorLogs,
+        None,
+        None,
+        Some(since_24h),
+        None,
+    )
+    .await?;
     let active_users_24h = distinct_users(database, since_24h, None, None).await?;
 
     let total_users = count_distinct_users(database, None, None, None).await?;
@@ -265,8 +274,9 @@ pub async fn overview(
         trend
     };
 
-    let total_events = super::event_count_repo::event_count_hybrid(
+    let total_events = super::telemetry_count_repo::count_hybrid(
         database,
+        super::telemetry_count_repo::RollupCountKind::Events,
         None,
         None,
         since_ts,
@@ -353,30 +363,6 @@ async fn count(
     ) as u64)
 }
 
-async fn filtered_count(
-    database: &DatabaseConnection,
-    table: &str,
-    since: i64,
-    column: &str,
-    values: &[&str],
-) -> Result<u64, DbErr> {
-    let query = Query::select()
-        .expr_as(
-            Func::count(Expr::col(Alias::new("id"))),
-            Alias::new("total"),
-        )
-        .from(Alias::new(table))
-        .and_where(Expr::col(Alias::new("timestamp")).gte(since))
-        .and_where(Expr::col(Alias::new(column)).is_in(values.iter().copied()))
-        .to_owned();
-    let row = database.query_one(&query).await?;
-    Ok(std::cmp::max(
-        row.and_then(|value| value.try_get::<i64>("", "total").ok())
-            .unwrap_or(0),
-        0,
-    ) as u64)
-}
-
 async fn distinct_users(
     database: &DatabaseConnection,
     since: i64,
@@ -436,8 +422,9 @@ pub async fn application_stats(
         None => (None, None, None),
     };
 
-    let total_events = super::event_count_repo::event_count_hybrid(
+    let total_events = super::telemetry_count_repo::count_hybrid(
         database,
+        super::telemetry_count_repo::RollupCountKind::Events,
         Some(application_id),
         environment_id,
         since_ts,
@@ -451,29 +438,15 @@ pub async fn application_stats(
     let wau = distinct_users(database, since_7d, Some(application_id), environment_id).await?;
     let mau = distinct_users(database, since_30d, Some(application_id), environment_id).await?;
 
-    let mut errors_query = Query::select();
-    errors_query
-        .expr_as(
-            Func::count(Expr::col(Alias::new("id"))),
-            Alias::new("total"),
-        )
-        .from(Alias::new("logs"))
-        .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
-        .and_where(Expr::col(Alias::new("level")).is_in(["error", "fatal"]));
-    if let Some(env_id) = environment_id {
-        errors_query.and_where(Expr::col(Alias::new("environment_id")).eq(env_id));
-    }
-    if let Some(since) = since_ts {
-        errors_query.and_where(Expr::col(Alias::new("timestamp")).gte(since));
-    }
-    let total_errors = std::cmp::max(
-        database
-            .query_one(&errors_query)
-            .await?
-            .and_then(|r| r.try_get::<i64>("", "total").ok())
-            .unwrap_or(0),
-        0,
-    ) as u64;
+    let total_errors = super::telemetry_count_repo::count_hybrid(
+        database,
+        super::telemetry_count_repo::RollupCountKind::ErrorLogs,
+        Some(application_id),
+        environment_id,
+        since_ts,
+        None,
+    )
+    .await?;
 
     let growth = compute_growth(
         database,
@@ -707,16 +680,18 @@ async fn compute_growth(
     if let (Some(since), Some(prev_since), Some(prev_until)) =
         (since_ts, prev_since_ts, prev_until_ts)
     {
-        let curr_events = super::event_count_repo::event_count_hybrid(
+        let curr_events = super::telemetry_count_repo::count_hybrid(
             database,
+            super::telemetry_count_repo::RollupCountKind::Events,
             application_id,
             environment_id,
             Some(since),
             None,
         )
         .await?;
-        let prev_events = super::event_count_repo::event_count_hybrid(
+        let prev_events = super::telemetry_count_repo::count_hybrid(
             database,
+            super::telemetry_count_repo::RollupCountKind::Events,
             application_id,
             environment_id,
             Some(prev_since),
