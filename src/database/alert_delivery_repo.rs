@@ -8,6 +8,7 @@ use super::query::insert_batch;
 
 const MAX_DELIVERY_PAYLOAD_BYTES: usize = 64 * 1024;
 const HISTORY_DELETE_BATCH: u64 = 500;
+const CHANNEL_LOOKUP_CHUNK: usize = 500;
 
 #[derive(Clone, Debug)]
 pub struct PendingDelivery {
@@ -44,14 +45,18 @@ pub async fn persist_transition(
         .value(Alias::new("last_state"), state)
         .value(Alias::new("last_evaluated_at"), evaluated_at)
         .and_where(Expr::col(Alias::new("id")).eq(rule_id))
+        .and_where(Expr::col(Alias::new("enabled")).eq(true))
         .to_owned();
     if transaction.execute(&update).await?.rows_affected() != 1 {
+        // A concurrent disable/delete wins over a stale evaluator snapshot. Treat that as a benign
+        // no-op rather than resurrecting the rule state or creating new outbound work.
         transaction.rollback().await?;
-        return Err(DbErr::Custom("alert rule disappeared during transition".into()));
+        return Ok(0);
     }
 
-    if !channel_ids.is_empty() {
-        let rows = channel_ids
+    let active_channel_ids = enabled_channel_ids(&transaction, channel_ids).await?;
+    if !active_channel_ids.is_empty() {
+        let rows = active_channel_ids
             .iter()
             .map(|channel_id| {
                 vec![
@@ -87,7 +92,34 @@ pub async fn persist_transition(
     }
 
     transaction.commit().await?;
-    Ok(channel_ids.len())
+    Ok(active_channel_ids.len())
+}
+
+async fn enabled_channel_ids(
+    database: &impl ConnectionTrait,
+    channel_ids: &[String],
+) -> Result<Vec<String>, DbErr> {
+    let mut enabled = Vec::with_capacity(channel_ids.len());
+    for chunk in channel_ids.chunks(CHANNEL_LOOKUP_CHUNK) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let query = Query::select()
+            .column(Alias::new("id"))
+            .from(Alias::new("notification_channels"))
+            .and_where(Expr::col(Alias::new("id")).is_in(chunk.iter().cloned()))
+            .and_where(Expr::col(Alias::new("enabled")).eq(true))
+            .to_owned();
+        enabled.extend(
+            database
+                .query_all(&query)
+                .await?
+                .into_iter()
+                .map(|row| row.try_get::<String>("", "id"))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+    }
+    Ok(enabled)
 }
 
 pub async fn list_due(
