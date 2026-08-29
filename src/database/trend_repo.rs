@@ -114,30 +114,28 @@ pub async fn global_daily_hybrid(
         .and_then(day_for_timestamp)
         .unwrap_or_else(|| "0001-01-01".to_owned());
 
+    // Read one already-aggregated row per application/day and combine in Rust. PostgreSQL promotes
+    // SUM(BIGINT) to NUMERIC; avoiding SQL SUM keeps the row type identical on SQLite/MySQL/Postgres.
     let rollups = Query::select()
-        .column(Alias::new("day"))
-        .expr_as(
-            Func::sum(Expr::col(Alias::new("events"))),
-            Alias::new("events"),
-        )
+        .columns(["day", "events"].map(Alias::new))
         .from(Alias::new("telemetry_daily_rollups"))
         .and_where(Expr::col(Alias::new("environment_id")).eq(GLOBAL_ENVIRONMENT))
         .and_where(Expr::col(Alias::new("day")).gte(&since_day))
-        .group_by_col(Alias::new("day"))
         .order_by(Alias::new("day"), Order::Asc)
         .to_owned();
 
     let mut points = BTreeMap::<String, TrendPoint>::new();
     for row in database.query_all(&rollups).await? {
         let day: String = row.try_get("", "day")?;
-        points.insert(
-            day.clone(),
-            TrendPoint {
+        let events = positive_u64(row.try_get::<i64>("", "events").unwrap_or(0));
+        points
+            .entry(day.clone())
+            .and_modify(|point| point.events = point.events.saturating_add(events))
+            .or_insert(TrendPoint {
                 day,
-                events: positive_u64(row.try_get::<i64>("", "events").unwrap_or(0)),
+                events,
                 users: 0,
-            },
-        );
+            });
     }
 
     // If any app has event-dirty data for a day, replace the whole global event count for that day
