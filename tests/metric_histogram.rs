@@ -1,6 +1,9 @@
 #![allow(clippy::unwrap_used)]
 
-use sea_orm::{ConnectionTrait, sea_query::{Alias, Expr, ExprTrait, Query}};
+use sea_orm::{
+    ConnectionTrait,
+    sea_query::{Alias, Expr, ExprTrait, Query},
+};
 use sonde::{
     database::{self, explorer_repo, telemetry_repo},
     domain::telemetry::{Attributes, HistogramInput, MetricInput, MetricType, ValidateTelemetry},
@@ -118,13 +121,24 @@ async fn histogram_population_survives_storage_and_explorer_projection() {
         .unwrap()
         .unwrap();
     assert_eq!(aggregate.try_get::<i64>("", "histogram_count").unwrap(), 6);
-    assert_eq!(aggregate.try_get::<f64>("", "histogram_sum").unwrap(), 63.0);
-    assert_eq!(aggregate.try_get::<f64>("", "histogram_min").unwrap(), 1.0);
-    assert_eq!(aggregate.try_get::<f64>("", "histogram_max").unwrap(), 25.0);
+    assert_eq!(
+        aggregate.try_get::<f64>("", "histogram_sum").unwrap(),
+        63.0
+    );
+    assert_eq!(
+        aggregate.try_get::<f64>("", "histogram_min").unwrap(),
+        1.0
+    );
+    assert_eq!(
+        aggregate.try_get::<f64>("", "histogram_max").unwrap(),
+        25.0
+    );
     assert_eq!(aggregate.try_get::<f64>("", "value").unwrap(), 10.5);
     assert_eq!(
         serde_json::from_str::<Vec<f64>>(
-            &aggregate.try_get::<String>("", "histogram_bounds").unwrap()
+            &aggregate
+                .try_get::<String>("", "histogram_bounds")
+                .unwrap()
         )
         .unwrap(),
         vec![5.0, 10.0, 20.0]
@@ -142,7 +156,17 @@ async fn histogram_population_survives_storage_and_explorer_projection() {
     let legacy = database
         .query_one(
             &Query::select()
-                .columns(["histogram_count", "histogram_sum", "histogram_min", "histogram_max"].map(Alias::new))
+                .columns(
+                    [
+                        "histogram_count",
+                        "histogram_sum",
+                        "histogram_min",
+                        "histogram_max",
+                        "histogram_bounds",
+                        "histogram_bucket_counts",
+                    ]
+                    .map(Alias::new),
+                )
                 .from(Alias::new("metric_points"))
                 .and_where(Expr::col(Alias::new("name")).eq("legacy.duration"))
                 .limit(1)
@@ -155,8 +179,24 @@ async fn histogram_population_survives_storage_and_explorer_projection() {
     assert_eq!(legacy.try_get::<f64>("", "histogram_sum").unwrap(), 12.5);
     assert_eq!(legacy.try_get::<f64>("", "histogram_min").unwrap(), 12.5);
     assert_eq!(legacy.try_get::<f64>("", "histogram_max").unwrap(), 12.5);
+    assert_eq!(
+        serde_json::from_str::<Vec<f64>>(
+            &legacy.try_get::<String>("", "histogram_bounds").unwrap()
+        )
+        .unwrap(),
+        Vec::<f64>::new()
+    );
+    assert_eq!(
+        serde_json::from_str::<Vec<u64>>(
+            &legacy
+                .try_get::<String>("", "histogram_bucket_counts")
+                .unwrap()
+        )
+        .unwrap(),
+        vec![1]
+    );
 
-    let page = explorer_repo::metrics(
+    let aggregate_page = explorer_repo::metrics(
         &database,
         &explorer_repo::ExplorerFilter {
             application_id: scope.application_id.clone(),
@@ -172,10 +212,31 @@ async fn histogram_population_survives_storage_and_explorer_projection() {
     )
     .await
     .unwrap();
-    assert_eq!(page.items.len(), 1);
-    let histogram = page.items[0].histogram.as_ref().unwrap();
+    assert_eq!(aggregate_page.items.len(), 1);
+    let histogram = aggregate_page.items[0].histogram.as_ref().unwrap();
     assert_eq!(histogram.count, 6);
     assert_eq!(histogram.sum, Some(63.0));
     assert_eq!(histogram.explicit_bounds, vec![5.0, 10.0, 20.0]);
     assert_eq!(histogram.bucket_counts, vec![1, 2, 2, 1]);
+
+    let legacy_page = explorer_repo::metrics(
+        &database,
+        &explorer_repo::ExplorerFilter {
+            application_id: scope.application_id,
+            environment_id: Some(scope.environment_id),
+            from: None,
+            to: None,
+            name: Some("legacy.duration".into()),
+            level: None,
+            text: None,
+            page: 1,
+            page_size: 10,
+        },
+    )
+    .await
+    .unwrap();
+    let legacy_histogram = legacy_page.items[0].histogram.as_ref().unwrap();
+    assert_eq!(legacy_histogram.count, 1);
+    assert_eq!(legacy_histogram.explicit_bounds, Vec::<f64>::new());
+    assert_eq!(legacy_histogram.bucket_counts, vec![1]);
 }
