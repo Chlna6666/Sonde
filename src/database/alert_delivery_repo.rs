@@ -14,7 +14,7 @@ pub struct PendingDelivery {
     pub rule_id: String,
     pub channel_id: String,
     pub attempts: i32,
-    pub payload_json: Option<String>,
+    pub payload_json: String,
 }
 
 /// Persist an alert state transition and every outbound delivery in one transaction.
@@ -126,7 +126,12 @@ pub async fn list_due(
                 rule_id: row.try_get("", "rule_id")?,
                 channel_id: row.try_get("", "channel_id")?,
                 attempts,
-                payload_json: row.try_get("", "payload_json")?,
+                // Backup v2.1 predates persisted queue payloads. Restored pending history rows can
+                // therefore contain NULL here; map those to an invalid empty payload so the sender
+                // marks them failed instead of leaving an immortal pending row.
+                payload_json: row
+                    .try_get::<Option<String>>("", "payload_json")?
+                    .unwrap_or_default(),
             })
         })
         .collect()
