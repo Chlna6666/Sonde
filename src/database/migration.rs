@@ -1,5 +1,6 @@
 use sea_orm_migration::prelude::*;
 
+mod alert_delivery_queue;
 mod auth_shared_state;
 mod columns;
 mod daily_rollups;
@@ -17,6 +18,7 @@ mod tables;
 mod user_rollup_chunks;
 mod user_rollups;
 
+use alert_delivery_queue::AlertDeliveryQueue;
 use auth_shared_state::SharedAuthState;
 use columns::{bigint, create_index, create_table, string};
 use daily_rollups::DailyRollups;
@@ -63,6 +65,7 @@ impl MigratorTrait for Migrator {
             Box::new(LogErrorRollups),
             Box::new(MetricsV2),
             Box::new(MetricsV2LegacyHistogramRepair),
+            Box::new(AlertDeliveryQueue),
         ]
     }
 }
