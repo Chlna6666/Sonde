@@ -2,7 +2,7 @@ use std::{net::Ipv4Addr, sync::OnceLock, time::Duration};
 
 use reqwest::redirect::Policy;
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DbErr,
+    ConnectionTrait, DatabaseConnection, DbBackend, DbErr,
     sea_query::{Alias, Expr, ExprTrait, Func, Query},
 };
 use tracing::{error, info, warn};
@@ -437,6 +437,65 @@ fn queue_delivery(
     });
 }
 
+#[derive(Clone, Copy)]
+enum MetricAggregate {
+    Average,
+    Sum,
+}
+
+async fn metric_aggregate_value(
+    database: &DatabaseConnection,
+    app_id: &str,
+    expression: &AlertExpression,
+    window_start: i64,
+    window_end: i64,
+    aggregate: MetricAggregate,
+) -> Result<f64, DbErr> {
+    let count_cast = match database.get_database_backend() {
+        DbBackend::Postgres => "CAST(histogram_count AS DOUBLE PRECISION)",
+        DbBackend::MySql => "CAST(histogram_count AS DOUBLE)",
+        DbBackend::Sqlite => "CAST(histogram_count AS REAL)",
+        _ => "CAST(histogram_count AS DOUBLE PRECISION)",
+    };
+    let contribution = "CASE WHEN metric_type = 'histogram' AND histogram_count IS NOT NULL THEN histogram_sum ELSE value END";
+    let missing_sum = "CASE WHEN metric_type = 'histogram' AND histogram_count IS NOT NULL AND histogram_sum IS NULL THEN 1 ELSE NULL END";
+    let weight = format!(
+        "CASE WHEN metric_type = 'histogram' AND histogram_count IS NOT NULL AND histogram_sum IS NOT NULL THEN {count_cast} WHEN metric_type <> 'histogram' OR histogram_count IS NULL THEN 1.0 ELSE NULL END"
+    );
+
+    let mut query = Query::select();
+    query
+        .expr_as(Expr::cust(format!("SUM({contribution})")), Alias::new("total"))
+        .expr_as(
+            Func::count(Expr::cust(missing_sum)),
+            Alias::new("missing_sums"),
+        )
+        .from(Alias::new("metric_points"))
+        .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
+        .and_where(Expr::col(Alias::new("timestamp")).gte(window_start))
+        .and_where(Expr::col(Alias::new("timestamp")).lte(window_end));
+    if matches!(aggregate, MetricAggregate::Average) {
+        query.expr_as(Expr::cust(format!("SUM({weight})")), Alias::new("weight"));
+    }
+    apply_alert_filters(&mut query, &expression.filters);
+
+    let Some(row) = database.query_one(&query).await? else {
+        return Ok(0.0);
+    };
+    let missing_sums = row.try_get::<i64>("", "missing_sums").unwrap_or(0);
+    if missing_sums > 0 {
+        return Err(DbErr::Custom(
+            "histogram metric aggregate is not computable because sum is missing".into(),
+        ));
+    }
+    let total = row.try_get::<Option<f64>>("", "total")?.unwrap_or(0.0);
+    if matches!(aggregate, MetricAggregate::Sum) {
+        return Ok(total);
+    }
+    let weight = row.try_get::<Option<f64>>("", "weight")?.unwrap_or(0.0);
+    Ok(if weight > 0.0 { total / weight } else { 0.0 })
+}
+
 async fn evaluate_rule_condition(
     database: &DatabaseConnection,
     app_id: &str,
@@ -472,30 +531,26 @@ async fn evaluate_rule_condition(
                 .unwrap_or(0) as f64
         }
         AlertSource::MetricAverage => {
-            let mut query = Query::select();
-            query
-                .expr(Func::avg(Expr::col(Alias::new("value"))))
-                .from(Alias::new("metric_points"))
-                .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
-                .and_where(Expr::col(Alias::new("timestamp")).gte(window_start))
-                .and_where(Expr::col(Alias::new("timestamp")).lte(window_end));
-            apply_alert_filters(&mut query, &expression.filters);
-            let row = database.query_one(&query).await?;
-            row.and_then(|row| row.try_get::<f64>("", "avg").ok())
-                .unwrap_or(0.0)
+            metric_aggregate_value(
+                database,
+                app_id,
+                expression,
+                window_start,
+                window_end,
+                MetricAggregate::Average,
+            )
+            .await?
         }
         AlertSource::MetricSum => {
-            let mut query = Query::select();
-            query
-                .expr(Func::sum(Expr::col(Alias::new("value"))))
-                .from(Alias::new("metric_points"))
-                .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
-                .and_where(Expr::col(Alias::new("timestamp")).gte(window_start))
-                .and_where(Expr::col(Alias::new("timestamp")).lte(window_end));
-            apply_alert_filters(&mut query, &expression.filters);
-            let row = database.query_one(&query).await?;
-            row.and_then(|row| row.try_get::<f64>("", "sum").ok())
-                .unwrap_or(0.0)
+            metric_aggregate_value(
+                database,
+                app_id,
+                expression,
+                window_start,
+                window_end,
+                MetricAggregate::Sum,
+            )
+            .await?
         }
         AlertSource::MissingData => {
             let query = Query::select()
