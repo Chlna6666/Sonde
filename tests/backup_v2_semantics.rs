@@ -2,7 +2,6 @@
 
 use std::error::Error;
 
-use sea_orm::ConnectionTrait;
 use sha2::{Digest, Sha256};
 use sonde::database::{
     self, app_repo,
@@ -101,9 +100,4 @@ fn line(record: &BackupV2Record) -> Result<Vec<u8>, serde_json::Error> {
     let mut bytes = serde_json::to_vec(record)?;
     bytes.push(b'\n');
     Ok(bytes)
-}
-
-#[allow(dead_code)]
-async fn _assert_database_connection_trait(database: &sea_orm::DatabaseConnection) {
-    let _ = database.get_database_backend();
 }
