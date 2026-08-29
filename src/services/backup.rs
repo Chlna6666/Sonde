@@ -12,6 +12,11 @@ use crate::{
     state::InstalledState,
 };
 
+const LEGACY_JSON_FORMAT_VERSION: &str = "1.0";
+const APPLICATION_EXPORT_TYPE: &str = "sonde_application";
+const SYSTEM_BACKUP_TYPE: &str = "sonde_full_backup";
+const MAX_HISTOGRAM_BOUNDS: usize = 256;
+
 pub async fn export_application(
     installed: &InstalledState,
     user: &AuthenticatedUser,
@@ -42,6 +47,11 @@ pub async fn import_application(
     payload: legacy_backup_repo::SingleAppExport,
 ) -> Result<String, AppError> {
     user.require("apps.manage", None)?;
+    validate_backup_header(
+        &payload.format_version,
+        &payload.export_type,
+        APPLICATION_EXPORT_TYPE,
+    )?;
     validate_application_backup_metrics(&payload)?;
     let new_app_id = legacy_backup_repo::import_single_application(
         &installed.database,
@@ -88,6 +98,11 @@ pub async fn restore_full_system(
     payload: legacy_backup_repo::FullSystemBackup,
 ) -> Result<(), AppError> {
     require_system_backup_access(user)?;
+    validate_backup_header(
+        &payload.format_version,
+        &payload.backup_type,
+        SYSTEM_BACKUP_TYPE,
+    )?;
     validate_system_backup_metrics(&payload)?;
 
     legacy_backup_repo::restore_full_system(&installed.database, payload).await?;
@@ -155,6 +170,27 @@ pub async fn restore_full_system_v2(
     Ok(restored)
 }
 
+fn validate_backup_header(
+    version: &str,
+    actual_type: &str,
+    expected_type: &str,
+) -> Result<(), AppError> {
+    if !matches!(
+        version,
+        legacy_backup_repo::FORMAT_VERSION | LEGACY_JSON_FORMAT_VERSION
+    ) {
+        return Err(AppError::Validation(format!(
+            "unsupported backup format version {version}"
+        )));
+    }
+    if actual_type != expected_type {
+        return Err(AppError::Validation(format!(
+            "unexpected backup type {actual_type}"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_application_backup_metrics(
     payload: &legacy_backup_repo::SingleAppExport,
 ) -> Result<(), AppError> {
@@ -213,6 +249,11 @@ fn validate_histogram_backup(
             "histogram count exceeds database range".into(),
         ));
     }
+    if histogram.explicit_bounds.len() > MAX_HISTOGRAM_BOUNDS {
+        return Err(AppError::Validation(
+            "histogram supports at most 256 explicit bounds".into(),
+        ));
+    }
     for value in histogram
         .explicit_bounds
         .iter()
@@ -259,6 +300,18 @@ fn validate_histogram_backup(
         return Err(AppError::Validation(
             "histogram min must not exceed max".into(),
         ));
+    }
+    if histogram.count == 0 {
+        if histogram.sum.is_some_and(|sum| sum != 0.0) {
+            return Err(AppError::Validation(
+                "empty histogram sum must be zero when provided".into(),
+            ));
+        }
+        if histogram.min.is_some() || histogram.max.is_some() {
+            return Err(AppError::Validation(
+                "empty histogram must not include min or max".into(),
+            ));
+        }
     }
     Ok(())
 }
