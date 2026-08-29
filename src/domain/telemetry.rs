@@ -9,6 +9,7 @@ const MAX_ATTRIBUTE_DEPTH: usize = 6;
 const MAX_ATTRIBUTE_STRING_BYTES: usize = 16_384;
 const MAX_ATTRIBUTE_ARRAY_ITEMS: usize = 128;
 const MAX_ATTRIBUTE_OBJECT_ITEMS: usize = 64;
+const MAX_HISTOGRAM_BOUNDS: usize = 256;
 
 pub type Attributes = BTreeMap<String, Value>;
 
@@ -33,7 +34,12 @@ pub struct EventInput {
 pub struct MetricInput {
     pub name: String,
     pub metric_type: MetricType,
-    pub value: f64,
+    /// Scalar value for counters/gauges and the legacy one-observation histogram representation.
+    /// Aggregated histograms use `histogram` and may omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub histogram: Option<HistogramInput>,
     pub unit: Option<String>,
     pub timestamp: Option<i64>,
     #[serde(default)]
@@ -41,11 +47,65 @@ pub struct MetricInput {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistogramInput {
+    pub count: u64,
+    pub sum: Option<f64>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    #[serde(default)]
+    pub explicit_bounds: Vec<f64>,
+    #[serde(default)]
+    pub bucket_counts: Vec<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MetricType {
     Counter,
     Gauge,
     Histogram,
+}
+
+impl MetricInput {
+    /// Returns the scalar projection retained for compatibility with existing metric queries.
+    /// Histogram-aware callers should use the stored histogram population instead.
+    pub fn compatibility_value(&self) -> f64 {
+        if let Some(value) = self.value {
+            return value;
+        }
+        let Some(histogram) = self.histogram.as_ref() else {
+            return 0.0;
+        };
+        if histogram.count > 0
+            && let Some(sum) = histogram.sum
+        {
+            return sum / histogram.count as f64;
+        }
+        if let (Some(min), Some(max)) = (histogram.min, histogram.max)
+            && min == max
+        {
+            return min;
+        }
+        0.0
+    }
+
+    /// Normalizes the legacy `histogram + value` representation to the aggregate data model.
+    pub fn normalized_histogram(&self) -> Option<HistogramInput> {
+        if self.metric_type != MetricType::Histogram {
+            return None;
+        }
+        self.histogram.clone().or_else(|| {
+            self.value.map(|value| HistogramInput {
+                count: 1,
+                sum: Some(value),
+                min: Some(value),
+                max: Some(value),
+                explicit_bounds: Vec::new(),
+                bucket_counts: Vec::new(),
+            })
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -169,11 +229,30 @@ impl ValidateTelemetry for MetricInput {
     fn validate(&self) -> Result<(), &'static str> {
         validate_name(&self.name)?;
         validate_timestamp(self.timestamp)?;
-        if !self.value.is_finite() {
-            return Err("metric value must be finite");
-        }
         if self.unit.as_ref().is_some_and(|unit| unit.len() > 64) {
             return Err("metric unit must be at most 64 bytes");
+        }
+        if self.value.is_some_and(|value| !value.is_finite()) {
+            return Err("metric value must be finite");
+        }
+
+        match self.metric_type {
+            MetricType::Counter | MetricType::Gauge => {
+                if self.histogram.is_some() {
+                    return Err("counter and gauge metrics must not include histogram data");
+                }
+                if self.value.is_none() {
+                    return Err("counter and gauge metrics require value");
+                }
+            }
+            MetricType::Histogram => match (&self.value, &self.histogram) {
+                (None, None) => return Err("histogram metric requires value or histogram data"),
+                (Some(_), Some(_)) => {
+                    return Err("histogram metric must use either value or histogram data");
+                }
+                (None, Some(histogram)) => validate_histogram(histogram)?,
+                (Some(_), None) => {}
+            },
         }
         validate_attributes(&self.attributes)
     }
@@ -195,6 +274,64 @@ impl ValidateTelemetry for LogInput {
         }
         validate_attributes(&self.attributes)
     }
+}
+
+fn validate_histogram(histogram: &HistogramInput) -> Result<(), &'static str> {
+    if histogram.count > i64::MAX as u64 {
+        return Err("histogram count exceeds supported range");
+    }
+    if histogram.explicit_bounds.len() > MAX_HISTOGRAM_BOUNDS {
+        return Err("histogram supports at most 256 explicit bounds");
+    }
+    if histogram
+        .sum
+        .into_iter()
+        .chain(histogram.min)
+        .chain(histogram.max)
+        .any(|value| !value.is_finite())
+    {
+        return Err("histogram sum/min/max must be finite");
+    }
+    if histogram.explicit_bounds.iter().any(|value| !value.is_finite()) {
+        return Err("histogram bounds must be finite");
+    }
+    if histogram
+        .explicit_bounds
+        .windows(2)
+        .any(|pair| pair[0] >= pair[1])
+    {
+        return Err("histogram bounds must be strictly increasing");
+    }
+    if histogram.bucket_counts.is_empty() {
+        if !histogram.explicit_bounds.is_empty() {
+            return Err("histogram bounds require bucket counts");
+        }
+    } else if histogram.bucket_counts.len() != histogram.explicit_bounds.len() + 1 {
+        return Err("histogram bucket count length must equal bounds length plus one");
+    } else {
+        let bucket_total = histogram
+            .bucket_counts
+            .iter()
+            .try_fold(0_u64, |total, count| total.checked_add(*count))
+            .ok_or("histogram bucket counts overflow")?;
+        if bucket_total != histogram.count {
+            return Err("histogram bucket counts must sum to count");
+        }
+    }
+    if let (Some(min), Some(max)) = (histogram.min, histogram.max)
+        && min > max
+    {
+        return Err("histogram min must be less than or equal to max");
+    }
+    if histogram.count == 0 {
+        if histogram.sum.is_some_and(|sum| sum != 0.0) {
+            return Err("empty histogram sum must be zero when provided");
+        }
+        if histogram.min.is_some() || histogram.max.is_some() {
+            return Err("empty histogram must not include min or max");
+        }
+    }
+    Ok(())
 }
 
 fn validate_name(name: &str) -> Result<(), &'static str> {
@@ -285,7 +422,9 @@ fn valid_attribute_value(value: &Value, depth: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Attributes, EventInput, ValidateTelemetry};
+    use super::{
+        Attributes, EventInput, HistogramInput, MetricInput, MetricType, ValidateTelemetry,
+    };
 
     fn event(name: &str) -> EventInput {
         EventInput {
@@ -297,6 +436,25 @@ mod tests {
             launcher_version: None,
             os: None,
             idempotency_key: None,
+            attributes: Attributes::new(),
+        }
+    }
+
+    fn histogram() -> MetricInput {
+        MetricInput {
+            name: "http.request.duration".into(),
+            metric_type: MetricType::Histogram,
+            value: None,
+            histogram: Some(HistogramInput {
+                count: 4,
+                sum: Some(40.0),
+                min: Some(2.0),
+                max: Some(20.0),
+                explicit_bounds: vec![5.0, 10.0],
+                bucket_counts: vec![1, 2, 1],
+            }),
+            unit: Some("ms".into()),
+            timestamp: None,
             attributes: Attributes::new(),
         }
     }
@@ -318,5 +476,35 @@ mod tests {
         let mut event = event("application.start");
         event.idempotency_key = Some("x".repeat(129));
         assert!(event.validate().is_err());
+    }
+
+    #[test]
+    fn histogram_validates_otlp_bucket_invariants() {
+        let metric = histogram();
+        assert!(metric.validate().is_ok());
+        assert_eq!(metric.compatibility_value(), 10.0);
+
+        let mut invalid = histogram();
+        invalid.histogram.as_mut().unwrap().bucket_counts = vec![1, 1, 1];
+        assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_histogram_value_normalizes_to_single_observation() {
+        let metric = MetricInput {
+            name: "latency".into(),
+            metric_type: MetricType::Histogram,
+            value: Some(12.5),
+            histogram: None,
+            unit: Some("ms".into()),
+            timestamp: None,
+            attributes: Attributes::new(),
+        };
+        assert!(metric.validate().is_ok());
+        let histogram = metric.normalized_histogram().unwrap();
+        assert_eq!(histogram.count, 1);
+        assert_eq!(histogram.sum, Some(12.5));
+        assert_eq!(histogram.min, Some(12.5));
+        assert_eq!(histogram.max, Some(12.5));
     }
 }
