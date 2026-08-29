@@ -1,3 +1,4 @@
+pub mod alert_delivery_repo;
 pub mod alert_repo;
 pub mod app_repo;
 pub mod application_delete_repo;
