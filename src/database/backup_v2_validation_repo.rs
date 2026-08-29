@@ -55,8 +55,11 @@ pub async fn validate_backup_file_semantics(path: &Path) -> Result<(), BackupV2E
                     return invalid("backup table sections are out of order");
                 }
                 if table_order == previous_order {
-                    if last_id.as_deref().is_some_and(|previous_id| id <= previous_id) {
-                        return invalid("backup record ids must be strictly increasing per table");
+                    // Export pages are ordered by id, therefore duplicate ids emitted from a real
+                    // database are adjacent regardless of the database collation. Do not compare
+                    // Rust lexical ordering here: MySQL/custom collations may order text differently.
+                    if last_id.as_deref() == Some(id) {
+                        return invalid("backup contains a duplicate record id within one table");
                     }
                 } else {
                     last_id = None;
