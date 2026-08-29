@@ -16,6 +16,7 @@ use super::{
 
 const RESTORE_BATCH_ROWS: usize = 256;
 const DERIVED_STATE_KEYS: &[&str] = &[
+    "telemetry_rollup_backfill_v1",
     "telemetry_dimension_rollup_backfill_v1",
     "telemetry_user_rollup_backfill_v1",
     "telemetry_log_error_rollup_backfill_v2",
