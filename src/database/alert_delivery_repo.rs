@@ -107,7 +107,11 @@ pub async fn list_due(
         )
         .from(Alias::new("alert_deliveries"))
         .and_where(Expr::col(Alias::new("status")).eq("pending"))
-        .and_where(Expr::col(Alias::new("next_attempt_at")).lte(now))
+        .and_where(
+            Expr::col(Alias::new("next_attempt_at"))
+                .is_null()
+                .or(Expr::col(Alias::new("next_attempt_at")).lte(now)),
+        )
         .order_by(Alias::new("next_attempt_at"), Order::Asc)
         .order_by(Alias::new("created_at"), Order::Asc)
         .limit(limit.max(1))
