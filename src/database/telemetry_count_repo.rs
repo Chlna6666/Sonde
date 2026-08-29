@@ -94,23 +94,16 @@ pub async fn count_hybrid(
         .and_then(day_for_timestamp);
     let rollup_environment = environment_id.unwrap_or(GLOBAL_ENVIRONMENT);
 
+    // Read per-application rollup rows and combine them in Rust for global counts. PostgreSQL
+    // promotes SUM(BIGINT) to NUMERIC, which is deliberately avoided so all three supported
+    // databases expose the same i64 row type and overflow behavior is explicit via saturating_add.
     let mut query = Query::select();
-    query.column(Alias::new("day"));
-    if application_id.is_some() {
-        query.column(Alias::new(kind.rollup_column()));
-    } else {
-        query.expr_as(
-            Func::sum(Expr::col(Alias::new(kind.rollup_column()))),
-            Alias::new("total"),
-        );
-    }
     query
+        .columns(["day", kind.rollup_column()].map(Alias::new))
         .from(Alias::new(kind.rollup_table()))
         .and_where(Expr::col(Alias::new("environment_id")).eq(rollup_environment));
     if let Some(application_id) = application_id {
         query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
-    } else {
-        query.group_by_col(Alias::new("day"));
     }
     if let Some(day) = start_day.as_deref() {
         query.and_where(Expr::col(Alias::new("day")).gte(day));
@@ -120,18 +113,12 @@ pub async fn count_hybrid(
     }
     query.order_by(Alias::new("day"), Order::Asc);
 
-    let value_column = if application_id.is_some() {
-        kind.rollup_column()
-    } else {
-        "total"
-    };
     let mut counts = BTreeMap::<String, u64>::new();
     for row in database.query_all(&query).await? {
         let day: String = row.try_get("", "day")?;
-        counts.insert(
-            day,
-            positive_u64(row.try_get::<i64>("", value_column).unwrap_or(0)),
-        );
+        let value = positive_u64(row.try_get::<i64>("", kind.rollup_column()).unwrap_or(0));
+        let entry = counts.entry(day).or_insert(0);
+        *entry = entry.saturating_add(value);
     }
 
     if !replace_dirty_days(
