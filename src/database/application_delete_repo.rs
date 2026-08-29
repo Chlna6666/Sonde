@@ -43,6 +43,7 @@ pub async fn delete_application_exact(
         "telemetry_daily_rollups",
         "telemetry_daily_dimensions",
         "telemetry_daily_user_sets",
+        "telemetry_daily_log_errors",
         "telemetry_dirty_days",
         "telemetry_first_seen_backfill_days",
         "daily_aggregates",
