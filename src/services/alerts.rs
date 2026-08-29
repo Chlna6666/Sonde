@@ -5,12 +5,16 @@ use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbBackend, DbErr,
     sea_query::{Alias, Expr, ExprTrait, Func, Query},
 };
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use url::{Host, Url};
 
 use crate::{
-    database::alert_repo::{
-        self, AlertDeliveryRecord, AlertRuleRecord, NewRule, NotificationChannelRecord, UpdateRule,
+    database::{
+        alert_delivery_repo,
+        alert_repo::{
+            self, AlertDeliveryRecord, AlertRuleRecord, NewRule, NotificationChannelRecord,
+            UpdateRule,
+        },
     },
     domain::alert::{AlertExpression, AlertSource},
     error::AppError,
@@ -18,7 +22,10 @@ use crate::{
     state::InstalledState,
 };
 
-const DELIVERY_RETRY_DELAYS: [u64; 3] = [0, 1, 5];
+const DELIVERY_MAX_ATTEMPTS: i32 = 3;
+const DELIVERY_FIRST_RETRY_MILLIS: i64 = 1_000;
+const DELIVERY_SECOND_RETRY_MILLIS: i64 = 5_000;
+const DELIVERY_ERROR_MAX_CHARS: usize = 2_048;
 
 pub async fn list(
     installed: &InstalledState,
@@ -275,8 +282,12 @@ pub async fn list_deliveries(
 
 pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, DbErr> {
     let rules = alert_repo::list_rules(database, None).await?;
-    let channels = alert_repo::list_channels(database).await?;
-    let active_channels: Vec<_> = channels.into_iter().filter(|channel| channel.enabled).collect();
+    let active_channel_ids = alert_repo::list_channels(database)
+        .await?
+        .into_iter()
+        .filter(|channel| channel.enabled)
+        .map(|channel| channel.id)
+        .collect::<Vec<_>>();
 
     let now = chrono::Utc::now().timestamp_millis();
     let mut evaluated = 0;
@@ -331,8 +342,6 @@ pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, 
                     consecutive_hits = expression.consecutive_hits,
                     "Alert FIRING"
                 );
-                alert_repo::update_rule_state(database, &rule.id, "firing", now).await?;
-
                 let alert_payload = serde_json::json!({
                     "status": "firing",
                     "ruleId": rule.id,
@@ -345,15 +354,18 @@ pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, 
                     "timestamp": chrono::Utc::now().to_rfc3339(),
                     "message": format!("Alert rule '{}' is FIRING. Current value: {:.2} (Threshold: {:.2})", rule.name, current_value, expression.threshold)
                 });
-
-                for channel in &active_channels {
-                    queue_delivery(database, &rule.id, channel, &alert_payload);
-                }
+                alert_delivery_repo::persist_transition(
+                    database,
+                    &rule.id,
+                    "firing",
+                    now,
+                    &active_channel_ids,
+                    &alert_payload,
+                )
+                .await?;
             }
         } else if is_currently_firing {
             info!(rule_id = %rule.id, rule_name = %rule.name, "Alert RESOLVED");
-            alert_repo::update_rule_state(database, &rule.id, "healthy", now).await?;
-
             let resolved_payload = serde_json::json!({
                 "status": "resolved",
                 "ruleId": rule.id,
@@ -366,10 +378,15 @@ pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, 
                 "timestamp": chrono::Utc::now().to_rfc3339(),
                 "message": format!("Alert rule '{}' has RECOVERED and is now healthy.", rule.name)
             });
-
-            for channel in &active_channels {
-                queue_delivery(database, &rule.id, channel, &resolved_payload);
-            }
+            alert_delivery_repo::persist_transition(
+                database,
+                &rule.id,
+                "healthy",
+                now,
+                &active_channel_ids,
+                &resolved_payload,
+            )
+            .await?;
         } else if pending_hits > 0 {
             alert_repo::update_rule_state(database, &rule.id, "healthy", now).await?;
         }
@@ -378,63 +395,132 @@ pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, 
     Ok(evaluated)
 }
 
+pub async fn process_due_deliveries(
+    database: &DatabaseConnection,
+    limit: u64,
+) -> Result<usize, DbErr> {
+    let deliveries = alert_delivery_repo::list_due(
+        database,
+        chrono::Utc::now().timestamp_millis(),
+        limit,
+    )
+    .await?;
+    let mut processed = 0_usize;
+
+    for delivery in deliveries {
+        let payload = match serde_json::from_str::<serde_json::Value>(&delivery.payload_json) {
+            Ok(payload) => payload,
+            Err(error) => {
+                let message = truncate_delivery_error(&format!(
+                    "invalid persisted alert payload: {error}"
+                ));
+                if alert_delivery_repo::mark_failed(
+                    database,
+                    &delivery.id,
+                    delivery.attempts,
+                    false,
+                    &message,
+                )
+                .await?
+                {
+                    processed = processed.saturating_add(1);
+                }
+                continue;
+            }
+        };
+
+        let Some(channel) = alert_repo::get_channel(database, &delivery.channel_id).await? else {
+            if alert_delivery_repo::mark_failed(
+                database,
+                &delivery.id,
+                delivery.attempts,
+                false,
+                "notification channel no longer exists",
+            )
+            .await?
+            {
+                processed = processed.saturating_add(1);
+            }
+            continue;
+        };
+        if !channel.enabled {
+            if alert_delivery_repo::mark_failed(
+                database,
+                &delivery.id,
+                delivery.attempts,
+                false,
+                "notification channel is disabled",
+            )
+            .await?
+            {
+                processed = processed.saturating_add(1);
+            }
+            continue;
+        }
+
+        match dispatch_to_channel(&channel, &payload).await {
+            Ok(()) => {
+                if alert_delivery_repo::mark_delivered(
+                    database,
+                    &delivery.id,
+                    delivery.attempts,
+                )
+                .await?
+                {
+                    processed = processed.saturating_add(1);
+                } else {
+                    warn!(delivery_id = %delivery.id, "alert delivery state changed before success acknowledgement");
+                }
+            }
+            Err(error) => {
+                let message = truncate_delivery_error(&error);
+                let attempt_number = delivery.attempts.saturating_add(1);
+                let updated = if attempt_number >= DELIVERY_MAX_ATTEMPTS {
+                    alert_delivery_repo::mark_failed(
+                        database,
+                        &delivery.id,
+                        delivery.attempts,
+                        true,
+                        &message,
+                    )
+                    .await?
+                } else {
+                    let delay = if attempt_number <= 1 {
+                        DELIVERY_FIRST_RETRY_MILLIS
+                    } else {
+                        DELIVERY_SECOND_RETRY_MILLIS
+                    };
+                    alert_delivery_repo::reschedule(
+                        database,
+                        &delivery.id,
+                        delivery.attempts,
+                        &message,
+                        chrono::Utc::now().timestamp_millis().saturating_add(delay),
+                    )
+                    .await?
+                };
+                if updated {
+                    processed = processed.saturating_add(1);
+                } else {
+                    warn!(delivery_id = %delivery.id, "alert delivery state changed before failure acknowledgement");
+                }
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+
+    Ok(processed)
+}
+
+fn truncate_delivery_error(error: &str) -> String {
+    error.chars().take(DELIVERY_ERROR_MAX_CHARS).collect()
+}
+
 fn parse_pending_hits(state: &str) -> u16 {
     state
         .strip_prefix("pending:")
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(0)
-}
-
-fn queue_delivery(
-    database: &DatabaseConnection,
-    rule_id: &str,
-    channel: &NotificationChannelRecord,
-    payload: &serde_json::Value,
-) {
-    let database = database.clone();
-    let rule_id = rule_id.to_owned();
-    let channel = channel.clone();
-    let payload = payload.clone();
-
-    tokio::spawn(async move {
-        let mut last_error = None;
-        for (index, delay_seconds) in DELIVERY_RETRY_DELAYS.iter().copied().enumerate() {
-            if delay_seconds > 0 {
-                tokio::time::sleep(Duration::from_secs(delay_seconds)).await;
-            }
-            match dispatch_to_channel(&channel, &payload).await {
-                Ok(()) => {
-                    if let Err(err) = alert_repo::record_delivery(
-                        &database,
-                        &rule_id,
-                        &channel.id,
-                        "delivered",
-                        (index + 1) as i32,
-                        None,
-                    )
-                    .await
-                    {
-                        warn!(error = %err, rule_id = %rule_id, channel_id = %channel.id, "failed to record alert delivery");
-                    }
-                    return;
-                }
-                Err(err) => last_error = Some(err),
-            }
-        }
-
-        if let Err(err) = alert_repo::record_delivery(
-            &database,
-            &rule_id,
-            &channel.id,
-            "failed",
-            DELIVERY_RETRY_DELAYS.len() as i32,
-            last_error.as_deref(),
-        )
-        .await
-        {
-            warn!(error = %err, rule_id = %rule_id, channel_id = %channel.id, "failed to record alert delivery failure");
-        }
-    });
 }
 
 #[derive(Clone, Copy)]
@@ -910,18 +996,6 @@ fn truncate_error_body(body: &str) -> &str {
     &body[..end]
 }
 
-pub fn spawn_alert_evaluator_worker(database: DatabaseConnection) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        loop {
-            interval.tick().await;
-            if let Err(err) = evaluate_all_rules(&database).await {
-                error!(error = %err, "alert evaluator worker encountered an error");
-            }
-        }
-    });
-}
-
 fn source_name(expression: &AlertExpression) -> &'static str {
     match &expression.source {
         AlertSource::EventCount => "event_count",
@@ -935,7 +1009,7 @@ fn source_name(expression: &AlertExpression) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_public_ipv4, parse_pending_hits, validate_outbound_url};
+    use super::{is_public_ipv4, parse_pending_hits, truncate_delivery_error, validate_outbound_url};
     use std::net::Ipv4Addr;
 
     #[test]
@@ -951,5 +1025,11 @@ mod tests {
         assert!(validate_outbound_url("http://127.0.0.1/hook").is_err());
         assert!(validate_outbound_url("http://localhost/hook").is_err());
         assert!(validate_outbound_url("https://example.com/hook").is_ok());
+    }
+
+    #[test]
+    fn delivery_errors_are_bounded() {
+        let error = "x".repeat(3_000);
+        assert_eq!(truncate_delivery_error(&error).chars().count(), 2_048);
     }
 }
