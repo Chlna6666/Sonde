@@ -11,6 +11,7 @@ mod first_seen_index;
 mod job_leases;
 mod log_error_rollups;
 mod metrics_v2;
+mod metrics_v2_legacy_histogram;
 mod rollup_generation;
 mod tables;
 mod user_rollup_chunks;
@@ -27,6 +28,7 @@ use first_seen_index::FirstSeenIndex;
 use job_leases::JobLeases;
 use log_error_rollups::LogErrorRollups;
 use metrics_v2::MetricsV2;
+use metrics_v2_legacy_histogram::MetricsV2LegacyHistogramRepair;
 use rollup_generation::RollupGeneration;
 use tables::{
     create_alert_tables, create_application_tables, create_identity_tables, create_import_tables,
@@ -60,6 +62,7 @@ impl MigratorTrait for Migrator {
             Box::new(DirtySourceMask),
             Box::new(LogErrorRollups),
             Box::new(MetricsV2),
+            Box::new(MetricsV2LegacyHistogramRepair),
         ]
     }
 }
