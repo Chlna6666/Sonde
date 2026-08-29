@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbBackend, DbErr, TransactionTrait,
@@ -17,43 +19,44 @@ pub async fn seed_historical_dirty_days_once(
         return Ok(0);
     }
 
-    let scopes = Query::select()
+    let mut query = Query::select();
+    query
         .columns(["application_id", "environment_id"].map(Alias::new))
+        .expr_as(
+            Expr::cust(timestamp_day_expr(database.get_database_backend())),
+            Alias::new("rollup_day"),
+        )
         .from(Alias::new("logs"))
-        .distinct()
-        .to_owned();
-    let mut seeded = 0_usize;
-    let day_expr = timestamp_day_expr(database.get_database_backend());
+        .distinct();
 
-    for row in database.query_all(&scopes).await? {
-        let scope = TelemetryScope {
-            application_id: row.try_get("", "application_id")?,
-            environment_id: row.try_get("", "environment_id")?,
+    let mut scopes = BTreeMap::<(String, String), Vec<i64>>::new();
+    let mut seeded = 0_usize;
+    for row in database.query_all(&query).await? {
+        let application_id: String = row.try_get("", "application_id")?;
+        let environment_id: String = row.try_get("", "environment_id")?;
+        let day: String = row.try_get("", "rollup_day")?;
+        let Some(timestamp) = day_start_timestamp(&day) else {
+            continue;
         };
-        let days = Query::select()
-            .expr_as(Expr::cust(day_expr.clone()), Alias::new("rollup_day"))
-            .from(Alias::new("logs"))
-            .and_where(Expr::col(Alias::new("application_id")).eq(&scope.application_id))
-            .and_where(Expr::col(Alias::new("environment_id")).eq(&scope.environment_id))
-            .distinct()
-            .to_owned();
-        let timestamps = database
-            .query_all(&days)
-            .await?
-            .into_iter()
-            .filter_map(|day| day.try_get::<String>("", "rollup_day").ok())
-            .filter_map(|day| day_start_timestamp(&day))
-            .collect::<Vec<_>>();
-        seeded = seeded.saturating_add(timestamps.len());
-        if !timestamps.is_empty() {
-            rollup_repo::mark_dirty_timestamps_for_source(
-                database,
-                &scope,
-                rollup_repo::DIRTY_SOURCE_LOG,
-                timestamps,
-            )
-            .await?;
-        }
+        scopes
+            .entry((application_id, environment_id))
+            .or_default()
+            .push(timestamp);
+        seeded = seeded.saturating_add(1);
+    }
+
+    for ((application_id, environment_id), timestamps) in scopes {
+        let scope = TelemetryScope {
+            application_id,
+            environment_id,
+        };
+        rollup_repo::mark_dirty_timestamps_for_source(
+            database,
+            &scope,
+            rollup_repo::DIRTY_SOURCE_LOG,
+            timestamps,
+        )
+        .await?;
     }
 
     set_system_state(database, BACKFILL_KEY, "complete").await?;
