@@ -7,9 +7,9 @@ use sea_orm::{
 use sonde::{
     database::{
         self, app_repo, application_delete_repo, dimension_rollup_repo, first_seen_repo,
-        rollup_repo, telemetry_repo, user_rollup_repo,
+        log_error_rollup_repo, rollup_repo, telemetry_repo, user_rollup_repo,
     },
-    domain::telemetry::{Attributes, EventInput},
+    domain::telemetry::{Attributes, EventInput, LogInput, LogLevel},
 };
 
 fn event(timestamp: i64, key: &str, user: &str) -> EventInput {
@@ -22,6 +22,18 @@ fn event(timestamp: i64, key: &str, user: &str) -> EventInput {
         launcher_version: Some("1.0.0".into()),
         os: Some("test".into()),
         idempotency_key: Some(key.into()),
+        attributes: Attributes::new(),
+    }
+}
+
+fn error_log(timestamp: i64) -> LogInput {
+    LogInput {
+        level: LogLevel::Error,
+        message: "delete-me".into(),
+        logger: Some("test".into()),
+        trace_id: None,
+        span_id: None,
+        timestamp: Some(timestamp),
         attributes: Attributes::new(),
     }
 }
@@ -69,21 +81,30 @@ async fn process_all_rollups(database: &sea_orm::DatabaseConnection) {
             break;
         }
         for item in dirty {
-            if !dimension_rollup_repo::recompute_claimed_day_dimensions(database, &item)
-                .await
-                .unwrap()
-            {
-                continue;
+            if item.has_source(rollup_repo::DIRTY_SOURCE_EVENT) {
+                if !dimension_rollup_repo::recompute_claimed_day_dimensions(database, &item)
+                    .await
+                    .unwrap()
+                {
+                    continue;
+                }
+                if !first_seen_repo::refresh_dirty_day(database, &item)
+                    .await
+                    .unwrap()
+                {
+                    continue;
+                }
+                if !user_rollup_repo::recompute_claimed_day_user_set(database, &item)
+                    .await
+                    .unwrap()
+                {
+                    continue;
+                }
             }
-            if !first_seen_repo::refresh_dirty_day(database, &item)
-                .await
-                .unwrap()
-            {
-                continue;
-            }
-            if !user_rollup_repo::recompute_claimed_day_user_set(database, &item)
-                .await
-                .unwrap()
+            if item.has_source(rollup_repo::DIRTY_SOURCE_LOG)
+                && !log_error_rollup_repo::recompute_claimed_day(database, &item)
+                    .await
+                    .unwrap()
             {
                 continue;
             }
@@ -112,16 +133,20 @@ async fn deleting_application_removes_raw_and_derived_state_without_touching_oth
         .and_utc()
         .timestamp_millis();
 
+    let delete_scope = telemetry_repo::TelemetryScope {
+        application_id: delete_app.clone(),
+        environment_id: delete_env,
+    };
     telemetry_repo::insert_events(
         &database,
-        &telemetry_repo::TelemetryScope {
-            application_id: delete_app.clone(),
-            environment_id: delete_env,
-        },
+        &delete_scope,
         &[event(start + 1_000, "delete-1", "shared-user")],
     )
     .await
     .unwrap();
+    telemetry_repo::insert_logs(&database, &delete_scope, &[error_log(start + 1_500)])
+        .await
+        .unwrap();
     telemetry_repo::insert_events(
         &database,
         &telemetry_repo::TelemetryScope {
@@ -141,6 +166,7 @@ async fn deleting_application_removes_raw_and_derived_state_without_touching_oth
     assert!(count_for_app(&database, "telemetry_daily_rollups", &delete_app).await > 0);
     assert!(count_for_app(&database, "telemetry_daily_dimensions", &delete_app).await > 0);
     assert!(count_for_app(&database, "telemetry_daily_user_sets", &delete_app).await > 0);
+    assert!(count_for_app(&database, "telemetry_daily_log_errors", &delete_app).await > 0);
 
     application_delete_repo::delete_application_exact(&database, &delete_app)
         .await
@@ -155,6 +181,7 @@ async fn deleting_application_removes_raw_and_derived_state_without_touching_oth
         "telemetry_daily_rollups",
         "telemetry_daily_dimensions",
         "telemetry_daily_user_sets",
+        "telemetry_daily_log_errors",
         "telemetry_dirty_days",
         "telemetry_first_seen_backfill_days",
         "daily_aggregates",
