@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use sonde::{
-    database::{rollup_repo, telemetry_count_repo, telemetry_repo},
+    database::{log_error_rollup_repo, rollup_repo, telemetry_count_repo, telemetry_repo},
     domain::telemetry::{Attributes, LogInput, LogLevel, MetricInput, MetricType},
 };
 
@@ -16,9 +16,9 @@ fn metric(timestamp: i64, value: f64) -> MetricInput {
     }
 }
 
-fn log(timestamp: i64, message: &str) -> LogInput {
+fn log(timestamp: i64, level: LogLevel, message: &str) -> LogInput {
     LogInput {
-        level: LogLevel::Info,
+        level,
         message: message.into(),
         logger: Some("test".into()),
         trace_id: None,
@@ -37,6 +37,11 @@ async fn drain_daily_rollups(database: &sea_orm::DatabaseConnection) {
             break;
         }
         for item in dirty {
+            if item.has_source(rollup_repo::DIRTY_SOURCE_LOG) {
+                assert!(log_error_rollup_repo::recompute_claimed_day(database, &item)
+                    .await
+                    .unwrap());
+            }
             assert!(rollup_repo::recompute_claimed_day(database, item)
                 .await
                 .unwrap());
@@ -45,7 +50,7 @@ async fn drain_daily_rollups(database: &sea_orm::DatabaseConnection) {
 }
 
 #[tokio::test]
-async fn metric_and_log_counts_use_rollups_with_dirty_and_partial_fallbacks() {
+async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
     let database = sonde::database::connect("sqlite::memory:").await.unwrap();
     sonde::database::migrate(&database).await.unwrap();
     let scope = telemetry_repo::TelemetryScope {
@@ -70,12 +75,19 @@ async fn metric_and_log_counts_use_rollups_with_dirty_and_partial_fallbacks() {
     telemetry_repo::insert_logs(
         &database,
         &scope,
-        &[log(day1 + 2_000, "one"), log(day2 + 2_000, "two")],
+        &[
+            log(day1 + 2_000, LogLevel::Info, "one"),
+            log(day1 + 3_000, LogLevel::Error, "error-one"),
+            log(day2 + 2_000, LogLevel::Fatal, "fatal-two"),
+        ],
     )
     .await
     .unwrap();
 
     rollup_repo::seed_historical_dirty_days_once(&database)
+        .await
+        .unwrap();
+    log_error_rollup_repo::seed_historical_dirty_days_once(&database)
         .await
         .unwrap();
     drain_daily_rollups(&database).await;
@@ -104,17 +116,50 @@ async fn metric_and_log_counts_use_rollups_with_dirty_and_partial_fallbacks() {
         )
         .await
         .unwrap(),
+        3
+    );
+    assert_eq!(
+        telemetry_count_repo::count_hybrid(
+            &database,
+            telemetry_count_repo::RollupCountKind::ErrorLogs,
+            Some(&scope.application_id),
+            Some(&scope.environment_id),
+            Some(day1),
+            Some(day2 + 86_400_000),
+        )
+        .await
+        .unwrap(),
         2
     );
 
-    // A new metric is visible immediately even before its dirty day is folded back into the rollup.
+    // Fresh writes are visible immediately before the corresponding dirty day is folded back.
     telemetry_repo::insert_metrics(&database, &scope, &[metric(day2 + 3_000, 3.0)])
         .await
         .unwrap();
+    telemetry_repo::insert_logs(
+        &database,
+        &scope,
+        &[log(day2 + 4_000, LogLevel::Error, "error-three")],
+    )
+    .await
+    .unwrap();
     assert_eq!(
         telemetry_count_repo::count_hybrid(
             &database,
             telemetry_count_repo::RollupCountKind::Metrics,
+            Some(&scope.application_id),
+            Some(&scope.environment_id),
+            Some(day1),
+            Some(day2 + 86_400_000),
+        )
+        .await
+        .unwrap(),
+        3
+    );
+    assert_eq!(
+        telemetry_count_repo::count_hybrid(
+            &database,
+            telemetry_count_repo::RollupCountKind::ErrorLogs,
             Some(&scope.application_id),
             Some(&scope.environment_id),
             Some(day1),
@@ -133,6 +178,19 @@ async fn metric_and_log_counts_use_rollups_with_dirty_and_partial_fallbacks() {
             Some(&scope.application_id),
             Some(&scope.environment_id),
             Some(day1 + 1_500),
+            Some(day2 + 86_400_000),
+        )
+        .await
+        .unwrap(),
+        2
+    );
+    assert_eq!(
+        telemetry_count_repo::count_hybrid(
+            &database,
+            telemetry_count_repo::RollupCountKind::ErrorLogs,
+            Some(&scope.application_id),
+            Some(&scope.environment_id),
+            Some(day1 + 2_500),
             Some(day2 + 86_400_000),
         )
         .await
