@@ -7,7 +7,10 @@ use sea_orm::{
 };
 use sha2::{Digest, Sha256};
 
-use super::rollup_repo::{self, DirtyDay};
+use super::{
+    rollup_repo::{self, DirtyDay},
+    telemetry_repo::TelemetryScope,
+};
 
 const GLOBAL_ENVIRONMENT: &str = "*";
 const USER_ROLLUP_BACKFILL_KEY: &str = "telemetry_user_rollup_backfill_v1";
@@ -15,7 +18,6 @@ const FINGERPRINT_BYTES: usize = 16;
 const FINGERPRINTS_PER_CHUNK: usize = 2_048;
 const USER_SET_INSERT_CHUNK: usize = 100;
 const MAX_DIRTY_SCOPE_DAYS: usize = 32;
-const DIRTY_INSERT_CHUNK: usize = 100;
 
 type Fingerprint = [u8; FINGERPRINT_BYTES];
 
@@ -51,26 +53,37 @@ pub async fn seed_historical_user_dirty_days_once(
         .and_where(Expr::col(Alias::new("anonymous_id")).is_not_null())
         .distinct()
         .to_owned();
-    let rows = database.query_all(&query).await?;
-    let mut scope_days = BTreeSet::new();
-    for row in rows {
+    let mut scopes = BTreeMap::<(String, String), Vec<i64>>::new();
+    let mut scope_days = 0_usize;
+    for row in database.query_all(&query).await? {
         let application_id: String = row.try_get("", "application_id")?;
         let environment_id: String = row.try_get("", "environment_id")?;
         let day: String = row.try_get("", "day")?;
-        if NaiveDate::parse_from_str(&day, "%Y-%m-%d").is_ok() {
-            scope_days.insert((application_id, environment_id, day));
-        }
+        let Some(timestamp) = day_start_timestamp(&day) else {
+            continue;
+        };
+        scopes
+            .entry((application_id, environment_id))
+            .or_default()
+            .push(timestamp);
+        scope_days = scope_days.saturating_add(1);
     }
 
-    let now = chrono::Utc::now().timestamp_millis();
-    let mut dirty_rows = Vec::with_capacity(scope_days.len().saturating_mul(2));
-    for (application_id, environment_id, day) in &scope_days {
-        dirty_rows.push(dirty_row(application_id, environment_id, day, now));
-        dirty_rows.push(dirty_row(application_id, GLOBAL_ENVIRONMENT, day, now));
+    for ((application_id, environment_id), timestamps) in scopes {
+        let scope = TelemetryScope {
+            application_id,
+            environment_id,
+        };
+        rollup_repo::mark_dirty_timestamps_for_source(
+            database,
+            &scope,
+            rollup_repo::DIRTY_SOURCE_EVENT,
+            timestamps,
+        )
+        .await?;
     }
-    upsert_dirty_rows(database, dirty_rows).await?;
     set_system_state(database, USER_ROLLUP_BACKFILL_KEY, "complete").await?;
-    Ok(scope_days.len())
+    Ok(scope_days)
 }
 
 pub async fn user_backfill_seeded(database: &DatabaseConnection) -> Result<bool, DbErr> {
@@ -595,44 +608,6 @@ async fn insert_user_set_rows(
     Ok(())
 }
 
-async fn upsert_dirty_rows(
-    database: &impl ConnectionTrait,
-    rows: Vec<Vec<Value>>,
-) -> Result<(), DbErr> {
-    for chunk in rows.chunks(DIRTY_INSERT_CHUNK) {
-        let mut query = Query::insert();
-        query
-            .into_table(Alias::new("telemetry_dirty_days"))
-            .columns(
-                [
-                    "id",
-                    "application_id",
-                    "environment_id",
-                    "day",
-                    "marked_at",
-                    "generation",
-                ]
-                .map(Alias::new),
-            );
-        for row in chunk {
-            query
-                .values(row.iter().cloned().map(Expr::value))
-                .map_err(|error| DbErr::Custom(error.to_string()))?;
-        }
-        query.on_conflict(
-            OnConflict::column(Alias::new("id"))
-                .update_column(Alias::new("marked_at"))
-                .values([(
-                    Alias::new("generation"),
-                    Expr::col(Alias::new("generation")).add(1_i64),
-                )])
-                .to_owned(),
-        );
-        database.execute(&query).await?;
-    }
-    Ok(())
-}
-
 async fn set_system_state(
     database: &impl ConnectionTrait,
     key: &str,
@@ -657,28 +632,6 @@ async fn set_system_state(
     Ok(())
 }
 
-fn dirty_row(application_id: &str, environment_id: &str, day: &str, marked_at: i64) -> Vec<Value> {
-    vec![
-        Value::from(dirty_id(application_id, environment_id, day)),
-        Value::from(application_id.to_owned()),
-        Value::from(environment_id.to_owned()),
-        Value::from(day.to_owned()),
-        Value::from(marked_at),
-        Value::from(1_i64),
-    ]
-}
-
-fn dirty_id(application_id: &str, environment_id: &str, day: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"sonde:daily-rollup:v1\0dirty\0");
-    hasher.update(application_id.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(environment_id.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(day.as_bytes());
-    format!("dr_{}", hex::encode(hasher.finalize()))
-}
-
 fn user_set_id(application_id: &str, environment_id: &str, day: &str, chunk_index: i32) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"sonde:user-rollup:v2\0");
@@ -695,6 +648,16 @@ fn user_set_id(application_id: &str, environment_id: &str, day: &str, chunk_inde
 fn day_for_timestamp(timestamp: i64) -> Option<String> {
     chrono::DateTime::from_timestamp_millis(timestamp)
         .map(|value| value.format("%Y-%m-%d").to_string())
+}
+
+fn day_start_timestamp(day: &str) -> Option<i64> {
+    Some(
+        NaiveDate::parse_from_str(day, "%Y-%m-%d")
+            .ok()?
+            .and_hms_opt(0, 0, 0)?
+            .and_utc()
+            .timestamp_millis(),
+    )
 }
 
 fn day_bounds(day: &str) -> Result<(i64, i64), DbErr> {
