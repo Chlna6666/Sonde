@@ -93,7 +93,7 @@ async fn process_ready_rollups(database: &DatabaseConnection) -> Result<usize, D
                 continue;
             }
         }
-        if dirty.has_source(rollup_repo::DIRTY_SOURCE_LOG)
+        if dirty.has_source(log_error_rollup_repo::DIRTY_SOURCE_LOG_ERROR)
             && !log_error_rollup_repo::recompute_claimed_day(database, &dirty).await?
         {
             tokio::task::yield_now().await;
