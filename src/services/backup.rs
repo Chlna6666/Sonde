@@ -4,7 +4,7 @@ use futures_util::Stream;
 
 use crate::{
     database::{
-        app_repo, backup_v2_repo, backup_v2_restore_repo, dimension_restore_repo,
+        app_repo, backup_v2_repo, backup_v2_validation_repo, dimension_restore_repo,
         legacy_backup_repo,
     },
     error::AppError,
@@ -147,9 +147,12 @@ pub async fn restore_full_system_v2(
 ) -> Result<u64, AppError> {
     require_system_backup_access(user)?;
 
-    let restored = backup_v2_restore_repo::restore_full_system_exact(&installed.database, path)
-        .await
-        .map_err(map_backup_v2_error)?;
+    let restored = backup_v2_validation_repo::restore_full_system_exact_validated(
+        &installed.database,
+        path,
+    )
+    .await
+    .map_err(map_backup_v2_error)?;
 
     // Telemetry rollups are derived cache state and are intentionally rebuilt from restored raw
     // telemetry. Readiness is invalidated atomically by exact restore, so concurrent readers use
