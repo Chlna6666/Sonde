@@ -42,6 +42,7 @@ pub async fn import_application(
     payload: legacy_backup_repo::SingleAppExport,
 ) -> Result<String, AppError> {
     user.require("apps.manage", None)?;
+    validate_application_backup_metrics(&payload)?;
     let new_app_id = legacy_backup_repo::import_single_application(
         &installed.database,
         Some(&user.id),
@@ -87,6 +88,7 @@ pub async fn restore_full_system(
     payload: legacy_backup_repo::FullSystemBackup,
 ) -> Result<(), AppError> {
     require_system_backup_access(user)?;
+    validate_system_backup_metrics(&payload)?;
 
     legacy_backup_repo::restore_full_system(&installed.database, payload).await?;
     dimension_restore_repo::reset_after_full_restore(&installed.database).await?;
@@ -151,6 +153,114 @@ pub async fn restore_full_system_v2(
     .await?;
 
     Ok(restored)
+}
+
+fn validate_application_backup_metrics(
+    payload: &legacy_backup_repo::SingleAppExport,
+) -> Result<(), AppError> {
+    for metric in &payload.telemetry.metric_points {
+        validate_metric_backup(&metric.metric_type, metric.value, metric.histogram.as_ref())?;
+    }
+    Ok(())
+}
+
+fn validate_system_backup_metrics(
+    payload: &legacy_backup_repo::FullSystemBackup,
+) -> Result<(), AppError> {
+    for metric in &payload.metric_points {
+        validate_metric_backup(&metric.metric_type, metric.value, metric.histogram.as_ref())?;
+    }
+    Ok(())
+}
+
+fn validate_metric_backup(
+    metric_type: &str,
+    value: f64,
+    histogram: Option<&legacy_backup_repo::HistogramBackup>,
+) -> Result<(), AppError> {
+    if !value.is_finite() {
+        return Err(AppError::Validation("metric value must be finite".into()));
+    }
+    match metric_type {
+        "gauge" | "counter" => {
+            if histogram.is_some() {
+                return Err(AppError::Validation(format!(
+                    "{metric_type} metrics must not include histogram population"
+                )));
+            }
+        }
+        "histogram" => {
+            // Legacy 1.0 histogram rows only had a scalar observation and remain valid without the
+            // population object. New 1.1 rows are validated below.
+            if let Some(histogram) = histogram {
+                validate_histogram_backup(histogram)?;
+            }
+        }
+        _ => {
+            return Err(AppError::Validation(format!(
+                "unsupported metric type {metric_type}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_histogram_backup(
+    histogram: &legacy_backup_repo::HistogramBackup,
+) -> Result<(), AppError> {
+    if histogram.count > i64::MAX as u64 {
+        return Err(AppError::Validation(
+            "histogram count exceeds database range".into(),
+        ));
+    }
+    for value in histogram
+        .explicit_bounds
+        .iter()
+        .copied()
+        .chain(histogram.sum)
+        .chain(histogram.min)
+        .chain(histogram.max)
+    {
+        if !value.is_finite() {
+            return Err(AppError::Validation(
+                "histogram contains a non-finite value".into(),
+            ));
+        }
+    }
+    if histogram
+        .explicit_bounds
+        .windows(2)
+        .any(|window| window[0] >= window[1])
+    {
+        return Err(AppError::Validation(
+            "histogram bounds must be strictly increasing".into(),
+        ));
+    }
+    if histogram.bucket_counts.len() != histogram.explicit_bounds.len().saturating_add(1) {
+        return Err(AppError::Validation(
+            "histogram bucket count length must equal bounds length plus one".into(),
+        ));
+    }
+    let bucket_total = histogram
+        .bucket_counts
+        .iter()
+        .try_fold(0_u64, |total, count| total.checked_add(*count))
+        .ok_or_else(|| AppError::Validation("histogram bucket counts overflow".into()))?;
+    if bucket_total != histogram.count {
+        return Err(AppError::Validation(
+            "histogram bucket counts must sum to histogram count".into(),
+        ));
+    }
+    if histogram
+        .min
+        .zip(histogram.max)
+        .is_some_and(|(min, max)| min > max)
+    {
+        return Err(AppError::Validation(
+            "histogram min must not exceed max".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn require_system_backup_access(user: &AuthenticatedUser) -> Result<(), AppError> {
