@@ -4,7 +4,8 @@ use futures_util::Stream;
 
 use crate::{
     database::{
-        app_repo, backup_repo, backup_v2_repo, backup_v2_restore_repo, dimension_restore_repo,
+        app_repo, backup_v2_repo, backup_v2_restore_repo, dimension_restore_repo,
+        legacy_backup_repo,
     },
     error::AppError,
     services::{applications::ensure_app_access, authentication::AuthenticatedUser},
@@ -15,10 +16,10 @@ pub async fn export_application(
     installed: &InstalledState,
     user: &AuthenticatedUser,
     application_id: &str,
-) -> Result<backup_repo::SingleAppExport, AppError> {
+) -> Result<legacy_backup_repo::SingleAppExport, AppError> {
     ensure_app_access(&installed.database, user, application_id, false).await?;
     let Some(export_data) =
-        backup_repo::export_single_application(&installed.database, application_id).await?
+        legacy_backup_repo::export_single_application(&installed.database, application_id).await?
     else {
         return Err(AppError::NotFound);
     };
@@ -38,12 +39,15 @@ pub async fn export_application(
 pub async fn import_application(
     installed: &InstalledState,
     user: &AuthenticatedUser,
-    payload: backup_repo::SingleAppExport,
+    payload: legacy_backup_repo::SingleAppExport,
 ) -> Result<String, AppError> {
     user.require("apps.manage", None)?;
-    let new_app_id =
-        backup_repo::import_single_application(&installed.database, Some(&user.id), payload)
-            .await?;
+    let new_app_id = legacy_backup_repo::import_single_application(
+        &installed.database,
+        Some(&user.id),
+        payload,
+    )
+    .await?;
 
     app_repo::audit(
         &installed.database,
@@ -60,10 +64,10 @@ pub async fn import_application(
 pub async fn export_full_system(
     installed: &InstalledState,
     user: &AuthenticatedUser,
-) -> Result<backup_repo::FullSystemBackup, AppError> {
+) -> Result<legacy_backup_repo::FullSystemBackup, AppError> {
     require_system_backup_access(user)?;
 
-    let backup_data = backup_repo::export_full_system(&installed.database).await?;
+    let backup_data = legacy_backup_repo::export_full_system(&installed.database).await?;
 
     app_repo::audit(
         &installed.database,
@@ -80,11 +84,11 @@ pub async fn export_full_system(
 pub async fn restore_full_system(
     installed: &InstalledState,
     user: &AuthenticatedUser,
-    payload: backup_repo::FullSystemBackup,
+    payload: legacy_backup_repo::FullSystemBackup,
 ) -> Result<(), AppError> {
     require_system_backup_access(user)?;
 
-    backup_repo::restore_full_system(&installed.database, payload).await?;
+    legacy_backup_repo::restore_full_system(&installed.database, payload).await?;
     dimension_restore_repo::reset_after_full_restore(&installed.database).await?;
 
     app_repo::audit(
@@ -130,9 +134,9 @@ pub async fn restore_full_system_v2(
         .await
         .map_err(map_backup_v2_error)?;
 
-    // Dimension rollups are derived cache state and are intentionally not part of the archive.
-    // Invalidate readiness first so concurrent readers use authoritative raw telemetry until the
-    // normal dirty-day worker has rebuilt every restored event day.
+    // Telemetry rollups are derived cache state and are intentionally rebuilt from restored raw
+    // telemetry. Readiness is invalidated atomically by exact restore, so concurrent readers use
+    // authoritative raw data until the normal dirty-day workers have rebuilt all projections.
     dimension_restore_repo::reset_after_full_restore(&installed.database).await?;
 
     // Full restore intentionally clears auth_sessions and may replace the account that initiated the
