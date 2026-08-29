@@ -121,7 +121,9 @@ async fn export_application(
     let user = authentication::authenticate(&installed, &req).await?;
     let app_id = path.into_inner();
     let export_data = backup::export_application(&installed, &user, &app_id).await?;
-    Ok(HttpResponse::Ok().json(export_data))
+    Ok(HttpResponse::Ok()
+        .insert_header(("cache-control", "no-store"))
+        .json(export_data))
 }
 
 async fn import_application(
@@ -145,7 +147,14 @@ async fn export_system_backup(
     let installed = state.installed().await?;
     let user = authentication::authenticate(&installed, &req).await?;
     let backup_data = backup::export_full_system(&installed, &user).await?;
-    Ok(HttpResponse::Ok().json(backup_data))
+    let date = chrono::Utc::now().format("%Y-%m-%d");
+    Ok(HttpResponse::Ok()
+        .insert_header(("cache-control", "no-store"))
+        .insert_header((
+            "content-disposition",
+            format!("attachment; filename=\"sonde-full-backup-{date}.json\""),
+        ))
+        .json(backup_data))
 }
 
 async fn restore_system_backup(
