@@ -22,7 +22,8 @@ use super::{
     query::insert_batch_ignore_conflicts,
 };
 
-pub const FORMAT_VERSION: &str = "2.0";
+pub const FORMAT_VERSION: &str = "2.1";
+const LEGACY_FORMAT_VERSION: &str = "2.0";
 pub const BACKUP_TYPE: &str = "sonde_full_backup_ndjson";
 pub const CONTENT_TYPE: &str = "application/x-ndjson";
 pub const FILE_EXTENSION: &str = "sonde.ndjson";
@@ -394,7 +395,7 @@ pub async fn restore_full_system_from_file(
 }
 
 fn validate_manifest(manifest: &BackupV2Manifest) -> Result<(), BackupV2Error> {
-    if manifest.format_version != FORMAT_VERSION {
+    if !matches!(manifest.format_version.as_str(), FORMAT_VERSION | LEGACY_FORMAT_VERSION) {
         return Err(BackupV2Error::Invalid(format!(
             "unsupported format version {}",
             manifest.format_version
