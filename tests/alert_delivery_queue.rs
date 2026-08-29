@@ -2,16 +2,48 @@
 
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, QueryResult,
-    sea_query::{Alias, Expr, ExprTrait, Query, Value},
+    sea_query::{Alias, Expr, ExprTrait, Func, Query, Value},
 };
 use sonde::{
-    database::{self, alert_delivery_repo, alert_repo, app_repo, query::insert, telemetry_repo},
+    database::{
+        self, alert_delivery_repo, alert_repo, app_repo, application_delete_repo, query::insert,
+        telemetry_repo,
+    },
     domain::{
         alert::{AlertExpression, AlertSource, Comparison},
         telemetry::{Attributes, EventInput},
     },
     services::alerts,
 };
+
+fn event_count_expression() -> AlertExpression {
+    AlertExpression {
+        source: AlertSource::EventCount,
+        operator: Comparison::GreaterOrEqual,
+        threshold: 1.0,
+        window_minutes: 5,
+        consecutive_hits: 1,
+        filters: Vec::new(),
+    }
+}
+
+async fn create_rule(database: &DatabaseConnection, application_id: &str, name: &str) -> String {
+    let expression = event_count_expression();
+    let query = serde_json::to_value(&expression).unwrap();
+    alert_repo::create_rule(
+        database,
+        alert_repo::NewRule {
+            application_id,
+            name,
+            source_kind: "event_count",
+            query: &query,
+            window_minutes: 5,
+            cooldown_seconds: 300,
+        },
+    )
+    .await
+    .unwrap()
+}
 
 #[tokio::test]
 async fn evaluator_persists_delivery_and_worker_retries_without_process_state() {
@@ -43,28 +75,7 @@ async fn evaluator_persists_delivery_and_worker_retries_without_process_state() 
     .await
     .unwrap();
 
-    let expression = AlertExpression {
-        source: AlertSource::EventCount,
-        operator: Comparison::GreaterOrEqual,
-        threshold: 1.0,
-        window_minutes: 5,
-        consecutive_hits: 1,
-        filters: Vec::new(),
-    };
-    let query = serde_json::to_value(&expression).unwrap();
-    let rule_id = alert_repo::create_rule(
-        &database,
-        alert_repo::NewRule {
-            application_id: &application_id,
-            name: "startup spike",
-            source_kind: "event_count",
-            query: &query,
-            window_minutes: 5,
-            cooldown_seconds: 300,
-        },
-    )
-    .await
-    .unwrap();
+    let rule_id = create_rule(&database, &application_id, "startup spike").await;
     let channel_id = alert_repo::create_channel(
         &database,
         "intentionally unsupported",
@@ -112,34 +123,13 @@ async fn evaluator_persists_delivery_and_worker_retries_without_process_state() 
 }
 
 #[tokio::test]
-async fn restored_legacy_pending_delivery_without_payload_is_failed_not_stuck() {
+async fn restored_legacy_pending_delivery_without_schedule_or_payload_is_reclaimed() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
     let (application_id, _) = app_repo::create_application(&database, "Legacy", "legacy", None)
         .await
         .unwrap();
-    let expression = AlertExpression {
-        source: AlertSource::EventCount,
-        operator: Comparison::GreaterOrEqual,
-        threshold: 1.0,
-        window_minutes: 5,
-        consecutive_hits: 1,
-        filters: Vec::new(),
-    };
-    let query = serde_json::to_value(&expression).unwrap();
-    let rule_id = alert_repo::create_rule(
-        &database,
-        alert_repo::NewRule {
-            application_id: &application_id,
-            name: "legacy pending",
-            source_kind: "event_count",
-            query: &query,
-            window_minutes: 5,
-            cooldown_seconds: 300,
-        },
-    )
-    .await
-    .unwrap();
+    let rule_id = create_rule(&database, &application_id, "legacy pending").await;
     let channel_id = alert_repo::create_channel(
         &database,
         "legacy channel",
@@ -171,7 +161,7 @@ async fn restored_legacy_pending_delivery_without_payload_is_failed_not_stuck() 
             "pending".into(),
             0_i32.into(),
             Value::String(None),
-            0_i64.into(),
+            Value::BigInt(None),
             0_i64.into(),
             Value::String(None),
         ],
@@ -206,6 +196,141 @@ async fn restored_legacy_pending_delivery_without_payload_is_failed_not_stuck() 
         .contains("invalid persisted alert payload"));
 }
 
+#[tokio::test]
+async fn disabling_rule_or_channel_cancels_pending_deliveries() {
+    let database = database::connect("sqlite::memory:").await.unwrap();
+    database::migrate(&database).await.unwrap();
+    let (application_id, _) = app_repo::create_application(&database, "Cancel", "cancel", None)
+        .await
+        .unwrap();
+    let rule_id = create_rule(&database, &application_id, "cancel rule").await;
+    let channel_id = alert_repo::create_channel(
+        &database,
+        "cancel channel",
+        "unsupported-test-channel",
+        &serde_json::json!({}),
+        true,
+    )
+    .await
+    .unwrap();
+    let payload = serde_json::json!({"status":"firing","message":"test"});
+    alert_delivery_repo::persist_transition(
+        &database,
+        &rule_id,
+        "firing",
+        100,
+        std::slice::from_ref(&channel_id),
+        &payload,
+    )
+    .await
+    .unwrap();
+
+    let expression = event_count_expression();
+    let query = serde_json::to_value(&expression).unwrap();
+    alert_repo::update_rule(
+        &database,
+        &rule_id,
+        alert_repo::UpdateRule {
+            name: "cancel rule",
+            enabled: false,
+            source_kind: "event_count",
+            query: &query,
+            window_minutes: 5,
+            cooldown_seconds: 300,
+        },
+    )
+    .await
+    .unwrap();
+    let first = only_delivery(&database).await;
+    assert_eq!(first.1, "cancelled");
+    assert_eq!(first.2, 0);
+    assert!(first.3.is_none());
+    assert!(first.5.as_deref().is_some_and(|error| error.contains("disabled")));
+    assert!(alert_delivery_repo::list_due(&database, i64::MAX, 4)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Re-enable the rule and enqueue another row, then disable the channel. Only the new pending row
+    // is cancelled; the earlier cancellation remains immutable delivery history.
+    alert_repo::update_rule(
+        &database,
+        &rule_id,
+        alert_repo::UpdateRule {
+            name: "cancel rule",
+            enabled: true,
+            source_kind: "event_count",
+            query: &query,
+            window_minutes: 5,
+            cooldown_seconds: 300,
+        },
+    )
+    .await
+    .unwrap();
+    alert_delivery_repo::persist_transition(
+        &database,
+        &rule_id,
+        "firing",
+        200,
+        std::slice::from_ref(&channel_id),
+        &payload,
+    )
+    .await
+    .unwrap();
+    alert_repo::update_channel(
+        &database,
+        &channel_id,
+        "cancel channel",
+        "unsupported-test-channel",
+        &serde_json::json!({}),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let statuses = delivery_statuses(&database).await;
+    assert_eq!(statuses, vec!["cancelled", "cancelled"]);
+    assert!(alert_delivery_repo::list_due(&database, i64::MAX, 4)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn deleting_application_removes_its_pending_delivery_queue() {
+    let database = database::connect("sqlite::memory:").await.unwrap();
+    database::migrate(&database).await.unwrap();
+    let (application_id, _) = app_repo::create_application(&database, "Delete", "delete", None)
+        .await
+        .unwrap();
+    let rule_id = create_rule(&database, &application_id, "delete rule").await;
+    let channel_id = alert_repo::create_channel(
+        &database,
+        "delete channel",
+        "unsupported-test-channel",
+        &serde_json::json!({}),
+        true,
+    )
+    .await
+    .unwrap();
+    alert_delivery_repo::persist_transition(
+        &database,
+        &rule_id,
+        "firing",
+        100,
+        &[channel_id],
+        &serde_json::json!({"status":"firing","message":"test"}),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(delivery_count(&database).await, 1);
+    application_delete_repo::delete_application_exact(&database, &application_id)
+        .await
+        .unwrap();
+    assert_eq!(delivery_count(&database).await, 0);
+}
+
 async fn only_delivery(
     database: &DatabaseConnection,
 ) -> (String, String, i32, Option<i64>, Option<String>, Option<String>) {
@@ -224,6 +349,7 @@ async fn only_delivery(
                     .map(Alias::new),
                 )
                 .from(Alias::new("alert_deliveries"))
+                .order_by(Alias::new("created_at"), sea_orm::Order::Desc)
                 .limit(1)
                 .to_owned(),
         )
@@ -238,6 +364,36 @@ async fn only_delivery(
         row.try_get("", "channel_id").unwrap(),
         row.try_get("", "last_error").unwrap(),
     )
+}
+
+async fn delivery_statuses(database: &DatabaseConnection) -> Vec<String> {
+    database
+        .query_all(
+            &Query::select()
+                .column(Alias::new("status"))
+                .from(Alias::new("alert_deliveries"))
+                .order_by(Alias::new("created_at"), sea_orm::Order::Asc)
+                .to_owned(),
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.try_get("", "status").unwrap())
+        .collect()
+}
+
+async fn delivery_count(database: &DatabaseConnection) -> i64 {
+    database
+        .query_one(
+            &Query::select()
+                .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("total"))
+                .from(Alias::new("alert_deliveries"))
+                .to_owned(),
+        )
+        .await
+        .unwrap()
+        .and_then(|row| row.try_get::<i64>("", "total").ok())
+        .unwrap_or(0)
 }
 
 fn read_i32(row: &QueryResult, column: &str) -> i32 {
