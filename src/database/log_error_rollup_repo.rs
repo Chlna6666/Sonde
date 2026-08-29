@@ -8,8 +8,7 @@ use sea_orm::{
 use sha2::{Digest, Sha256};
 
 use super::{rollup_repo, telemetry_repo::TelemetryScope};
-
-pub const DIRTY_SOURCE_LOG_ERROR: i64 = 1 << 4;
+pub use super::rollup_repo::DIRTY_SOURCE_LOG_ERROR;
 
 const GLOBAL_ENVIRONMENT: &str = "*";
 const BACKFILL_KEY: &str = "telemetry_log_error_rollup_backfill_v2";
