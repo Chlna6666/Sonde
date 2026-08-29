@@ -85,7 +85,7 @@ async fn add_column_if_missing(
         .alter_table(
             Table::alter()
                 .table(Alias::new("metric_points"))
-                .add_column(&mut column.to_owned())
+                .add_column(column)
                 .to_owned(),
         )
         .await
