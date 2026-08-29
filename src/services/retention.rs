@@ -4,7 +4,9 @@ use sea_orm::{
 };
 use tracing::{info, warn};
 
-use crate::database::{first_seen_repo, rollup_repo, telemetry_repo::TelemetryScope};
+use crate::database::{
+    first_seen_repo, log_error_rollup_repo, rollup_repo, telemetry_repo::TelemetryScope,
+};
 
 /// Each deleted id becomes one bind variable in the follow-up `IN (...)` statement. Keep this
 /// comfortably below SQLite's historical 999-variable limit and leave room for driver-added binds.
@@ -135,7 +137,10 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             source_mask |= rollup_repo::DIRTY_SOURCE_METRIC;
         }
         if logs_deleted > 0 {
-            source_mask |= rollup_repo::DIRTY_SOURCE_LOG;
+            // Retention deletes logs without decoding severity first. The deleted subset may contain
+            // error/fatal rows, so conservatively repair both the total-log and ErrorLogs rollups.
+            source_mask |=
+                rollup_repo::DIRTY_SOURCE_LOG | log_error_rollup_repo::DIRTY_SOURCE_LOG_ERROR;
         }
         if error_occurrences_deleted > 0 {
             source_mask |= rollup_repo::DIRTY_SOURCE_ERROR;
