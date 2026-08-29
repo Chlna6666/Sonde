@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection,
+    ConnectionTrait, DatabaseConnection, QueryResult,
     sea_query::{Alias, Expr, ExprTrait, Query, Value},
 };
 use sonde::{
@@ -118,14 +118,15 @@ async fn restored_legacy_pending_delivery_without_payload_is_failed_not_stuck() 
     let (application_id, _) = app_repo::create_application(&database, "Legacy", "legacy", None)
         .await
         .unwrap();
-    let query = serde_json::json!({
-        "source": "event_count",
-        "operator": "greater_or_equal",
-        "threshold": 1.0,
-        "windowMinutes": 5,
-        "consecutiveHits": 1,
-        "filters": []
-    });
+    let expression = AlertExpression {
+        source: AlertSource::EventCount,
+        operator: Comparison::GreaterOrEqual,
+        threshold: 1.0,
+        window_minutes: 5,
+        consecutive_hits: 1,
+        filters: Vec::new(),
+    };
+    let query = serde_json::to_value(&expression).unwrap();
     let rule_id = alert_repo::create_rule(
         &database,
         alert_repo::NewRule {
@@ -198,7 +199,7 @@ async fn restored_legacy_pending_delivery_without_payload_is_failed_not_stuck() 
         .unwrap()
         .unwrap();
     assert_eq!(row.try_get::<String>("", "status").unwrap(), "failed");
-    assert_eq!(row.try_get::<i32>("", "attempts").unwrap(), 0);
+    assert_eq!(read_i32(&row, "attempts"), 0);
     assert!(row
         .try_get::<String>("", "last_error")
         .unwrap()
@@ -232,11 +233,16 @@ async fn only_delivery(
     (
         row.try_get("", "id").unwrap(),
         row.try_get("", "status").unwrap(),
-        row.try_get("", "attempts").unwrap(),
+        read_i32(&row, "attempts"),
         row.try_get("", "next_attempt_at").unwrap(),
         row.try_get("", "channel_id").unwrap(),
         row.try_get("", "last_error").unwrap(),
     )
+}
+
+fn read_i32(row: &QueryResult, column: &str) -> i32 {
+    row.try_get::<i32>("", column)
+        .unwrap_or_else(|_| row.try_get::<i64>("", column).unwrap() as i32)
 }
 
 async fn force_due(database: &DatabaseConnection, id: &str) {
