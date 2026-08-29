@@ -3,7 +3,7 @@
 use sea_orm::{ConnectionTrait, sea_query::{Alias, Expr, ExprTrait, Query}};
 use sonde::{
     database::{self, explorer_repo, telemetry_repo},
-    domain::telemetry::{Attributes, HistogramInput, MetricInput, MetricType},
+    domain::telemetry::{Attributes, HistogramInput, MetricInput, MetricType, ValidateTelemetry},
 };
 
 fn aggregate_histogram(timestamp: i64) -> MetricInput {
@@ -35,6 +35,40 @@ fn legacy_histogram(timestamp: i64) -> MetricInput {
         timestamp: Some(timestamp),
         attributes: Attributes::new(),
     }
+}
+
+#[test]
+fn metric_json_keeps_legacy_scalar_shape_and_accepts_aggregate_histograms() {
+    let legacy: MetricInput = serde_json::from_value(serde_json::json!({
+        "name": "cpu.usage",
+        "metricType": "gauge",
+        "value": 42.5,
+        "unit": "percent",
+        "attributes": {}
+    }))
+    .unwrap();
+    assert_eq!(legacy.value, Some(42.5));
+    assert!(legacy.histogram.is_none());
+    assert!(legacy.validate().is_ok());
+
+    let aggregate: MetricInput = serde_json::from_value(serde_json::json!({
+        "name": "http.request.duration",
+        "metricType": "histogram",
+        "histogram": {
+            "count": 4,
+            "sum": 30.0,
+            "min": 2.0,
+            "max": 15.0,
+            "explicitBounds": [5.0, 10.0],
+            "bucketCounts": [1, 2, 1]
+        },
+        "unit": "ms",
+        "attributes": {}
+    }))
+    .unwrap();
+    assert!(aggregate.value.is_none());
+    assert!(aggregate.validate().is_ok());
+    assert_eq!(aggregate.histogram.unwrap().bucket_counts, vec![1, 2, 1]);
 }
 
 #[tokio::test]
