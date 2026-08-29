@@ -7,6 +7,7 @@ use uuid::Uuid;
 use super::query::insert_batch;
 
 const MAX_DELIVERY_PAYLOAD_BYTES: usize = 64 * 1024;
+const HISTORY_DELETE_BATCH: u64 = 500;
 
 #[derive(Clone, Debug)]
 pub struct PendingDelivery {
@@ -199,6 +200,51 @@ pub async fn mark_failed(
         None,
     )
     .await
+}
+
+pub async fn prune_terminal_before(
+    database: &DatabaseConnection,
+    cutoff: i64,
+    max_rows: u64,
+) -> Result<u64, DbErr> {
+    let mut deleted = 0_u64;
+    let max_rows = max_rows.max(1);
+
+    while deleted < max_rows {
+        let remaining = max_rows.saturating_sub(deleted);
+        let batch_limit = remaining.min(HISTORY_DELETE_BATCH);
+        let select = Query::select()
+            .column(Alias::new("id"))
+            .from(Alias::new("alert_deliveries"))
+            .and_where(Expr::col(Alias::new("status")).ne("pending"))
+            .and_where(Expr::col(Alias::new("created_at")).lt(cutoff))
+            .order_by(Alias::new("created_at"), Order::Asc)
+            .limit(batch_limit)
+            .to_owned();
+        let ids = database
+            .query_all(&select)
+            .await?
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "id"))
+            .collect::<Result<Vec<_>, _>>()?;
+        if ids.is_empty() {
+            break;
+        }
+        let selected = ids.len() as u64;
+        let delete = Query::delete()
+            .from_table(Alias::new("alert_deliveries"))
+            .and_where(Expr::col(Alias::new("id")).is_in(ids))
+            .and_where(Expr::col(Alias::new("status")).ne("pending"))
+            .to_owned();
+        let affected = database.execute(&delete).await?.rows_affected();
+        deleted = deleted.saturating_add(affected);
+        if affected == 0 || selected < batch_limit {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+
+    Ok(deleted)
 }
 
 async fn finish_attempt(
