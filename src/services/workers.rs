@@ -11,6 +11,9 @@ use crate::{
 
 const ALERT_INTERVAL: Duration = Duration::from_secs(30);
 const ALERT_LEASE_TTL: Duration = Duration::from_secs(90);
+const ALERT_DELIVERY_INTERVAL: Duration = Duration::from_secs(1);
+const ALERT_DELIVERY_LEASE_TTL: Duration = Duration::from_secs(90);
+const ALERT_DELIVERY_BATCH: u64 = 4;
 const RETENTION_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
 const RETENTION_LEASE_TTL: Duration = Duration::from_secs(4 * 60 * 60 + 5 * 60);
 const FIRST_SEEN_BACKFILL_INTERVAL: Duration = Duration::from_secs(10);
@@ -19,6 +22,7 @@ const FIRST_SEEN_BACKFILL_BATCH: u64 = 32;
 
 pub fn spawn_leased_workers(database: DatabaseConnection) {
     spawn_alert_worker(database.clone());
+    spawn_alert_delivery_worker(database.clone());
     spawn_retention_worker(database.clone());
     spawn_first_seen_backfill_worker(database);
 }
@@ -45,6 +49,34 @@ fn spawn_alert_worker(database: DatabaseConnection) {
                 Ok(_) => {}
                 Err(error) => {
                     warn!(error = %error, "leased alert evaluator encountered an error");
+                }
+            }
+        }
+    });
+}
+
+fn spawn_alert_delivery_worker(database: DatabaseConnection) {
+    let holder_id = format!("alert-delivery:{}", Uuid::now_v7());
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(ALERT_DELIVERY_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            match job_lease::run_with_lease(
+                &database,
+                "alert-delivery-v1",
+                &holder_id,
+                ALERT_DELIVERY_LEASE_TTL,
+                || alerts::process_due_deliveries(&database, ALERT_DELIVERY_BATCH),
+            )
+            .await
+            {
+                Ok(Some(processed)) if processed > 0 => {
+                    info!(processed, "leased alert delivery batch completed");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    warn!(error = %error, "leased alert delivery worker encountered an error");
                 }
             }
         }
