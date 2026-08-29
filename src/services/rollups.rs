@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr};
+use sea_orm::{DatabaseConnection, DbErr};
 use tracing::{info, warn};
 
 use crate::database::{
@@ -23,10 +23,8 @@ pub fn spawn_rollup_worker(database: DatabaseConnection) {
             }
         }
 
-        let mut event_backfill_seeded = false;
         match dimension_rollup_repo::seed_historical_dimension_dirty_days_once(&database).await {
             Ok(seed_count) if seed_count > 0 => {
-                event_backfill_seeded = true;
                 info!(scope_days = seed_count, "seeded historical telemetry dimension rollup work");
             }
             Ok(_) => {}
@@ -36,18 +34,12 @@ pub fn spawn_rollup_worker(database: DatabaseConnection) {
         }
         match user_rollup_repo::seed_historical_user_dirty_days_once(&database).await {
             Ok(seed_count) if seed_count > 0 => {
-                event_backfill_seeded = true;
                 info!(scope_days = seed_count, "seeded historical telemetry user-set rollup work");
             }
             Ok(_) => {}
             Err(error) => {
                 warn!(error = %error, "failed to seed historical telemetry user-set rollups");
             }
-        }
-        if event_backfill_seeded
-            && let Err(error) = promote_pending_event_sources(&database).await
-        {
-            warn!(error = %error, "failed to promote historical event rollup dirty sources");
         }
         match log_error_rollup_repo::seed_historical_dirty_days_once(&database).await {
             Ok(seed_count) if seed_count > 0 => {
@@ -74,16 +66,6 @@ pub fn spawn_rollup_worker(database: DatabaseConnection) {
             }
         }
     });
-}
-
-async fn promote_pending_event_sources(database: &DatabaseConnection) -> Result<(), DbErr> {
-    database
-        .execute_unprepared(&format!(
-            "UPDATE telemetry_dirty_days SET source_mask = source_mask | {}",
-            rollup_repo::DIRTY_SOURCE_EVENT
-        ))
-        .await?;
-    Ok(())
 }
 
 async fn process_ready_rollups(database: &DatabaseConnection) -> Result<usize, DbErr> {
