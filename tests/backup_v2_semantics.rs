@@ -14,7 +14,7 @@ use sonde::database::{
 #[tokio::test]
 async fn semantic_histogram_failure_does_not_modify_restore_target() -> Result<(), Box<dyn Error>> {
     let archive = tempfile::NamedTempFile::new()?;
-    write_invalid_histogram_archive(archive.path()).await?;
+    write_archive(archive.path(), vec![invalid_histogram_record()]).await?;
 
     // The regular v2 validator only verifies framing/manifest/count/digest, so this proves the file
     // reaches the new semantic layer rather than failing because the test archive itself is corrupt.
@@ -45,18 +45,26 @@ async fn semantic_histogram_failure_does_not_modify_restore_target() -> Result<(
     Ok(())
 }
 
-async fn write_invalid_histogram_archive(path: &std::path::Path) -> Result<(), Box<dyn Error>> {
-    let manifest = BackupV2Record::Manifest(BackupV2Manifest {
-        format_version: backup_v2_repo::FORMAT_VERSION.into(),
-        backup_type: backup_v2_repo::BACKUP_TYPE.into(),
-        exported_at: 1_777_680_000_000,
-        server_version: "test".into(),
-        contains_secrets: false,
-        totp_secrets_included: false,
-        ephemeral_auth_state_included: false,
-        generated_rollups_included: false,
-    });
-    let metric = BackupV2Record::MetricPoint(BackupMetricPointV2 {
+#[tokio::test]
+async fn duplicate_record_ids_are_rejected_even_with_valid_digest() -> Result<(), Box<dyn Error>> {
+    let archive = tempfile::NamedTempFile::new()?;
+    write_archive(
+        archive.path(),
+        vec![scalar_metric_record("metric-1"), scalar_metric_record("metric-1")],
+    )
+    .await?;
+
+    assert!(backup_v2_repo::validate_backup_file(archive.path()).await.is_ok());
+    assert!(
+        backup_v2_validation_repo::validate_backup_file_semantics(archive.path())
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+fn invalid_histogram_record() -> BackupV2Record {
+    BackupV2Record::MetricPoint(BackupMetricPointV2 {
         id: "metric-1".into(),
         application_id: "app-1".into(),
         environment_id: "prod".into(),
@@ -75,23 +83,61 @@ async fn write_invalid_histogram_archive(path: &std::path::Path) -> Result<(), B
         // Three buckets are structurally correct for two bounds, but their population sums to 3,
         // not histogram_count=4. SHA integrity therefore cannot catch this semantic corruption.
         histogram_bucket_counts: Some("[1,1,1]".into()),
-    });
+    })
+}
 
+fn scalar_metric_record(id: &str) -> BackupV2Record {
+    BackupV2Record::MetricPoint(BackupMetricPointV2 {
+        id: id.into(),
+        application_id: "app-1".into(),
+        environment_id: "prod".into(),
+        name: "cpu.usage".into(),
+        metric_type: "gauge".into(),
+        value: 0.5,
+        unit: Some("ratio".into()),
+        timestamp: 1_777_680_000_000,
+        attributes: "{}".into(),
+        received_at: 1_777_680_000_000,
+        histogram_count: None,
+        histogram_sum: None,
+        histogram_min: None,
+        histogram_max: None,
+        histogram_bounds: None,
+        histogram_bucket_counts: None,
+    })
+}
+
+async fn write_archive(
+    path: &std::path::Path,
+    records: Vec<BackupV2Record>,
+) -> Result<(), Box<dyn Error>> {
+    let manifest = BackupV2Record::Manifest(BackupV2Manifest {
+        format_version: backup_v2_repo::FORMAT_VERSION.into(),
+        backup_type: backup_v2_repo::BACKUP_TYPE.into(),
+        exported_at: 1_777_680_000_000,
+        server_version: "test".into(),
+        contains_secrets: false,
+        totp_secrets_included: false,
+        ephemeral_auth_state_included: false,
+        generated_rollups_included: false,
+    });
     let manifest_line = line(&manifest)?;
-    let metric_line = line(&metric)?;
     let mut digest = Sha256::new();
     digest.update(&manifest_line);
-    digest.update(&metric_line);
+    let mut bytes = manifest_line;
+
+    let record_count = records.len() as u64;
+    for record in records {
+        let record_line = line(&record)?;
+        digest.update(&record_line);
+        bytes.extend_from_slice(&record_line);
+    }
+
     let end = BackupV2Record::End(BackupV2End {
-        records: 1,
+        records: record_count,
         sha256: hex::encode(digest.finalize()),
     });
-    let end_line = line(&end)?;
-
-    let mut bytes = Vec::with_capacity(manifest_line.len() + metric_line.len() + end_line.len());
-    bytes.extend_from_slice(&manifest_line);
-    bytes.extend_from_slice(&metric_line);
-    bytes.extend_from_slice(&end_line);
+    bytes.extend_from_slice(&line(&end)?);
     tokio::fs::write(path, bytes).await?;
     Ok(())
 }
