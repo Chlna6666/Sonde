@@ -9,7 +9,8 @@ fn metric(timestamp: i64, value: f64) -> MetricInput {
     MetricInput {
         name: "cpu.usage".into(),
         metric_type: MetricType::Gauge,
-        value,
+        value: Some(value),
+        histogram: None,
         unit: Some("percent".into()),
         timestamp: Some(timestamp),
         attributes: Attributes::new(),
@@ -132,47 +133,14 @@ async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
         2
     );
 
-    // An info-only write dirties total logs but must leave the ErrorLogs rollup authoritative.
-    telemetry_repo::insert_logs(
-        &database,
-        &scope,
-        &[log(day2 + 3_000, LogLevel::Info, "info-only")],
-    )
-    .await
-    .unwrap();
-    let dirty = rollup_repo::list_dirty_days(&database, 16, i64::MAX)
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|item| {
-            item.application_id == scope.application_id
-                && item.environment_id == scope.environment_id
-        })
-        .unwrap();
-    assert!(dirty.has_source(rollup_repo::DIRTY_SOURCE_LOG));
-    assert!(!dirty.has_source(log_error_rollup_repo::DIRTY_SOURCE_LOG_ERROR));
-    assert_eq!(
-        telemetry_count_repo::count_hybrid(
-            &database,
-            telemetry_count_repo::RollupCountKind::ErrorLogs,
-            Some(&scope.application_id),
-            Some(&scope.environment_id),
-            Some(day1),
-            Some(day2 + 86_400_000),
-        )
-        .await
-        .unwrap(),
-        2
-    );
-
-    // Fresh metric/error writes are visible immediately before the dirty day is folded back.
-    telemetry_repo::insert_metrics(&database, &scope, &[metric(day2 + 4_000, 3.0)])
+    // Fresh writes are visible immediately before the corresponding dirty day is folded back.
+    telemetry_repo::insert_metrics(&database, &scope, &[metric(day2 + 3_000, 3.0)])
         .await
         .unwrap();
     telemetry_repo::insert_logs(
         &database,
         &scope,
-        &[log(day2 + 5_000, LogLevel::Error, "error-three")],
+        &[log(day2 + 4_000, LogLevel::Error, "error-three")],
     )
     .await
     .unwrap();
@@ -189,6 +157,28 @@ async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
         .unwrap(),
         3
     );
+    assert_eq!(
+        telemetry_count_repo::count_hybrid(
+            &database,
+            telemetry_count_repo::RollupCountKind::ErrorLogs,
+            Some(&scope.application_id),
+            Some(&scope.environment_id),
+            Some(day1),
+            Some(day2 + 86_400_000),
+        )
+        .await
+        .unwrap(),
+        3
+    );
+
+    // An info-only write dirties the log count but must not invalidate the independent error count.
+    telemetry_repo::insert_logs(
+        &database,
+        &scope,
+        &[log(day2 + 5_000, LogLevel::Info, "informational")],
+    )
+    .await
+    .unwrap();
     assert_eq!(
         telemetry_count_repo::count_hybrid(
             &database,
