@@ -48,7 +48,8 @@ impl RollupCountKind {
         match self {
             Self::Events => rollup_repo::DIRTY_SOURCE_EVENT,
             Self::Metrics => rollup_repo::DIRTY_SOURCE_METRIC,
-            Self::Logs | Self::ErrorLogs => rollup_repo::DIRTY_SOURCE_LOG,
+            Self::Logs => rollup_repo::DIRTY_SOURCE_LOG,
+            Self::ErrorLogs => log_error_rollup_repo::DIRTY_SOURCE_LOG_ERROR,
         }
     }
 
@@ -403,7 +404,7 @@ mod tests {
             RollupCountKind::Metrics.source_mask(),
             RollupCountKind::Logs.source_mask()
         );
-        assert_eq!(
+        assert_ne!(
             RollupCountKind::Logs.source_mask(),
             RollupCountKind::ErrorLogs.source_mask()
         );
