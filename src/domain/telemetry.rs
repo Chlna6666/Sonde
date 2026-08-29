@@ -102,7 +102,8 @@ impl MetricInput {
                 min: Some(value),
                 max: Some(value),
                 explicit_bounds: Vec::new(),
-                bucket_counts: Vec::new(),
+                // An explicit histogram with no finite bounds still has one +Inf bucket.
+                bucket_counts: vec![1],
             })
         })
     }
@@ -302,21 +303,16 @@ fn validate_histogram(histogram: &HistogramInput) -> Result<(), &'static str> {
     {
         return Err("histogram bounds must be strictly increasing");
     }
-    if histogram.bucket_counts.is_empty() {
-        if !histogram.explicit_bounds.is_empty() {
-            return Err("histogram bounds require bucket counts");
-        }
-    } else if histogram.bucket_counts.len() != histogram.explicit_bounds.len() + 1 {
+    if histogram.bucket_counts.len() != histogram.explicit_bounds.len().saturating_add(1) {
         return Err("histogram bucket count length must equal bounds length plus one");
-    } else {
-        let bucket_total = histogram
-            .bucket_counts
-            .iter()
-            .try_fold(0_u64, |total, count| total.checked_add(*count))
-            .ok_or("histogram bucket counts overflow")?;
-        if bucket_total != histogram.count {
-            return Err("histogram bucket counts must sum to count");
-        }
+    }
+    let bucket_total = histogram
+        .bucket_counts
+        .iter()
+        .try_fold(0_u64, |total, count| total.checked_add(*count))
+        .ok_or("histogram bucket counts overflow")?;
+    if bucket_total != histogram.count {
+        return Err("histogram bucket counts must sum to count");
     }
     if let (Some(min), Some(max)) = (histogram.min, histogram.max)
         && min > max
@@ -490,6 +486,27 @@ mod tests {
     }
 
     #[test]
+    fn histogram_without_finite_bounds_still_requires_inf_bucket() {
+        let metric = MetricInput {
+            name: "latency".into(),
+            metric_type: MetricType::Histogram,
+            value: None,
+            histogram: Some(HistogramInput {
+                count: 2,
+                sum: Some(3.0),
+                min: Some(1.0),
+                max: Some(2.0),
+                explicit_bounds: Vec::new(),
+                bucket_counts: Vec::new(),
+            }),
+            unit: Some("ms".into()),
+            timestamp: None,
+            attributes: Attributes::new(),
+        };
+        assert!(metric.validate().is_err());
+    }
+
+    #[test]
     fn legacy_histogram_value_normalizes_to_single_observation() {
         let metric = MetricInput {
             name: "latency".into(),
@@ -506,5 +523,7 @@ mod tests {
         assert_eq!(histogram.sum, Some(12.5));
         assert_eq!(histogram.min, Some(12.5));
         assert_eq!(histogram.max, Some(12.5));
+        assert!(histogram.explicit_bounds.is_empty());
+        assert_eq!(histogram.bucket_counts, vec![1]);
     }
 }
