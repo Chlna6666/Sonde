@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
 use crate::{
-    database::{backup_repo, backup_v2_repo},
+    database::{backup_v2_repo, legacy_backup_repo},
     error::AppError,
     services::{authentication, backup},
     state::AppState,
@@ -127,7 +127,7 @@ async fn export_application(
 async fn import_application(
     state: web::Data<Arc<AppState>>,
     req: HttpRequest,
-    body: web::Json<backup_repo::SingleAppExport>,
+    body: web::Json<legacy_backup_repo::SingleAppExport>,
 ) -> Result<impl Responder, AppError> {
     let installed = state.installed().await?;
     let user = authentication::authenticate_mutation(&installed, &req).await?;
@@ -151,7 +151,7 @@ async fn export_system_backup(
 async fn restore_system_backup(
     state: web::Data<Arc<AppState>>,
     req: HttpRequest,
-    body: web::Json<backup_repo::FullSystemBackup>,
+    body: web::Json<legacy_backup_repo::FullSystemBackup>,
 ) -> Result<impl Responder, AppError> {
     let installed = state.installed().await?;
     let user = authentication::authenticate_mutation(&installed, &req).await?;
