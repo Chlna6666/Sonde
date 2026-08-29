@@ -44,6 +44,7 @@ pub struct AlertDeliveryRecord {
     pub status: String,
     pub attempts: i32,
     pub last_error: Option<String>,
+    pub next_attempt_at: Option<i64>,
     pub created_at: i64,
 }
 
@@ -358,6 +359,7 @@ pub async fn list_deliveries(
                 (Alias::new("ad"), Alias::new("status")),
                 (Alias::new("ad"), Alias::new("attempts")),
                 (Alias::new("ad"), Alias::new("last_error")),
+                (Alias::new("ad"), Alias::new("next_attempt_at")),
                 (Alias::new("ad"), Alias::new("created_at")),
             ],
         )
@@ -399,6 +401,7 @@ pub async fn list_deliveries(
             status: row.try_get("", "status")?,
             attempts,
             last_error: row.try_get("", "last_error").ok(),
+            next_attempt_at: row.try_get("", "next_attempt_at")?,
             created_at: row.try_get("", "created_at")?,
         });
     }
