@@ -17,8 +17,12 @@ pub const DIRTY_SOURCE_EVENT: i64 = 1;
 pub const DIRTY_SOURCE_METRIC: i64 = 1 << 1;
 pub const DIRTY_SOURCE_LOG: i64 = 1 << 2;
 pub const DIRTY_SOURCE_ERROR: i64 = 1 << 3;
+pub const DIRTY_SOURCE_LOG_ERROR: i64 = 1 << 4;
+/// Sources materialized in `telemetry_daily_rollups` itself.
 pub const DIRTY_SOURCE_ALL: i64 =
     DIRTY_SOURCE_EVENT | DIRTY_SOURCE_METRIC | DIRTY_SOURCE_LOG | DIRTY_SOURCE_ERROR;
+/// All source bits accepted by the shared dirty-day queue, including independent derived domains.
+pub const DIRTY_SOURCE_VALID: i64 = DIRTY_SOURCE_ALL | DIRTY_SOURCE_LOG_ERROR;
 
 #[derive(Clone, Debug)]
 pub struct DirtyDay {
@@ -57,7 +61,7 @@ pub async fn mark_dirty_timestamps<I>(
 where
     I: IntoIterator<Item = i64>,
 {
-    mark_dirty_timestamps_for_source(database, scope, DIRTY_SOURCE_ALL, timestamps).await
+    mark_dirty_timestamps_for_source(database, scope, DIRTY_SOURCE_VALID, timestamps).await
 }
 
 pub async fn mark_dirty_timestamps_for_source<I>(
@@ -69,7 +73,7 @@ pub async fn mark_dirty_timestamps_for_source<I>(
 where
     I: IntoIterator<Item = i64>,
 {
-    if source_mask <= 0 || source_mask & !DIRTY_SOURCE_ALL != 0 {
+    if source_mask <= 0 || source_mask & !DIRTY_SOURCE_VALID != 0 {
         return Err(DbErr::Custom("invalid telemetry dirty source mask".into()));
     }
     let days: BTreeSet<String> = timestamps.into_iter().filter_map(day_for_timestamp).collect();
@@ -432,6 +436,15 @@ pub async fn rollup_backfill_seeded(database: &DatabaseConnection) -> Result<boo
         .is_some_and(|value| value == "complete"))
 }
 
+pub async fn invalidate_rollup_backfill(database: &impl ConnectionTrait) -> Result<(), DbErr> {
+    let delete = Query::delete()
+        .from_table(Alias::new("system_state"))
+        .and_where(Expr::col(Alias::new("key")).eq(ROLLUP_BACKFILL_KEY))
+        .to_owned();
+    database.execute(&delete).await?;
+    Ok(())
+}
+
 async fn collect_existing_days(
     database: &DatabaseConnection,
     table: &str,
@@ -527,9 +540,9 @@ pub async fn application_event_trend_hybrid(
         .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
         .and_where(Expr::col(Alias::new("day")).is_in(dirty_days.iter().map(String::as_str)))
         .group_by_col(Alias::new("day"));
-        if let Some(environment_id) = environment_id {
-            raw.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
-        }
+    if let Some(environment_id) = environment_id {
+        raw.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
+    }
         for row in database.query_all(&raw).await? {
             let day: String = row.try_get("", "day")?;
             let existing = points.remove(&day);
@@ -716,8 +729,8 @@ fn saturating_i64(value: u64) -> i64 {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::{
-        DIRTY_SOURCE_EVENT, DIRTY_SOURCE_LOG, day_bounds, day_for_timestamp, dirty_source_condition,
-        rollup_id,
+        DIRTY_SOURCE_EVENT, DIRTY_SOURCE_LOG, DIRTY_SOURCE_LOG_ERROR, DIRTY_SOURCE_VALID,
+        day_bounds, day_for_timestamp, dirty_source_condition, rollup_id,
     };
 
     #[test]
@@ -735,6 +748,8 @@ mod tests {
     #[test]
     fn dirty_source_masks_are_independent_bits() {
         assert_eq!(DIRTY_SOURCE_EVENT & DIRTY_SOURCE_LOG, 0);
-        let _ = dirty_source_condition(DIRTY_SOURCE_EVENT | DIRTY_SOURCE_LOG);
+        assert_eq!(DIRTY_SOURCE_LOG_ERROR & DIRTY_SOURCE_LOG, 0);
+        assert_eq!(DIRTY_SOURCE_VALID & DIRTY_SOURCE_LOG_ERROR, DIRTY_SOURCE_LOG_ERROR);
+        let _ = dirty_source_condition(DIRTY_SOURCE_EVENT | DIRTY_SOURCE_LOG_ERROR);
     }
 }
