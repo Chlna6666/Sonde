@@ -46,10 +46,24 @@ pub struct MetricRecord {
     pub id: String,
     pub name: String,
     pub metric_type: String,
+    /// Compatibility projection retained for existing Explorer consumers. Histogram-aware clients
+    /// should read `histogram` so population weighting is not lost.
     pub value: f64,
+    pub histogram: Option<HistogramRecord>,
     pub unit: Option<String>,
     pub timestamp: i64,
     pub attributes: JsonValue,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistogramRecord {
+    pub count: u64,
+    pub sum: Option<f64>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub explicit_bounds: Vec<f64>,
+    pub bucket_counts: Vec<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -116,6 +130,12 @@ pub async fn metrics(
                 "unit",
                 "timestamp",
                 "attributes",
+                "histogram_count",
+                "histogram_sum",
+                "histogram_min",
+                "histogram_max",
+                "histogram_bounds",
+                "histogram_bucket_counts",
             ]
             .map(Alias::new),
         )
@@ -127,6 +147,7 @@ pub async fn metrics(
             name: row.try_get("", "name")?,
             metric_type: row.try_get("", "metric_type")?,
             value: row.try_get("", "value")?,
+            histogram: decode_histogram(&row)?,
             unit: row.try_get("", "unit")?,
             timestamp: row.try_get("", "timestamp")?,
             attributes: json(row.try_get("", "attributes")?),
@@ -169,6 +190,55 @@ pub async fn logs(
         })
     })
     .await
+}
+
+fn decode_histogram(row: &QueryResult) -> Result<Option<HistogramRecord>, DbErr> {
+    let Some(count) = row.try_get::<Option<i64>>("", "histogram_count")? else {
+        return Ok(None);
+    };
+    let count = u64::try_from(count)
+        .map_err(|_| DbErr::Custom("stored histogram count must not be negative".into()))?;
+    let bounds = decode_json_vec::<f64>(
+        row.try_get::<Option<String>>("", "histogram_bounds")?,
+        "histogram_bounds",
+    )?;
+    let bucket_counts = decode_json_vec::<u64>(
+        row.try_get::<Option<String>>("", "histogram_bucket_counts")?,
+        "histogram_bucket_counts",
+    )?;
+    if !bucket_counts.is_empty() && bucket_counts.len() != bounds.len() + 1 {
+        return Err(DbErr::Custom(
+            "stored histogram bucket count length does not match bounds".into(),
+        ));
+    }
+    let bucket_total = bucket_counts
+        .iter()
+        .try_fold(0_u64, |total, value| total.checked_add(*value))
+        .ok_or_else(|| DbErr::Custom("stored histogram bucket counts overflow".into()))?;
+    if !bucket_counts.is_empty() && bucket_total != count {
+        return Err(DbErr::Custom(
+            "stored histogram bucket counts do not sum to count".into(),
+        ));
+    }
+    Ok(Some(HistogramRecord {
+        count,
+        sum: row.try_get("", "histogram_sum")?,
+        min: row.try_get("", "histogram_min")?,
+        max: row.try_get("", "histogram_max")?,
+        explicit_bounds: bounds,
+        bucket_counts,
+    }))
+}
+
+fn decode_json_vec<T>(value: Option<String>, column: &str) -> Result<Vec<T>, DbErr>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_str(&value)
+        .map_err(|error| DbErr::Custom(format!("invalid {column} JSON: {error}")))
 }
 
 fn apply_filter(
