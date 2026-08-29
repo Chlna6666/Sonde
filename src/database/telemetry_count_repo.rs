@@ -3,46 +3,71 @@ use std::collections::{BTreeMap, HashSet};
 use chrono::{DateTime, NaiveDate, Utc};
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbErr,
-    sea_query::{Alias, Expr, ExprTrait, Func, Order, Query},
+    sea_query::{Alias, Expr, ExprTrait, Func, Order, Query, SelectStatement, SimpleExpr},
 };
 
-use super::rollup_repo;
+use super::{log_error_rollup_repo, rollup_repo};
 
 const GLOBAL_ENVIRONMENT: &str = "*";
 const MAX_DIRTY_DAY_BINDS: usize = 400;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RollupCountKind {
+    Events,
     Metrics,
     Logs,
+    ErrorLogs,
 }
 
 impl RollupCountKind {
     fn raw_table(self) -> &'static str {
         match self {
+            Self::Events => "events",
             Self::Metrics => "metric_points",
-            Self::Logs => "logs",
+            Self::Logs | Self::ErrorLogs => "logs",
+        }
+    }
+
+    fn rollup_table(self) -> &'static str {
+        match self {
+            Self::Events | Self::Metrics | Self::Logs => "telemetry_daily_rollups",
+            Self::ErrorLogs => "telemetry_daily_log_errors",
         }
     }
 
     fn rollup_column(self) -> &'static str {
         match self {
+            Self::Events => "events",
             Self::Metrics => "metrics",
             Self::Logs => "logs",
+            Self::ErrorLogs => "error_logs",
         }
     }
 
     fn source_mask(self) -> i64 {
         match self {
+            Self::Events => rollup_repo::DIRTY_SOURCE_EVENT,
             Self::Metrics => rollup_repo::DIRTY_SOURCE_METRIC,
-            Self::Logs => rollup_repo::DIRTY_SOURCE_LOG,
+            Self::Logs | Self::ErrorLogs => rollup_repo::DIRTY_SOURCE_LOG,
+        }
+    }
+
+    fn uses_stored_day(self) -> bool {
+        matches!(self, Self::Events)
+    }
+
+    fn apply_raw_filter(self, query: &mut SelectStatement) {
+        if matches!(self, Self::ErrorLogs) {
+            query.and_where(Expr::col(Alias::new("level")).is_in(["error", "fatal"]));
         }
     }
 }
 
-/// Exact count over `[since, until)` backed by daily rollups for complete clean days.
+/// Exact scalar count over `[since, until)` backed by daily rollups for complete clean days.
 ///
-/// Dirty replacement is source-aware, so an event-only marker cannot force metric/log raw scans.
+/// Each kind declares its raw table, rollup source and dirty bit. Dirty replacement is therefore
+/// source-aware: a metric-only marker cannot force event/log scans, while `ErrorLogs` preserves the
+/// Dashboard definition of errors as log rows whose level is `error` or `fatal`.
 pub async fn count_hybrid(
     database: &DatabaseConnection,
     kind: RollupCountKind,
@@ -59,7 +84,7 @@ pub async fn count_hybrid(
     if matches!((since, until), (Some(start), Some(end)) if end <= start) {
         return Ok(0);
     }
-    if !rollup_repo::rollup_backfill_seeded(database).await? {
+    if !backfill_ready(database, kind).await? {
         return raw_count(database, kind, application_id, environment_id, since, until).await;
     }
 
@@ -80,7 +105,7 @@ pub async fn count_hybrid(
         );
     }
     query
-        .from(Alias::new("telemetry_daily_rollups"))
+        .from(Alias::new(kind.rollup_table()))
         .and_where(Expr::col(Alias::new("environment_id")).eq(rollup_environment));
     if let Some(application_id) = application_id {
         query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
@@ -139,6 +164,18 @@ pub async fn count_hybrid(
         .fold(0_u64, |total, value| total.saturating_add(value)))
 }
 
+async fn backfill_ready(
+    database: &DatabaseConnection,
+    kind: RollupCountKind,
+) -> Result<bool, DbErr> {
+    match kind {
+        RollupCountKind::ErrorLogs => log_error_rollup_repo::backfill_seeded(database).await,
+        RollupCountKind::Events | RollupCountKind::Metrics | RollupCountKind::Logs => {
+            rollup_repo::rollup_backfill_seeded(database).await
+        }
+    }
+}
+
 async fn replace_dirty_days(
     database: &DatabaseConnection,
     kind: RollupCountKind,
@@ -179,14 +216,15 @@ async fn replace_dirty_days(
         return Ok(false);
     }
 
+    let day_expression = raw_day_expression(database, kind);
     let mut raw = Query::select();
     raw.expr_as(
         Func::count(Expr::col(Alias::new("id"))),
         Alias::new("total"),
     )
     .from(Alias::new(kind.raw_table()))
-    .and_where(raw_day_expression(database, kind).is_in(dirty_days.iter().map(String::as_str)))
-    .expr_as(raw_day_expression(database, kind), Alias::new("day"))
+    .and_where(day_expression.clone().is_in(dirty_days.iter().map(String::as_str)))
+    .expr_as(day_expression, Alias::new("day"))
     .group_by_col(Alias::new("day"));
     if let Some(application_id) = application_id {
         raw.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
@@ -194,6 +232,7 @@ async fn replace_dirty_days(
     if let Some(environment_id) = environment_id {
         raw.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
     }
+    kind.apply_raw_filter(&mut raw);
 
     let mut seen = HashSet::new();
     for row in database.query_all(&raw).await? {
@@ -308,6 +347,7 @@ async fn raw_count(
     if let Some(until) = until {
         query.and_where(Expr::col(Alias::new("timestamp")).lt(until));
     }
+    kind.apply_raw_filter(&mut query);
     let row = database.query_one(&query).await?;
     Ok(row
         .and_then(|row| row.try_get::<i64>("", "total").ok())
@@ -315,7 +355,10 @@ async fn raw_count(
         .max(0) as u64)
 }
 
-fn raw_day_expression(database: &DatabaseConnection, _kind: RollupCountKind) -> sea_orm::sea_query::SimpleExpr {
+fn raw_day_expression(database: &DatabaseConnection, kind: RollupCountKind) -> SimpleExpr {
+    if kind.uses_stored_day() {
+        return Expr::col(Alias::new("day"));
+    }
     match database.get_database_backend() {
         sea_orm::DbBackend::Postgres => {
             Expr::cust("to_char(to_timestamp(timestamp / 1000.0), 'YYYY-MM-DD')")
@@ -368,10 +411,19 @@ mod tests {
     use super::RollupCountKind;
 
     #[test]
-    fn kinds_have_independent_sources() {
+    fn kinds_have_source_and_storage_contracts() {
         assert_ne!(
             RollupCountKind::Metrics.source_mask(),
             RollupCountKind::Logs.source_mask()
+        );
+        assert_eq!(
+            RollupCountKind::Logs.source_mask(),
+            RollupCountKind::ErrorLogs.source_mask()
+        );
+        assert!(RollupCountKind::Events.uses_stored_day());
+        assert_eq!(
+            RollupCountKind::ErrorLogs.rollup_table(),
+            "telemetry_daily_log_errors"
         );
     }
 }
