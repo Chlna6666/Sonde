@@ -5,12 +5,17 @@ use sea_orm::{
     ConnectionTrait,
     sea_query::{Alias, Expr, ExprTrait, Func, Query},
 };
-use sonde::database::{
-    self, app_repo, auth_repo, backup_v2_repo, backup_v2_restore_repo, query::insert,
+use sonde::{
+    database::{
+        self, app_repo, auth_repo, backup_v2_repo, backup_v2_restore_repo,
+        dimension_restore_repo, query::insert, telemetry_count_repo, telemetry_repo,
+    },
+    domain::telemetry::{Attributes, HistogramInput, MetricInput, MetricType},
 };
 use tokio::io::AsyncWriteExt;
 
 const DERIVED_STATE_KEYS: &[&str] = &[
+    "telemetry_rollup_backfill_v1",
     "telemetry_dimension_rollup_backfill_v1",
     "telemetry_user_rollup_backfill_v1",
     "telemetry_log_error_rollup_backfill_v2",
@@ -65,8 +70,8 @@ async fn full_backup_v2_round_trip_replaces_state_and_resets_ephemeral_auth(
         ],
         vec![
             uuid::Uuid::now_v7().to_string().into(),
-            source_app_id.into(),
-            source_env_id.into(),
+            source_app_id.clone().into(),
+            source_env_id.clone().into(),
             "backup.test".into(),
             now.into(),
             chrono::Utc::now().format("%Y-%m-%d").to_string().into(),
@@ -79,6 +84,33 @@ async fn full_backup_v2_round_trip_replaces_state_and_resets_ephemeral_auth(
             Option::<String>::None.into(),
             now.into(),
         ],
+    )
+    .await?;
+
+    // Deliberately leave the metric dirty instead of running the daily worker. V2 does not archive
+    // dirty markers, so restore must rebuild base rollup work from authoritative raw telemetry.
+    telemetry_repo::insert_metrics(
+        &source,
+        &telemetry_repo::TelemetryScope {
+            application_id: source_app_id.clone(),
+            environment_id: source_env_id.clone(),
+        },
+        &[MetricInput {
+            name: "http.request.duration".into(),
+            metric_type: MetricType::Histogram,
+            value: None,
+            histogram: Some(HistogramInput {
+                count: 6,
+                sum: Some(63.0),
+                min: Some(1.0),
+                max: Some(25.0),
+                explicit_bounds: vec![5.0, 10.0, 20.0],
+                bucket_counts: vec![1, 2, 2, 1],
+            }),
+            unit: Some("ms".into()),
+            timestamp: Some(now + 1),
+            attributes: Attributes::new(),
+        }],
     )
     .await?;
 
@@ -155,13 +187,95 @@ async fn full_backup_v2_round_trip_replaces_state_and_resets_ephemeral_auth(
     assert!(totp_secret.is_none());
     assert_eq!(count_rows(&target, "auth_sessions").await?, 0);
     assert_eq!(count_rows(&target, "events").await?, 1);
+    assert_eq!(count_rows(&target, "metric_points").await?, 1);
     assert_eq!(count_rows(&target, "telemetry_daily_dimensions").await?, 0);
     assert_eq!(count_rows(&target, "telemetry_daily_user_sets").await?, 0);
     assert_eq!(count_rows(&target, "telemetry_daily_log_errors").await?, 0);
     for key in DERIVED_STATE_KEYS {
         assert!(system_state_value(&target, key).await?.is_none(), "{key}");
     }
+
+    let histogram = target
+        .query_one(
+            &Query::select()
+                .columns(
+                    [
+                        "value",
+                        "histogram_count",
+                        "histogram_sum",
+                        "histogram_min",
+                        "histogram_max",
+                        "histogram_bounds",
+                        "histogram_bucket_counts",
+                    ]
+                    .map(Alias::new),
+                )
+                .from(Alias::new("metric_points"))
+                .and_where(Expr::col(Alias::new("name")).eq("http.request.duration"))
+                .limit(1)
+                .to_owned(),
+        )
+        .await?
+        .ok_or_else(|| io::Error::other("restored histogram missing"))?;
+    assert_eq!(histogram.try_get::<f64>("", "value")?, 10.5);
+    assert_eq!(histogram.try_get::<i64>("", "histogram_count")?, 6);
+    assert_eq!(histogram.try_get::<f64>("", "histogram_sum")?, 63.0);
+    assert_eq!(histogram.try_get::<f64>("", "histogram_min")?, 1.0);
+    assert_eq!(histogram.try_get::<f64>("", "histogram_max")?, 25.0);
+    assert_eq!(
+        serde_json::from_str::<Vec<f64>>(&histogram.try_get::<String>("", "histogram_bounds")?)?,
+        vec![5.0, 10.0, 20.0]
+    );
+    assert_eq!(
+        serde_json::from_str::<Vec<u64>>(
+            &histogram.try_get::<String>("", "histogram_bucket_counts")?
+        )?,
+        vec![1, 2, 2, 1]
+    );
+
+    // Production restore immediately performs this reset. Base rollups must be regenerated from raw
+    // rows because the source metric was intentionally exported while still dirty.
+    dimension_restore_repo::reset_after_full_restore(&target).await?;
+    assert_eq!(
+        telemetry_count_repo::count_hybrid(
+            &target,
+            telemetry_count_repo::RollupCountKind::Metrics,
+            Some(&source_app_id),
+            Some(&source_env_id),
+            None,
+            None,
+        )
+        .await?,
+        1
+    );
     Ok(())
+}
+
+#[test]
+fn old_v2_metric_record_without_histogram_fields_remains_readable() {
+    let record: backup_v2_repo::BackupV2Record = serde_json::from_value(serde_json::json!({
+        "type": "metric_point",
+        "data": {
+            "id": "metric-1",
+            "applicationId": "app-1",
+            "environmentId": "prod",
+            "name": "cpu.usage",
+            "metricType": "gauge",
+            "value": 42.0,
+            "unit": "percent",
+            "timestamp": 1,
+            "attributes": "{}",
+            "receivedAt": 1
+        }
+    }))
+    .unwrap();
+    let backup_v2_repo::BackupV2Record::MetricPoint(metric) = record else {
+        panic!("expected metric point");
+    };
+    assert_eq!(metric.value, 42.0);
+    assert!(metric.histogram_count.is_none());
+    assert!(metric.histogram_bounds.is_none());
+    assert!(metric.histogram_bucket_counts.is_none());
 }
 
 #[tokio::test]
