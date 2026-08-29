@@ -16,8 +16,8 @@ use tokio::{
 use super::{
     backup_repo::{
         BackupAlertRule, BackupApiKey, BackupApplication, BackupAuditLog, BackupDailyAggregate,
-        BackupEnvironment, BackupEvent, BackupLog, BackupMetricPoint, BackupNotificationChannel,
-        BackupRole, BackupRoleBinding, BackupUser,
+        BackupEnvironment, BackupEvent, BackupLog, BackupNotificationChannel, BackupRole,
+        BackupRoleBinding, BackupUser,
     },
     query::insert_batch_ignore_conflicts,
 };
@@ -118,6 +118,33 @@ pub struct BackupErrorOccurrence {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BackupMetricPointV2 {
+    pub id: String,
+    pub application_id: String,
+    pub environment_id: String,
+    pub name: String,
+    pub metric_type: String,
+    pub value: f64,
+    pub unit: Option<String>,
+    pub timestamp: i64,
+    pub attributes: String,
+    pub received_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub histogram_count: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub histogram_sum: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub histogram_min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub histogram_max: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub histogram_bounds: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub histogram_bucket_counts: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BackupDailyRollup {
     pub id: String,
     pub application_id: String,
@@ -146,7 +173,7 @@ pub enum BackupV2Record {
     AlertDelivery(BackupAlertDelivery),
     ImportRun(BackupImportRun),
     Event(BackupEvent),
-    MetricPoint(BackupMetricPoint),
+    MetricPoint(BackupMetricPointV2),
     Log(BackupLog),
     ErrorGroup(BackupErrorGroup),
     ErrorOccurrence(BackupErrorOccurrence),
@@ -531,8 +558,18 @@ fn record_to_insert(record: BackupV2Record) -> Option<InsertRow> {
         }),
         BackupV2Record::MetricPoint(v) => Some(InsertRow {
             table: "metric_points",
-            columns: &["id", "application_id", "environment_id", "name", "metric_type", "value", "unit", "timestamp", "attributes", "received_at"],
-            values: vec![v.id.into(), v.application_id.into(), v.environment_id.into(), v.name.into(), v.metric_type.into(), v.value.into(), Value::from(v.unit), v.timestamp.into(), v.attributes.into(), v.received_at.into()],
+            columns: &[
+                "id", "application_id", "environment_id", "name", "metric_type", "value", "unit",
+                "timestamp", "attributes", "received_at", "histogram_count", "histogram_sum",
+                "histogram_min", "histogram_max", "histogram_bounds", "histogram_bucket_counts",
+            ],
+            values: vec![
+                v.id.into(), v.application_id.into(), v.environment_id.into(), v.name.into(),
+                v.metric_type.into(), v.value.into(), Value::from(v.unit), v.timestamp.into(),
+                v.attributes.into(), v.received_at.into(), Value::from(v.histogram_count),
+                Value::from(v.histogram_sum), Value::from(v.histogram_min), Value::from(v.histogram_max),
+                Value::from(v.histogram_bounds), Value::from(v.histogram_bucket_counts),
+            ],
         }),
         BackupV2Record::Log(v) => Some(InsertRow {
             table: "logs",
@@ -580,7 +617,15 @@ fn table_specs() -> Vec<TableSpec> {
         TableSpec { table: "alert_deliveries", columns: &["id", "rule_id", "channel_id", "status", "attempts", "last_error", "next_attempt_at", "created_at"], mapper: map_alert_delivery },
         TableSpec { table: "import_runs", columns: &["id", "source_type", "source_hash", "application_id", "environment_id", "status", "inserted", "deduped", "rejected", "created_at"], mapper: map_import_run },
         TableSpec { table: "events", columns: &["id", "application_id", "environment_id", "name", "timestamp", "day", "anonymous_id", "session_id", "app_version", "launcher_version", "os", "attributes", "dedupe_key", "received_at"], mapper: map_event },
-        TableSpec { table: "metric_points", columns: &["id", "application_id", "environment_id", "name", "metric_type", "value", "unit", "timestamp", "attributes", "received_at"], mapper: map_metric_point },
+        TableSpec {
+            table: "metric_points",
+            columns: &[
+                "id", "application_id", "environment_id", "name", "metric_type", "value", "unit",
+                "timestamp", "attributes", "received_at", "histogram_count", "histogram_sum",
+                "histogram_min", "histogram_max", "histogram_bounds", "histogram_bucket_counts",
+            ],
+            mapper: map_metric_point,
+        },
         TableSpec { table: "logs", columns: &["id", "application_id", "environment_id", "level", "message", "logger", "trace_id", "span_id", "timestamp", "attributes", "received_at"], mapper: map_log },
         TableSpec { table: "error_groups", columns: &["id", "application_id", "environment_id", "fingerprint", "name", "message_sample", "severity", "first_seen", "last_seen", "occurrences", "last_app_version", "last_launcher_version", "last_os", "updated_at"], mapper: map_error_group },
         TableSpec { table: "error_occurrences", columns: &["id", "group_id", "application_id", "environment_id", "timestamp", "anonymous_id", "session_id", "app_version", "launcher_version", "os", "stack_trace", "handled", "attributes", "received_at"], mapper: map_error_occurrence },
@@ -624,7 +669,24 @@ fn map_event(r: QueryResult) -> Result<BackupV2Record, DbErr> {
     Ok(BackupV2Record::Event(BackupEvent { id: r.try_get("", "id")?, application_id: r.try_get("", "application_id")?, environment_id: r.try_get("", "environment_id")?, name: r.try_get("", "name")?, timestamp: r.try_get("", "timestamp")?, day: r.try_get("", "day")?, anonymous_id: r.try_get("", "anonymous_id").ok(), session_id: r.try_get("", "session_id").ok(), app_version: r.try_get("", "app_version").ok(), launcher_version: r.try_get("", "launcher_version").ok(), os: r.try_get("", "os").ok(), attributes: r.try_get("", "attributes")?, dedupe_key: r.try_get("", "dedupe_key").ok(), received_at: r.try_get("", "received_at")? }))
 }
 fn map_metric_point(r: QueryResult) -> Result<BackupV2Record, DbErr> {
-    Ok(BackupV2Record::MetricPoint(BackupMetricPoint { id: r.try_get("", "id")?, application_id: r.try_get("", "application_id")?, environment_id: r.try_get("", "environment_id")?, name: r.try_get("", "name")?, metric_type: r.try_get("", "metric_type")?, value: r.try_get("", "value")?, unit: r.try_get("", "unit").ok(), timestamp: r.try_get("", "timestamp")?, attributes: r.try_get("", "attributes")?, received_at: r.try_get("", "received_at")? }))
+    Ok(BackupV2Record::MetricPoint(BackupMetricPointV2 {
+        id: r.try_get("", "id")?,
+        application_id: r.try_get("", "application_id")?,
+        environment_id: r.try_get("", "environment_id")?,
+        name: r.try_get("", "name")?,
+        metric_type: r.try_get("", "metric_type")?,
+        value: r.try_get("", "value")?,
+        unit: r.try_get("", "unit").ok(),
+        timestamp: r.try_get("", "timestamp")?,
+        attributes: r.try_get("", "attributes")?,
+        received_at: r.try_get("", "received_at")?,
+        histogram_count: r.try_get("", "histogram_count").ok(),
+        histogram_sum: r.try_get("", "histogram_sum").ok(),
+        histogram_min: r.try_get("", "histogram_min").ok(),
+        histogram_max: r.try_get("", "histogram_max").ok(),
+        histogram_bounds: r.try_get("", "histogram_bounds").ok(),
+        histogram_bucket_counts: r.try_get("", "histogram_bucket_counts").ok(),
+    }))
 }
 fn map_log(r: QueryResult) -> Result<BackupV2Record, DbErr> {
     Ok(BackupV2Record::Log(BackupLog { id: r.try_get("", "id")?, application_id: r.try_get("", "application_id")?, environment_id: r.try_get("", "environment_id")?, level: r.try_get("", "level")?, message: r.try_get("", "message")?, logger: r.try_get("", "logger").ok(), trace_id: r.try_get("", "trace_id").ok(), span_id: r.try_get("", "span_id").ok(), timestamp: r.try_get("", "timestamp")?, attributes: r.try_get("", "attributes")?, received_at: r.try_get("", "received_at")? }))
