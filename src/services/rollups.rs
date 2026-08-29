@@ -4,7 +4,7 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr};
 use tracing::{info, warn};
 
 use crate::database::{
-    dimension_rollup_repo, first_seen_repo, rollup_repo, user_rollup_repo,
+    dimension_rollup_repo, first_seen_repo, log_error_rollup_repo, rollup_repo, user_rollup_repo,
 };
 
 const ROLLUP_INTERVAL: Duration = Duration::from_secs(2);
@@ -48,6 +48,15 @@ pub fn spawn_rollup_worker(database: DatabaseConnection) {
             && let Err(error) = promote_pending_event_sources(&database).await
         {
             warn!(error = %error, "failed to promote historical event rollup dirty sources");
+        }
+        match log_error_rollup_repo::seed_historical_dirty_days_once(&database).await {
+            Ok(seed_count) if seed_count > 0 => {
+                info!(scope_days = seed_count, "seeded historical log error rollup work");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                warn!(error = %error, "failed to seed historical log error rollups");
+            }
         }
 
         let mut interval = tokio::time::interval(ROLLUP_INTERVAL);
@@ -101,6 +110,12 @@ async fn process_ready_rollups(database: &DatabaseConnection) -> Result<usize, D
                 tokio::task::yield_now().await;
                 continue;
             }
+        }
+        if dirty.has_source(rollup_repo::DIRTY_SOURCE_LOG)
+            && !log_error_rollup_repo::recompute_claimed_day(database, &dirty).await?
+        {
+            tokio::task::yield_now().await;
+            continue;
         }
         if rollup_repo::recompute_claimed_day(database, dirty).await? {
             processed = processed.saturating_add(1);
