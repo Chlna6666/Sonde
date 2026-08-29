@@ -14,7 +14,7 @@ pub struct PendingDelivery {
     pub rule_id: String,
     pub channel_id: String,
     pub attempts: i32,
-    pub payload_json: String,
+    pub payload_json: Option<String>,
 }
 
 /// Persist an alert state transition and every outbound delivery in one transaction.
@@ -108,7 +108,6 @@ pub async fn list_due(
         .from(Alias::new("alert_deliveries"))
         .and_where(Expr::col(Alias::new("status")).eq("pending"))
         .and_where(Expr::col(Alias::new("next_attempt_at")).lte(now))
-        .and_where(Expr::col(Alias::new("payload_json")).is_not_null())
         .order_by(Alias::new("next_attempt_at"), Order::Asc)
         .order_by(Alias::new("created_at"), Order::Asc)
         .limit(limit.max(1))
