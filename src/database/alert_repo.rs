@@ -1,6 +1,6 @@
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DbErr, QueryResult,
-    sea_query::{Alias, Expr, ExprTrait, Query},
+    ConnectionTrait, DatabaseConnection, DbErr, QueryResult, TransactionTrait,
+    sea_query::{Alias, Expr, ExprTrait, Query, Value},
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -175,6 +175,7 @@ pub async fn update_rule(
     id: &str,
     rule: UpdateRule<'_>,
 ) -> Result<(), DbErr> {
+    let transaction = database.begin().await?;
     let update = Query::update()
         .table(Alias::new("alert_rules"))
         .value(Alias::new("name"), rule.name)
@@ -185,8 +186,17 @@ pub async fn update_rule(
         .value(Alias::new("cooldown_seconds"), rule.cooldown_seconds)
         .and_where(Expr::col(Alias::new("id")).eq(id))
         .to_owned();
-    database.execute(&update).await?;
-    Ok(())
+    transaction.execute(&update).await?;
+    if !rule.enabled {
+        cancel_pending_deliveries(
+            &transaction,
+            "rule_id",
+            id,
+            "alert rule was disabled before delivery",
+        )
+        .await?;
+    }
+    transaction.commit().await
 }
 
 pub async fn update_rule_state(
@@ -206,12 +216,21 @@ pub async fn update_rule_state(
 }
 
 pub async fn delete_rule(database: &DatabaseConnection, id: &str) -> Result<bool, DbErr> {
-    let del = Query::delete()
+    let transaction = database.begin().await?;
+    cancel_pending_deliveries(
+        &transaction,
+        "rule_id",
+        id,
+        "alert rule was deleted before delivery",
+    )
+    .await?;
+    let delete = Query::delete()
         .from_table(Alias::new("alert_rules"))
         .and_where(Expr::col(Alias::new("id")).eq(id))
         .to_owned();
-    let res = database.execute(&del).await?;
-    Ok(res.rows_affected() > 0)
+    let deleted = transaction.execute(&delete).await?.rows_affected() > 0;
+    transaction.commit().await?;
+    Ok(deleted)
 }
 
 // ----------------------------------------------------
@@ -284,6 +303,7 @@ pub async fn update_channel(
     config: &serde_json::Value,
     enabled: bool,
 ) -> Result<(), DbErr> {
+    let transaction = database.begin().await?;
     let update = Query::update()
         .table(Alias::new("notification_channels"))
         .value(Alias::new("name"), name)
@@ -292,17 +312,35 @@ pub async fn update_channel(
         .value(Alias::new("enabled"), enabled)
         .and_where(Expr::col(Alias::new("id")).eq(id))
         .to_owned();
-    database.execute(&update).await?;
-    Ok(())
+    transaction.execute(&update).await?;
+    if !enabled {
+        cancel_pending_deliveries(
+            &transaction,
+            "channel_id",
+            id,
+            "notification channel was disabled before delivery",
+        )
+        .await?;
+    }
+    transaction.commit().await
 }
 
 pub async fn delete_channel(database: &DatabaseConnection, id: &str) -> Result<bool, DbErr> {
-    let del = Query::delete()
+    let transaction = database.begin().await?;
+    cancel_pending_deliveries(
+        &transaction,
+        "channel_id",
+        id,
+        "notification channel was deleted before delivery",
+    )
+    .await?;
+    let delete = Query::delete()
         .from_table(Alias::new("notification_channels"))
         .and_where(Expr::col(Alias::new("id")).eq(id))
         .to_owned();
-    let res = database.execute(&del).await?;
-    Ok(res.rows_affected() > 0)
+    let deleted = transaction.execute(&delete).await?.rows_affected() > 0;
+    transaction.commit().await?;
+    Ok(deleted)
 }
 
 // ----------------------------------------------------
@@ -406,6 +444,24 @@ pub async fn list_deliveries(
         });
     }
     Ok(result)
+}
+
+async fn cancel_pending_deliveries(
+    database: &impl ConnectionTrait,
+    foreign_key: &str,
+    foreign_id: &str,
+    reason: &str,
+) -> Result<(), DbErr> {
+    let update = Query::update()
+        .table(Alias::new("alert_deliveries"))
+        .value(Alias::new("status"), "cancelled")
+        .value(Alias::new("last_error"), reason)
+        .value(Alias::new("next_attempt_at"), Value::BigInt(None))
+        .and_where(Expr::col(Alias::new(foreign_key)).eq(foreign_id))
+        .and_where(Expr::col(Alias::new("status")).eq("pending"))
+        .to_owned();
+    database.execute(&update).await?;
+    Ok(())
 }
 
 fn map_rule(row: QueryResult) -> Result<AlertRuleRecord, DbErr> {
