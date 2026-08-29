@@ -2,9 +2,10 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, TransactionTrait};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::domain::telemetry::{EventInput, LogInput, MetricInput};
+use crate::domain::telemetry::{ErrorSeverity, EventInput, LogInput, LogLevel, MetricInput};
 
 use super::{
+    log_error_rollup_repo,
     query::{insert_batch, insert_batch_ignore_conflicts},
     rollup_repo,
 };
@@ -215,6 +216,15 @@ pub async fn insert_logs(
         logs.iter().map(|log| log.timestamp.unwrap_or(received_at)),
     )
     .await?;
+    rollup_repo::mark_dirty_timestamps_for_source(
+        &transaction,
+        scope,
+        log_error_rollup_repo::DIRTY_SOURCE_LOG_ERROR,
+        logs.iter()
+            .filter(|log| matches!(&log.level, LogLevel::Error | LogLevel::Fatal))
+            .map(|log| log.timestamp.unwrap_or(received_at)),
+    )
+    .await?;
     transaction.commit().await?;
     Ok(logs.len())
 }
@@ -376,8 +386,8 @@ pub async fn insert_errors(
             }
             let attributes_json = serde_json::to_string(&attrs).map_err(json_error)?;
             let level_str = match err.severity {
-                Some(crate::domain::telemetry::ErrorSeverity::Fatal) => "fatal",
-                Some(crate::domain::telemetry::ErrorSeverity::Warning) => "warn",
+                Some(ErrorSeverity::Fatal) => "fatal",
+                Some(ErrorSeverity::Warning) => "warn",
                 _ => "error",
             };
             rows.push(vec![
@@ -404,6 +414,16 @@ pub async fn insert_errors(
         rollup_repo::DIRTY_SOURCE_LOG | rollup_repo::DIRTY_SOURCE_ERROR,
         errors
             .iter()
+            .map(|error| error.timestamp.unwrap_or(received_at)),
+    )
+    .await?;
+    rollup_repo::mark_dirty_timestamps_for_source(
+        &transaction,
+        scope,
+        log_error_rollup_repo::DIRTY_SOURCE_LOG_ERROR,
+        errors
+            .iter()
+            .filter(|error| !matches!(error.severity.as_ref(), Some(ErrorSeverity::Warning)))
             .map(|error| error.timestamp.unwrap_or(received_at)),
     )
     .await?;
