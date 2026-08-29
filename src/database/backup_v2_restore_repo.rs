@@ -2,7 +2,7 @@ use std::path::Path;
 
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbErr, TransactionTrait,
-    sea_query::{Alias, Query, Value},
+    sea_query::{Alias, Expr, ExprTrait, Query, Value},
 };
 use tokio::{
     fs::File,
@@ -15,6 +15,13 @@ use super::{
 };
 
 const RESTORE_BATCH_ROWS: usize = 256;
+const DERIVED_STATE_KEYS: &[&str] = &[
+    "telemetry_dimension_rollup_backfill_v1",
+    "telemetry_user_rollup_backfill_v1",
+    "telemetry_log_error_rollup_backfill_v2",
+    "telemetry_first_seen_backfill_v1",
+    "telemetry_first_seen_backfill_cursor_v1",
+];
 
 pub async fn restore_full_system_exact(
     database: &DatabaseConnection,
@@ -71,14 +78,18 @@ pub async fn restore_full_system_exact(
 }
 
 async fn clear_restorable_state(database: &impl ConnectionTrait) -> Result<(), DbErr> {
-    // Keep system_state and the installation config outside the archive. Everything below is either
-    // restored from the archive or intentionally ephemeral and must not survive a full restore.
+    // Rebuildable telemetry projections are cleared in the same destructive transaction as the
+    // authoritative restore. Their readiness/cursor keys are invalidated before commit, so a reader
+    // can never observe restored raw telemetry together with stale derived statistics.
     for table in [
         "auth_totp_replay",
         "auth_2fa_pending",
         "auth_sessions",
         "job_leases",
         "telemetry_dirty_days",
+        "telemetry_daily_dimensions",
+        "telemetry_daily_user_sets",
+        "telemetry_daily_log_errors",
         "alert_deliveries",
         "error_occurrences",
         "error_groups",
@@ -101,6 +112,12 @@ async fn clear_restorable_state(database: &impl ConnectionTrait) -> Result<(), D
         let delete = Query::delete().from_table(Alias::new(table)).to_owned();
         database.execute(&delete).await?;
     }
+
+    let invalidate = Query::delete()
+        .from_table(Alias::new("system_state"))
+        .and_where(Expr::col(Alias::new("key")).is_in(DERIVED_STATE_KEYS.iter().copied()))
+        .to_owned();
+    database.execute(&invalidate).await?;
     Ok(())
 }
 
