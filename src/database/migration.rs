@@ -9,6 +9,7 @@ mod error_model;
 mod first_seen_epoch;
 mod first_seen_index;
 mod job_leases;
+mod log_error_rollups;
 mod rollup_generation;
 mod tables;
 mod user_rollup_chunks;
@@ -23,6 +24,7 @@ use error_model::ErrorTelemetryModel;
 use first_seen_epoch::FirstSeenEpoch;
 use first_seen_index::FirstSeenIndex;
 use job_leases::JobLeases;
+use log_error_rollups::LogErrorRollups;
 use rollup_generation::RollupGeneration;
 use tables::{
     create_alert_tables, create_application_tables, create_identity_tables, create_import_tables,
@@ -54,6 +56,7 @@ impl MigratorTrait for Migrator {
             Box::new(FirstSeenIndex),
             Box::new(FirstSeenEpoch),
             Box::new(DirtySourceMask),
+            Box::new(LogErrorRollups),
         ]
     }
 }
@@ -300,6 +303,7 @@ impl MigrationTrait for InitialSchema {
             "telemetry_user_first_seen",
             "telemetry_daily_user_sets",
             "telemetry_daily_dimensions",
+            "telemetry_daily_log_errors",
             "job_leases",
             "telemetry_daily_rollups",
             "telemetry_dirty_days",
