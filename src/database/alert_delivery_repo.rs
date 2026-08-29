@@ -210,7 +210,8 @@ async fn finish_attempt(
     last_error: Option<&str>,
     next_attempt_at: Option<i64>,
 ) -> Result<bool, DbErr> {
-    let update = Query::update()
+    let mut update = Query::update();
+    update
         .table(Alias::new("alert_deliveries"))
         .value(Alias::new("status"), status)
         .value(Alias::new("attempts"), attempts)
@@ -226,11 +227,14 @@ async fn finish_attempt(
             next_attempt_at
                 .map(Value::from)
                 .unwrap_or(Value::BigInt(None)),
-        )
+        );
+    if status != "pending" {
+        update.value(Alias::new("payload_json"), Value::String(None));
+    }
+    update
         .and_where(Expr::col(Alias::new("id")).eq(id))
         .and_where(Expr::col(Alias::new("status")).eq("pending"))
-        .and_where(Expr::col(Alias::new("attempts")).eq(expected_attempts))
-        .to_owned();
+        .and_where(Expr::col(Alias::new("attempts")).eq(expected_attempts));
     Ok(database.execute(&update).await?.rows_affected() == 1)
 }
 
