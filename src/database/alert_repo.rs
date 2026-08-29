@@ -347,43 +347,6 @@ pub async fn delete_channel(database: &DatabaseConnection, id: &str) -> Result<b
 // Alert Deliveries History
 // ----------------------------------------------------
 
-pub async fn record_delivery(
-    database: &DatabaseConnection,
-    rule_id: &str,
-    channel_id: &str,
-    status: &str,
-    attempts: i32,
-    last_error: Option<&str>,
-) -> Result<String, DbErr> {
-    let id = Uuid::now_v7().to_string();
-    insert(
-        database,
-        "alert_deliveries",
-        &[
-            "id",
-            "rule_id",
-            "channel_id",
-            "status",
-            "attempts",
-            "last_error",
-            "next_attempt_at",
-            "created_at",
-        ],
-        vec![
-            id.clone().into(),
-            rule_id.into(),
-            channel_id.into(),
-            status.into(),
-            attempts.into(),
-            last_error.map(String::from).into(),
-            Option::<i64>::None.into(),
-            chrono::Utc::now().timestamp_millis().into(),
-        ],
-    )
-    .await?;
-    Ok(id)
-}
-
 pub async fn list_deliveries(
     database: &DatabaseConnection,
     limit: u64,
@@ -457,6 +420,7 @@ async fn cancel_pending_deliveries(
         .value(Alias::new("status"), "cancelled")
         .value(Alias::new("last_error"), reason)
         .value(Alias::new("next_attempt_at"), Value::BigInt(None))
+        .value(Alias::new("payload_json"), Value::String(None))
         .and_where(Expr::col(Alias::new(foreign_key)).eq(foreign_id))
         .and_where(Expr::col(Alias::new("status")).eq("pending"))
         .to_owned();
