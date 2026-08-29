@@ -1,8 +1,13 @@
 #![allow(clippy::unwrap_used)]
 
-use sea_orm::{ConnectionTrait, sea_query::{Alias, Expr, ExprTrait, Query}};
+use sea_orm::{
+    ConnectionTrait,
+    sea_query::{Alias, Expr, ExprTrait, Query},
+};
 use sonde::{
-    database::{self, rollup_repo, telemetry_repo},
+    database::{
+        self, dimension_rollup_repo, rollup_repo, telemetry_repo, user_rollup_repo,
+    },
     domain::telemetry::{Attributes, EventInput, LogInput, LogLevel, MetricInput, MetricType},
 };
 
@@ -121,4 +126,55 @@ async fn source_mask_merges_without_invalidating_unrelated_rollup_fields() {
     assert_eq!(row.try_get::<i64>("", "metrics").unwrap(), 1);
     assert_eq!(row.try_get::<i64>("", "logs").unwrap(), 1);
     assert_eq!(row.try_get::<i64>("", "errors").unwrap(), 0);
+}
+
+#[tokio::test]
+async fn historical_event_seeds_or_event_into_existing_metric_dirty_marker() {
+    let database = database::connect("sqlite::memory:").await.unwrap();
+    database::migrate(&database).await.unwrap();
+    let scope = telemetry_repo::TelemetryScope {
+        application_id: "app-seed-mask".into(),
+        environment_id: "prod".into(),
+    };
+    let day_start = chrono::NaiveDate::from_ymd_opt(2026, 8, 21)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+
+    telemetry_repo::insert_events(&database, &scope, &[event(day_start + 1_000)])
+        .await
+        .unwrap();
+    let initial = environment_dirty(&database, &scope.application_id, &scope.environment_id).await;
+    assert!(rollup_repo::recompute_claimed_day(&database, initial)
+        .await
+        .unwrap());
+
+    telemetry_repo::insert_metrics(&database, &scope, &[metric(day_start + 2_000)])
+        .await
+        .unwrap();
+    let metric_only = environment_dirty(&database, &scope.application_id, &scope.environment_id).await;
+    assert_eq!(metric_only.source_mask, rollup_repo::DIRTY_SOURCE_METRIC);
+
+    assert_eq!(
+        dimension_rollup_repo::seed_historical_dimension_dirty_days_once(&database)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        user_rollup_repo::seed_historical_user_dirty_days_once(&database)
+            .await
+            .unwrap(),
+        1
+    );
+
+    let promoted = environment_dirty(&database, &scope.application_id, &scope.environment_id).await;
+    assert!(promoted.has_source(rollup_repo::DIRTY_SOURCE_EVENT));
+    assert!(promoted.has_source(rollup_repo::DIRTY_SOURCE_METRIC));
+    assert_eq!(
+        promoted.source_mask,
+        rollup_repo::DIRTY_SOURCE_EVENT | rollup_repo::DIRTY_SOURCE_METRIC
+    );
 }
