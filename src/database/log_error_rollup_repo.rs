@@ -9,8 +9,10 @@ use sha2::{Digest, Sha256};
 
 use super::{rollup_repo, telemetry_repo::TelemetryScope};
 
+pub const DIRTY_SOURCE_LOG_ERROR: i64 = 1 << 4;
+
 const GLOBAL_ENVIRONMENT: &str = "*";
-const BACKFILL_KEY: &str = "telemetry_log_error_rollup_backfill_v1";
+const BACKFILL_KEY: &str = "telemetry_log_error_rollup_backfill_v2";
 
 pub async fn seed_historical_dirty_days_once(
     database: &DatabaseConnection,
@@ -27,6 +29,7 @@ pub async fn seed_historical_dirty_days_once(
             Alias::new("rollup_day"),
         )
         .from(Alias::new("logs"))
+        .and_where(Expr::col(Alias::new("level")).is_in(["error", "fatal"]))
         .distinct();
 
     let mut scopes = BTreeMap::<(String, String), Vec<i64>>::new();
@@ -53,7 +56,7 @@ pub async fn seed_historical_dirty_days_once(
         rollup_repo::mark_dirty_timestamps_for_source(
             database,
             &scope,
-            rollup_repo::DIRTY_SOURCE_LOG,
+            DIRTY_SOURCE_LOG_ERROR,
             timestamps,
         )
         .await?;
@@ -90,7 +93,7 @@ pub async fn recompute_claimed_day(
     database: &DatabaseConnection,
     dirty: &rollup_repo::DirtyDay,
 ) -> Result<bool, DbErr> {
-    if !dirty.has_source(rollup_repo::DIRTY_SOURCE_LOG) {
+    if !dirty.has_source(DIRTY_SOURCE_LOG_ERROR) {
         return Ok(true);
     }
 
