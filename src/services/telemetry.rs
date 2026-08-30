@@ -5,7 +5,7 @@ use crate::{
     database::{
         device_risk_repo,
         device_state_repo::{self, DeviceObservation, DeviceTelemetryKind, TimedDimension},
-        ingest_auth_repo,
+        ingest_auth_repo, ingest_nonce_repo,
         telemetry_repo::TelemetryScope,
     },
     domain::telemetry::{
@@ -290,16 +290,13 @@ async fn signed_scope(
         signature,
     )?;
 
-    let now = chrono::Utc::now().timestamp_millis();
-    if !installed
-        .auth_security
-        .ingest
-        .check_and_record_nonce(
-            &claims.token_id,
-            nonce,
-            claims.expires_at.min(now.saturating_add(120_000)),
-        )
-        .await
+    if !ingest_nonce_repo::record_once(
+        &installed.database,
+        &claims.token_id,
+        nonce,
+        claims.expires_at,
+    )
+    .await?
     {
         return Err(AppError::Forbidden);
     }
