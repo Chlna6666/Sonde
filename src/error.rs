@@ -5,6 +5,8 @@ use thiserror::Error;
 pub enum AppError {
     #[error("authentication required")]
     Unauthorized,
+    #[error("device-bound ingest token required; exchange the API key at /api/v1/ingest/token first")]
+    IngestTokenRequired,
     #[error("permission denied")]
     Forbidden,
     #[error("resource not found")]
@@ -71,6 +73,7 @@ impl AppError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Unauthorized => "unauthorized",
+            Self::IngestTokenRequired => "ingest_token_required",
             Self::Forbidden => "forbidden",
             Self::NotFound => "not_found",
             Self::NotInitialized => "not_initialized",
@@ -150,6 +153,14 @@ mod tests {
         let error = AppError::Validation("field is required".into());
         assert_eq!(error.code(), "validation_error");
         assert_eq!(error.public_message(), "invalid request: field is required");
+        assert!(!error.is_server_failure());
+    }
+
+    #[test]
+    fn ingest_token_requirement_is_actionable_without_server_details() {
+        let error = AppError::IngestTokenRequired;
+        assert_eq!(error.code(), "ingest_token_required");
+        assert!(error.public_message().contains("/api/v1/ingest/token"));
         assert!(!error.is_server_failure());
     }
 }
