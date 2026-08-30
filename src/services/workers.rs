@@ -5,7 +5,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{
-    database::{alert_delivery_repo, first_seen_repo},
+    database::{alert_delivery_repo, device_risk_repo, first_seen_repo},
     services::{alerts, job_lease, retention},
 };
 
@@ -18,6 +18,7 @@ const ALERT_DELIVERY_HISTORY_RETENTION_MILLIS: i64 = 90 * 86_400_000;
 const ALERT_DELIVERY_HISTORY_PRUNE_MAX: u64 = 5_000;
 const RETENTION_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
 const RETENTION_LEASE_TTL: Duration = Duration::from_secs(4 * 60 * 60 + 5 * 60);
+const DEVICE_RISK_DECAY_QUIET_MILLIS: i64 = 4 * 60 * 60 * 1_000;
 const FIRST_SEEN_BACKFILL_INTERVAL: Duration = Duration::from_secs(10);
 const FIRST_SEEN_BACKFILL_LEASE_TTL: Duration = Duration::from_secs(60);
 const FIRST_SEEN_BACKFILL_BATCH: u64 = 32;
@@ -117,9 +118,8 @@ async fn run_retention_cycle(
     database: &DatabaseConnection,
 ) -> Result<retention::RetentionReport, DbErr> {
     let report = retention::run_retention_sweep(database).await?;
-    let cutoff = chrono::Utc::now()
-        .timestamp_millis()
-        .saturating_sub(ALERT_DELIVERY_HISTORY_RETENTION_MILLIS);
+    let now = chrono::Utc::now().timestamp_millis();
+    let cutoff = now.saturating_sub(ALERT_DELIVERY_HISTORY_RETENTION_MILLIS);
     let pruned = alert_delivery_repo::prune_terminal_before(
         database,
         cutoff,
@@ -128,6 +128,12 @@ async fn run_retention_cycle(
     .await?;
     if pruned > 0 {
         info!(pruned, "pruned terminal alert delivery history");
+    }
+
+    let risk_cutoff = now.saturating_sub(DEVICE_RISK_DECAY_QUIET_MILLIS);
+    let decayed = device_risk_repo::decay_scores(database, risk_cutoff).await?;
+    if decayed > 0 {
+        info!(devices = decayed, "decayed device abuse risk after quiet period");
     }
     Ok(report)
 }
