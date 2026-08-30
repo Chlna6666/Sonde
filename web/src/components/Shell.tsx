@@ -14,6 +14,7 @@ import {
   Radio,
   Search,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   X,
   RadioTower,
@@ -39,6 +40,14 @@ const navigation = [
     colorClass: "icon-squircle-indigo",
     eyebrow: "apps.eyebrow",
     title: "apps.title",
+  },
+  {
+    to: "/devices",
+    label: "settings.security",
+    Icon: ShieldAlert,
+    colorClass: "icon-squircle-amber",
+    eyebrow: "settings.eyebrow",
+    title: "settings.security",
   },
   {
     to: "/explorer",
