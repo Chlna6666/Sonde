@@ -1,4 +1,7 @@
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, sea_query::{Alias, Expr, ExprTrait, Query}};
+use sea_orm::{
+    ConnectionTrait, DatabaseConnection, DbErr,
+    sea_query::{Alias, Expr, ExprTrait, Query},
+};
 
 pub async fn risk_score_for_device(
     database: &DatabaseConnection,
@@ -19,6 +22,35 @@ pub async fn risk_score_for_device(
         .await?
         .map(|row| row.try_get::<i32>("", "risk_score"))
         .transpose()
+}
+
+/// Record a cryptographically verified request replay against an existing device profile.
+///
+/// The signal is intentionally low weight because a client can legitimately retry a request after
+/// losing the HTTP response. Repeated replays accumulate and can still move the device into a more
+/// restrictive adaptive ingest tier. Missing profiles are left untouched because raw telemetry,
+/// not security probes, remains the authority for creating device profiles.
+pub async fn record_replay_detected(
+    database: &impl ConnectionTrait,
+    application_id: &str,
+    environment_id: &str,
+    device_hash: &str,
+    now: i64,
+) -> Result<u64, DbErr> {
+    let query = Query::update()
+        .table(Alias::new("telemetry_devices"))
+        .value(
+            Alias::new("risk_score"),
+            Expr::cust("CASE WHEN risk_score >= 98 THEN 100 ELSE risk_score + 2 END"),
+        )
+        .value(Alias::new("last_anomaly"), "replay_detected")
+        .value(Alias::new("last_anomaly_at"), now)
+        .value(Alias::new("updated_at"), now)
+        .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
+        .and_where(Expr::col(Alias::new("environment_id")).eq(environment_id))
+        .and_where(Expr::col(Alias::new("device_hash")).eq(device_hash))
+        .to_owned();
+    Ok(database.execute(&query).await?.rows_affected())
 }
 
 /// Decay device risk after a sustained period without a new anomaly.
