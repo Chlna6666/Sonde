@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   ChevronLeft,
@@ -362,7 +362,7 @@ export function DevicesPage() {
   );
 }
 
-function FilterLabel({ label, className = "", children }: { label: string; className?: string; children: React.ReactNode }) {
+function FilterLabel({ label, className = "", children }: { label: string; className?: string; children: ReactNode }) {
   return (
     <div className={className}>
       <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-[var(--muted)]">{label}</span>
