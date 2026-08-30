@@ -6,6 +6,7 @@ pub mod authentication;
 pub mod backup;
 mod error_query_models;
 pub mod errors;
+mod explorer_models;
 pub mod explorer;
 pub mod ingest_writer;
 pub mod job_lease;

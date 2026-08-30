@@ -109,7 +109,7 @@ pub async fn events(
             app_version: row.try_get("", "app_version")?,
             launcher_version: row.try_get("", "launcher_version")?,
             os: row.try_get("", "os")?,
-            attributes: json(row.try_get("", "attributes")?),
+            attributes: decode_json(row.try_get("", "attributes")?, "event attributes")?,
         })
     })
     .await
@@ -150,7 +150,7 @@ pub async fn metrics(
             histogram: decode_histogram(&row)?,
             unit: row.try_get("", "unit")?,
             timestamp: row.try_get("", "timestamp")?,
-            attributes: json(row.try_get("", "attributes")?),
+            attributes: decode_json(row.try_get("", "attributes")?, "metric attributes")?,
         })
     })
     .await
@@ -186,7 +186,7 @@ pub async fn logs(
             trace_id: row.try_get("", "trace_id")?,
             span_id: row.try_get("", "span_id")?,
             timestamp: row.try_get("", "timestamp")?,
-            attributes: json(row.try_get("", "attributes")?),
+            attributes: decode_json(row.try_get("", "attributes")?, "log attributes")?,
         })
     })
     .await
@@ -239,6 +239,11 @@ where
     };
     serde_json::from_str(&value)
         .map_err(|error| DbErr::Custom(format!("invalid {column} JSON: {error}")))
+}
+
+fn decode_json(value: String, field: &str) -> Result<JsonValue, DbErr> {
+    serde_json::from_str(&value)
+        .map_err(|error| DbErr::Custom(format!("invalid stored {field} JSON: {error}")))
 }
 
 fn apply_filter(
@@ -299,10 +304,6 @@ where
         page_size: filter.page_size,
         has_more,
     })
-}
-
-fn json(value: String) -> JsonValue {
-    serde_json::from_str(&value).unwrap_or(JsonValue::Null)
 }
 
 fn escape_like(value: &str) -> String {

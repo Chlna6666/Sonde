@@ -4,9 +4,11 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use serde::Deserialize;
 
 use crate::{
-    database::explorer_repo::ExplorerFilter,
     error::AppError,
-    services::{authentication, explorer},
+    services::{
+        authentication,
+        explorer::{self, ExplorerFilter},
+    },
     state::AppState,
 };
 
