@@ -7,6 +7,7 @@ const SetupPage = lazy(() => import("./pages/SetupPage").then((m) => ({ default:
 const LoginPage = lazy(() => import("./pages/LoginPage").then((m) => ({ default: m.LoginPage })));
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
 const ApplicationsPage = lazy(() => import("./pages/ApplicationsPage").then((m) => ({ default: m.ApplicationsPage })));
+const DevicesPage = lazy(() => import("./pages/DevicesPage").then((m) => ({ default: m.DevicesPage })));
 const AlertsPage = lazy(() => import("./pages/AlertsPage").then((m) => ({ default: m.AlertsPage })));
 const PlaceholderPage = lazy(() => import("./pages/PlaceholderPage").then((m) => ({ default: m.PlaceholderPage })));
 const MigrationPage = lazy(() => import("./pages/MigrationPage").then((m) => ({ default: m.MigrationPage })));
@@ -132,6 +133,7 @@ function AppRoutes() {
         >
           <Route index element={<DashboardPage />} />
           <Route path="applications" element={<ApplicationsPage />} />
+          <Route path="devices" element={<DevicesPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="explorer" element={<ExplorerPage />} />
           <Route path="migration" element={<MigrationPage />} />
