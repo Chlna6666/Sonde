@@ -1,4 +1,7 @@
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, SqlErr, sea_query::{Alias, Expr, ExprTrait, Query}};
+use sea_orm::{
+    ConnectionTrait, DatabaseConnection, DbErr, SqlErr,
+    sea_query::{Alias, Expr, ExprTrait, Query},
+};
 use sha2::{Digest, Sha256};
 
 use super::query;
