@@ -34,6 +34,7 @@ pub struct IngestRequestContext<'a> {
 pub struct IngestScope {
     pub application_id: String,
     pub environment_id: String,
+    source_ip: Option<String>,
     device_id: Option<String>,
     session_id: Option<String>,
     app_version: Option<String>,
@@ -289,6 +290,7 @@ pub async fn scope_from_context_with_permission(
         Ok(IngestScope {
             application_id: claims.application_id,
             environment_id: claims.environment_id,
+            source_ip: Some(request.client_ip.to_owned()),
             device_id: Some(claims.device_id),
             session_id: claims.session_id,
             app_version: claims.app_version,
@@ -303,7 +305,9 @@ pub async fn scope_from_context_with_permission(
         {
             return Err(AppError::TooManyRequests);
         }
-        scope_for_key_with_permission(installed, auth_header, required_perm).await
+        let mut scope = scope_for_key_with_permission(installed, auth_header, required_perm).await?;
+        scope.source_ip = Some(request.client_ip.to_owned());
+        Ok(scope)
     }
 }
 
@@ -336,6 +340,7 @@ pub async fn scope_for_key_with_permission(
     Ok(IngestScope {
         application_id: context.application_id,
         environment_id: context.environment_id,
+        source_ip: None,
         device_id: None,
         session_id: None,
         app_version: None,
@@ -356,6 +361,7 @@ pub async fn events(
     mut items: Vec<EventInput>,
 ) -> Result<BatchReceipt, AppError> {
     ensure_batch_size(items.len())?;
+    charge_item_budget(installed, scope, items.len()).await?;
     let (accepted, rejected) = validate_with(&mut items, |item| bind_event_dimensions(scope, item));
     let mut valid = select_valid(items, &rejected);
     let key_salt = format!("{}:{}", scope.application_id, scope.environment_id);
@@ -379,6 +385,7 @@ pub async fn metrics(
     mut items: Vec<MetricInput>,
 ) -> Result<BatchReceipt, AppError> {
     ensure_batch_size(items.len())?;
+    charge_item_budget(installed, scope, items.len()).await?;
     let (accepted, rejected) = validate_with(&mut items, |_| Ok(()));
     let valid = select_valid(items, &rejected);
     let storage_scope = scope.storage_scope();
@@ -395,6 +402,7 @@ pub async fn logs(
     mut items: Vec<LogInput>,
 ) -> Result<BatchReceipt, AppError> {
     ensure_batch_size(items.len())?;
+    charge_item_budget(installed, scope, items.len()).await?;
     let (accepted, rejected) = validate_with(&mut items, |_| Ok(()));
     let valid = select_valid(items, &rejected);
     let storage_scope = scope.storage_scope();
@@ -411,6 +419,7 @@ pub async fn errors(
     mut items: Vec<ErrorInput>,
 ) -> Result<BatchReceipt, AppError> {
     ensure_batch_size(items.len())?;
+    charge_item_budget(installed, scope, items.len()).await?;
     let (accepted, rejected) = validate_with(&mut items, |item| bind_error_dimensions(scope, item));
     let valid = select_valid(items, &rejected);
     let storage_scope = scope.storage_scope();
@@ -419,6 +428,42 @@ pub async fn errors(
         .write_errors(&storage_scope, valid)
         .await?;
     Ok(BatchReceipt { accepted, rejected })
+}
+
+async fn charge_item_budget(
+    installed: &InstalledState,
+    scope: &IngestScope,
+    item_count: usize,
+) -> Result<(), AppError> {
+    let Some(source_ip) = scope.source_ip.as_deref() else {
+        return Ok(());
+    };
+    if !installed
+        .auth_security
+        .ingest
+        .check_ip_ingest_items(source_ip, item_count)
+        .await
+    {
+        return Err(AppError::TooManyRequests);
+    }
+    if let Some(device_id) = scope.device_id.as_deref() {
+        if !installed
+            .auth_security
+            .ingest
+            .check_device_ingest_items(&scope.application_id, device_id, item_count)
+            .await
+        {
+            return Err(AppError::TooManyRequests);
+        }
+    } else if !installed
+        .auth_security
+        .ingest
+        .check_legacy_ingest_items(source_ip, item_count)
+        .await
+    {
+        return Err(AppError::TooManyRequests);
+    }
+    Ok(())
 }
 
 fn ensure_batch_size(length: usize) -> Result<(), AppError> {
@@ -620,6 +665,7 @@ mod tests {
         let scope = IngestScope {
             application_id: "app".into(),
             environment_id: "env".into(),
+            source_ip: Some("127.0.0.1".into()),
             device_id: Some("device-1234".into()),
             session_id: Some("session-1".into()),
             app_version: Some("1.0.0".into()),
