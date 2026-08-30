@@ -4,6 +4,7 @@ use crate::{database::ingest_bootstrap_repo, security::hmac_sha256};
 
 const MINUTE_MILLIS: i64 = 60_000;
 const HOUR_MILLIS: i64 = 60 * MINUTE_MILLIS;
+const PERSISTENCE_GRACE_MILLIS: i64 = 5 * MINUTE_MILLIS;
 const IP_TOKEN_REQUESTS_PER_MINUTE: i64 = 30;
 const DEVICE_TOKEN_REQUESTS_PER_MINUTE: i64 = 8;
 const NEW_DEVICES_PER_IP_PER_HOUR: i64 = 128;
@@ -137,7 +138,11 @@ async fn charge_device_token_at(
 fn fixed_window(now: i64, window_millis: i64) -> (i64, i64) {
     let window_id = now.div_euclid(window_millis);
     let start = window_id.saturating_mul(window_millis);
-    (window_id, start.saturating_add(window_millis))
+    let window_end = start.saturating_add(window_millis);
+    (
+        window_id,
+        window_end.saturating_add(PERSISTENCE_GRACE_MILLIS),
+    )
 }
 
 fn opaque_key(pepper: &[u8], purpose: &[u8], parts: &[&str], window_id: i64) -> String {
