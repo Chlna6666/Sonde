@@ -4,6 +4,7 @@ mod alert_delivery_queue;
 mod auth_shared_state;
 mod columns;
 mod daily_rollups;
+mod device_profiles;
 mod dimension_rollups;
 mod dirty_source_mask;
 mod error_model;
@@ -22,6 +23,7 @@ use alert_delivery_queue::AlertDeliveryQueue;
 use auth_shared_state::SharedAuthState;
 use columns::{bigint, create_index, create_table, string};
 use daily_rollups::DailyRollups;
+use device_profiles::DeviceProfiles;
 use dimension_rollups::DimensionRollups;
 use dirty_source_mask::DirtySourceMask;
 use error_model::ErrorTelemetryModel;
@@ -66,6 +68,7 @@ impl MigratorTrait for Migrator {
             Box::new(MetricsV2),
             Box::new(MetricsV2LegacyHistogramRepair),
             Box::new(AlertDeliveryQueue),
+            Box::new(DeviceProfiles),
         ]
     }
 }
@@ -308,6 +311,7 @@ impl MigrationTrait for InitialSchema {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for table in [
+            "telemetry_devices",
             "telemetry_first_seen_backfill_days",
             "telemetry_user_first_seen",
             "telemetry_daily_user_sets",

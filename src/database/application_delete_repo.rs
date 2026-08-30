@@ -13,8 +13,6 @@ pub async fn delete_application_exact(
 ) -> Result<(), DbErr> {
     let transaction = database.begin().await?;
 
-    // Delivery rows do not carry application_id directly, so remove them through their rule ids
-    // before deleting the rules themselves.
     let rule_query = Query::select()
         .column(Alias::new("id"))
         .from(Alias::new("alert_rules"))
@@ -34,12 +32,10 @@ pub async fn delete_application_exact(
         transaction.execute(&delete).await?;
     }
 
-    // Delete children before environments/application. These tables intentionally do not all carry
-    // foreign keys because Sonde supports three database engines and derived cache rows use virtual
-    // scopes, so lifecycle cleanup must be explicit.
     for table in [
         "error_occurrences",
         "error_groups",
+        "telemetry_devices",
         "telemetry_daily_rollups",
         "telemetry_daily_dimensions",
         "telemetry_daily_user_sets",
@@ -63,10 +59,6 @@ pub async fn delete_application_exact(
         transaction.execute(&delete).await?;
     }
 
-    // The global first-seen scope deduplicates the same anonymous user across applications. Instead
-    // of deleting the potentially huge derived index synchronously, invalidate its epoch and paging
-    // cursor in this transaction. Queries immediately fall back to raw events; the leased rebuild
-    // starts from the beginning and garbage-collects the old rows after completion.
     for key in [FIRST_SEEN_BACKFILL_KEY, FIRST_SEEN_CURSOR_KEY] {
         let clear = Query::delete()
             .from_table(Alias::new("system_state"))
