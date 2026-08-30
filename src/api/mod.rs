@@ -9,6 +9,7 @@ mod explorer;
 mod ingest;
 mod migrations;
 mod public;
+mod request_auth;
 mod setup;
 mod stats;
 mod stream;

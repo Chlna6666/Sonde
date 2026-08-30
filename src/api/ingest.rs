@@ -4,12 +4,13 @@ use actix_web::{HttpRequest, HttpResponse, http::header, web};
 use serde::de::DeserializeOwned;
 
 use crate::{
-    auth,
     domain::telemetry::{Batch, ErrorInput, EventInput, LogInput, MetricInput},
     error::AppError,
     services::telemetry::{self, IngestRequestContext, IngestTokenContext, IngestTokenRequest},
     state::AppState,
 };
+
+use super::request_auth::bearer_token;
 
 const MAX_INGEST_BODY_BYTES: usize = 1_048_576;
 const MAX_TOKEN_BODY_BYTES: usize = 16_384;
@@ -173,7 +174,7 @@ fn user_agent(request: &HttpRequest) -> &str {
 }
 
 fn extract_raw_key(request: &HttpRequest) -> Option<&str> {
-    auth::bearer_token(request)
+    bearer_token(request)
         .or_else(|| optional_header(request, "x-sonde-token"))
         .or_else(|| optional_header(request, "x-sonde-key"))
         .or_else(|| optional_header(request, "x-api-key"))

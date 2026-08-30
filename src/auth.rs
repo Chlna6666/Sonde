@@ -1,4 +1,3 @@
-use actix_web::HttpRequest;
 use argon2::{
     Algorithm, Argon2, Params, Version,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -83,22 +82,6 @@ pub fn random_bytes(byte_length: usize) -> Vec<u8> {
 
 pub fn token_hash(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
-}
-
-pub fn session_token(request: &HttpRequest) -> Option<String> {
-    request
-        .cookie(SESSION_COOKIE)
-        .or_else(|| request.cookie(DEVELOPMENT_SESSION_COOKIE))
-        .map(|cookie| cookie.value().to_owned())
-}
-
-pub fn bearer_token(request: &HttpRequest) -> Option<&str> {
-    request
-        .headers()
-        .get("authorization")?
-        .to_str()
-        .ok()?
-        .strip_prefix("Bearer ")
 }
 
 #[cfg(test)]

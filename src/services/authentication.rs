@@ -1,5 +1,3 @@
-use actix_web::HttpRequest;
-
 use crate::{
     auth,
     database::{auth_repo, auth_state_repo},
@@ -8,6 +6,11 @@ use crate::{
     security::LoginGate,
     state::InstalledState,
 };
+
+pub trait AuthRequest {
+    fn session_token(&self) -> Option<String>;
+    fn csrf_token(&self) -> Option<&str>;
+}
 
 pub struct LoginInput<'a> {
     pub email: &'a str,
@@ -145,10 +148,11 @@ pub async fn login(
         return Ok(LoginResult::RequiresTwoFactor { temp_token });
     }
 
-    let (session_token, csrf_token) = auth_state_repo::create_session(&installed.database, &credential.id)
-        .await
-        .map_err(AppError::from)
-        .map_err(LoginFailure::Application)?;
+    let (session_token, csrf_token) =
+        auth_state_repo::create_session(&installed.database, &credential.id)
+            .await
+            .map_err(AppError::from)
+            .map_err(LoginFailure::Application)?;
     let user = load_user(installed, credential)
         .await
         .map_err(LoginFailure::Application)?;
@@ -285,7 +289,7 @@ pub async fn disable_2fa(
 
 pub async fn authenticate(
     installed: &InstalledState,
-    request: &HttpRequest,
+    request: &impl AuthRequest,
 ) -> Result<AuthenticatedUser, AppError> {
     authenticate_session(installed, request)
         .await
@@ -294,29 +298,28 @@ pub async fn authenticate(
 
 pub async fn current_user(
     installed: &InstalledState,
-    request: &HttpRequest,
+    request: &impl AuthRequest,
 ) -> Result<(AuthenticatedUser, String), AppError> {
     authenticate_session(installed, request).await
 }
 
 pub async fn authenticate_mutation(
     installed: &InstalledState,
-    request: &HttpRequest,
+    request: &impl AuthRequest,
 ) -> Result<AuthenticatedUser, AppError> {
     let (user, expected_csrf) = authenticate_session(installed, request).await?;
-    let supplied_csrf = request
-        .headers()
-        .get("x-csrf-token")
-        .and_then(|value| value.to_str().ok())
-        .ok_or(AppError::Forbidden)?;
+    let supplied_csrf = request.csrf_token().ok_or(AppError::Forbidden)?;
     if supplied_csrf != expected_csrf {
         return Err(AppError::Forbidden);
     }
     Ok(user)
 }
 
-pub async fn logout(installed: &InstalledState, request: &HttpRequest) -> Result<(), AppError> {
-    if let Some(token) = auth::session_token(request) {
+pub async fn logout(
+    installed: &InstalledState,
+    request: &impl AuthRequest,
+) -> Result<(), AppError> {
+    if let Some(token) = request.session_token() {
         auth_state_repo::revoke_session(&installed.database, &auth::token_hash(&token)).await?;
     }
     Ok(())
@@ -356,9 +359,9 @@ async fn require_login_gate(
 
 async fn authenticate_session(
     installed: &InstalledState,
-    request: &HttpRequest,
+    request: &impl AuthRequest,
 ) -> Result<(AuthenticatedUser, String), AppError> {
-    let token = auth::session_token(request).ok_or(AppError::Unauthorized)?;
+    let token = request.session_token().ok_or(AppError::Unauthorized)?;
     let session = auth_state_repo::session(&installed.database, &auth::token_hash(&token))
         .await?
         .ok_or(AppError::Unauthorized)?;
