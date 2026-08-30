@@ -8,25 +8,42 @@ use crate::{
     state::InstalledState,
 };
 
+pub use super::application_models::{
+    ApiKeyDetail, AppMemberSummary, ApplicationSummary, EnvironmentSummary, PublicApplicationInfo,
+    UpdateApplicationParams,
+};
+
 pub async fn list(
     installed: &InstalledState,
     user: &AuthenticatedUser,
-) -> Result<Vec<app_repo::ApplicationSummary>, AppError> {
+) -> Result<Vec<ApplicationSummary>, AppError> {
     let is_admin = user
         .roles
         .iter()
         .any(|r| r == "Super Admin" || r == "Admin")
         || user.grants.iter().any(|g| g.allows("*", None));
-    Ok(app_repo::list_applications(&installed.database, Some(&user.id), is_admin).await?)
+    let records =
+        app_repo::list_applications(&installed.database, Some(&user.id), is_admin).await?;
+    Ok(records.into_iter().map(map_application).collect())
+}
+
+pub async fn public_by_slug(
+    installed: &InstalledState,
+    slug: &str,
+) -> Result<Option<PublicApplicationInfo>, AppError> {
+    Ok(app_repo::get_public_application_by_slug(&installed.database, slug)
+        .await?
+        .map(map_public_application))
 }
 
 pub async fn list_environments(
     installed: &InstalledState,
     user: &AuthenticatedUser,
     application_id: &str,
-) -> Result<Vec<app_repo::EnvironmentSummary>, AppError> {
+) -> Result<Vec<EnvironmentSummary>, AppError> {
     ensure_app_access(&installed.database, user, application_id, false).await?;
-    Ok(app_repo::list_environments(&installed.database, application_id).await?)
+    let records = app_repo::list_environments(&installed.database, application_id).await?;
+    Ok(records.into_iter().map(map_environment).collect())
 }
 
 pub async fn create(
@@ -53,9 +70,10 @@ pub async fn list_keys(
     installed: &InstalledState,
     user: &AuthenticatedUser,
     application_id: &str,
-) -> Result<Vec<app_repo::ApiKeyDetail>, AppError> {
+) -> Result<Vec<ApiKeyDetail>, AppError> {
     ensure_app_access(&installed.database, user, application_id, false).await?;
-    Ok(app_repo::list_api_keys(&installed.database, application_id).await?)
+    let records = app_repo::list_api_keys(&installed.database, application_id).await?;
+    Ok(records.into_iter().map(map_api_key).collect())
 }
 
 pub async fn create_key(
@@ -199,18 +217,29 @@ pub async fn regenerate_key(
     Ok(raw_key)
 }
 
-pub use crate::database::app_repo::UpdateApplicationParams;
-
 pub async fn update(
     installed: &InstalledState,
     user: &AuthenticatedUser,
     application_id: &str,
-    mut params: UpdateApplicationParams<'_>,
+    params: UpdateApplicationParams<'_>,
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
     validate_application(params.name, params.slug)?;
-    params.retention_days = params.retention_days.clamp(0, 36500);
-    app_repo::update_application(&installed.database, application_id, params).await?;
+    app_repo::update_application(
+        &installed.database,
+        application_id,
+        app_repo::UpdateApplicationParams {
+            name: params.name,
+            slug: params.slug,
+            retention_days: params.retention_days.clamp(0, 36500),
+            is_public: params.is_public,
+            description: params.description,
+            github_url: params.github_url,
+            website_url: params.website_url,
+            custom_header: params.custom_header,
+        },
+    )
+    .await?;
     app_repo::audit(
         &installed.database,
         Some(&user.id),
@@ -244,9 +273,10 @@ pub async fn list_members(
     installed: &InstalledState,
     user: &AuthenticatedUser,
     application_id: &str,
-) -> Result<Vec<app_repo::AppMemberSummary>, AppError> {
+) -> Result<Vec<AppMemberSummary>, AppError> {
     ensure_app_access(&installed.database, user, application_id, false).await?;
-    Ok(app_repo::list_application_members(&installed.database, application_id).await?)
+    let records = app_repo::list_application_members(&installed.database, application_id).await?;
+    Ok(records.into_iter().map(map_member).collect())
 }
 
 pub async fn grant_member(
@@ -335,4 +365,70 @@ fn validate_application(name: &str, slug: &str) -> Result<(), AppError> {
         ));
     }
     Ok(())
+}
+
+fn map_application(record: app_repo::ApplicationSummary) -> ApplicationSummary {
+    ApplicationSummary {
+        id: record.id,
+        name: record.name,
+        slug: record.slug,
+        retention_days: record.retention_days,
+        owner_user_id: record.owner_user_id,
+        is_public: record.is_public,
+        description: record.description,
+        github_url: record.github_url,
+        website_url: record.website_url,
+        custom_header: record.custom_header,
+        created_at: record.created_at,
+    }
+}
+
+fn map_public_application(record: app_repo::PublicApplicationInfo) -> PublicApplicationInfo {
+    PublicApplicationInfo {
+        id: record.id,
+        name: record.name,
+        slug: record.slug,
+        is_public: record.is_public,
+        description: record.description,
+        github_url: record.github_url,
+        website_url: record.website_url,
+        custom_header: record.custom_header,
+        created_at: record.created_at,
+    }
+}
+
+fn map_environment(record: app_repo::EnvironmentSummary) -> EnvironmentSummary {
+    EnvironmentSummary {
+        id: record.id,
+        application_id: record.application_id,
+        name: record.name,
+        slug: record.slug,
+    }
+}
+
+fn map_member(record: app_repo::AppMemberSummary) -> AppMemberSummary {
+    AppMemberSummary {
+        user_id: record.user_id,
+        username: record.username,
+        email: record.email,
+        role: record.role,
+        granted_at: record.granted_at,
+    }
+}
+
+fn map_api_key(record: app_repo::ApiKeyDetail) -> ApiKeyDetail {
+    ApiKeyDetail {
+        id: record.id,
+        application_id: record.application_id,
+        environment_id: record.environment_id,
+        environment_name: record.environment_name,
+        name: record.name,
+        key_prefix: record.key_prefix,
+        scopes: record.scopes,
+        expires_at: record.expires_at,
+        last_used_at: record.last_used_at,
+        revoked_at: record.revoked_at,
+        created_at: record.created_at,
+        is_active: record.is_active,
+    }
 }

@@ -4,9 +4,9 @@ use actix_web::{HttpResponse, Responder, web};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    database::{app_repo, stats_repo},
+    database::stats_repo,
     error::AppError,
-    services::statistics,
+    services::{applications, statistics},
     state::AppState,
 };
 
@@ -19,7 +19,7 @@ struct PublicStatsQuery {
 #[serde(rename_all = "camelCase")]
 pub struct PublicApplicationDetails {
     #[serde(flatten)]
-    pub application: app_repo::PublicApplicationInfo,
+    pub application: applications::PublicApplicationInfo,
     pub stats: stats_repo::AppTelemetryStats,
 }
 
@@ -38,7 +38,7 @@ async fn get_public_application(
     let _permit = state.try_acquire_analytics()?;
     let installed = state.installed().await?;
     let slug = path.into_inner();
-    let app = app_repo::get_public_application_by_slug(&installed.database, &slug)
+    let app = applications::public_by_slug(&installed, &slug)
         .await?
         .ok_or(AppError::NotFound)?;
     let days = statistics::validate_days(query.days)?;

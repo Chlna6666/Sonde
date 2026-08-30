@@ -1,5 +1,6 @@
 pub mod access;
 pub mod alerts;
+mod application_models;
 pub mod applications;
 pub mod authentication;
 pub mod backup;
