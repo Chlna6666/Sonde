@@ -18,9 +18,6 @@ const IP_TOKEN_REQUESTS_PER_MINUTE: u64 = 30;
 const IP_INGEST_REQUESTS_PER_MINUTE: u64 = 120;
 const IP_INGEST_BYTES_PER_MINUTE: u64 = 8 * 1024 * 1024;
 const IP_INGEST_ITEMS_PER_MINUTE: u64 = 10_000;
-const LEGACY_INGEST_REQUESTS_PER_MINUTE: u64 = 30;
-const LEGACY_INGEST_BYTES_PER_MINUTE: u64 = 1024 * 1024;
-const LEGACY_INGEST_ITEMS_PER_MINUTE: u64 = 1_000;
 const DEVICE_INGEST_REQUESTS_PER_MINUTE: u64 = 60;
 const DEVICE_INGEST_BYTES_PER_MINUTE: u64 = 2 * 1024 * 1024;
 const DEVICE_INGEST_ITEMS_PER_MINUTE: u64 = 2_000;
@@ -104,9 +101,6 @@ pub struct IngestSecurity {
     ip_ingest_rate: Mutex<HashMap<String, RateBucket>>,
     ip_ingest_bytes: Mutex<HashMap<String, RateBucket>>,
     ip_ingest_items: Mutex<HashMap<String, RateBucket>>,
-    legacy_ingest_rate: Mutex<HashMap<String, RateBucket>>,
-    legacy_ingest_bytes: Mutex<HashMap<String, RateBucket>>,
-    legacy_ingest_items: Mutex<HashMap<String, RateBucket>>,
     device_rate: Mutex<HashMap<String, RateBucket>>,
     device_ingest_bytes: Mutex<HashMap<String, RateBucket>>,
     device_ingest_items: Mutex<HashMap<String, RateBucket>>,
@@ -129,9 +123,6 @@ impl IngestSecurity {
             ip_ingest_rate: Mutex::new(HashMap::new()),
             ip_ingest_bytes: Mutex::new(HashMap::new()),
             ip_ingest_items: Mutex::new(HashMap::new()),
-            legacy_ingest_rate: Mutex::new(HashMap::new()),
-            legacy_ingest_bytes: Mutex::new(HashMap::new()),
-            legacy_ingest_items: Mutex::new(HashMap::new()),
             device_rate: Mutex::new(HashMap::new()),
             device_ingest_bytes: Mutex::new(HashMap::new()),
             device_ingest_items: Mutex::new(HashMap::new()),
@@ -184,43 +175,6 @@ impl IngestSecurity {
             ip,
             item_count.max(1) as u64,
             IP_INGEST_ITEMS_PER_MINUTE,
-            RATE_WINDOW_MILLIS,
-            20_000,
-        )
-        .await
-    }
-
-    /// Direct API-key ingestion is retained for compatibility but has a smaller abuse budget.
-    pub async fn check_legacy_ingest_budget(&self, ip: &str, body_bytes: usize) -> bool {
-        if !charge_rate(
-            &self.legacy_ingest_rate,
-            ip,
-            1,
-            LEGACY_INGEST_REQUESTS_PER_MINUTE,
-            RATE_WINDOW_MILLIS,
-            20_000,
-        )
-        .await
-        {
-            return false;
-        }
-        charge_rate(
-            &self.legacy_ingest_bytes,
-            ip,
-            body_bytes.max(1) as u64,
-            LEGACY_INGEST_BYTES_PER_MINUTE,
-            RATE_WINDOW_MILLIS,
-            20_000,
-        )
-        .await
-    }
-
-    pub async fn check_legacy_ingest_items(&self, ip: &str, item_count: usize) -> bool {
-        charge_rate(
-            &self.legacy_ingest_items,
-            ip,
-            item_count.max(1) as u64,
-            LEGACY_INGEST_ITEMS_PER_MINUTE,
             RATE_WINDOW_MILLIS,
             20_000,
         )
@@ -416,35 +370,6 @@ impl IngestSecurity {
 
     pub fn signing_key_for_claims(&self, claims: &IngestTokenClaims, pepper: &[u8]) -> String {
         derive_ingest_signing_key(pepper, &claims.token_id)
-    }
-
-    pub fn verify_request_signature(
-        signing_key: &str,
-        timestamp_ms: i64,
-        nonce: &str,
-        body: &[u8],
-        provided_sig_hex: &str,
-    ) -> Result<(), AppError> {
-        let now = chrono::Utc::now().timestamp_millis();
-        if (now - timestamp_ms).abs() > 60_000 {
-            return Err(AppError::Validation(
-                "request timestamp drift too large (allowed +/- 60s)".into(),
-            ));
-        }
-
-        let mut data_to_sign = Vec::with_capacity(64 + body.len());
-        data_to_sign.extend_from_slice(timestamp_ms.to_string().as_bytes());
-        data_to_sign.push(b'\n');
-        data_to_sign.extend_from_slice(nonce.as_bytes());
-        data_to_sign.push(b'\n');
-        data_to_sign.extend_from_slice(body);
-
-        let provided_sig = hex::decode(provided_sig_hex).map_err(|_| AppError::Forbidden)?;
-        if !verify_hmac_sha256(signing_key.as_bytes(), &data_to_sign, &provided_sig) {
-            return Err(AppError::Forbidden);
-        }
-
-        Ok(())
     }
 }
 
@@ -683,7 +608,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_hmac_and_ingest_token_and_anti_replay() {
+    fn ingest_token_and_nonce_replay_protection() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -734,38 +659,6 @@ pub mod tests {
                 !ingest
                     .check_and_record_nonce("token-1", "nonce-abc", now + 120_000)
                     .await
-            );
-
-            let body = b"{\"items\":[]}";
-            let mut data_to_sign = Vec::new();
-            data_to_sign.extend_from_slice(now.to_string().as_bytes());
-            data_to_sign.push(b'\n');
-            data_to_sign.extend_from_slice(b"nonce-xyz");
-            data_to_sign.push(b'\n');
-            data_to_sign.extend_from_slice(body);
-
-            let sig = hmac_sha256(signing_key.as_bytes(), &data_to_sign);
-            let sig_hex = hex::encode(sig);
-
-            assert!(
-                IngestSecurity::verify_request_signature(
-                    &signing_key,
-                    now,
-                    "nonce-xyz",
-                    body,
-                    &sig_hex,
-                )
-                .is_ok()
-            );
-            assert!(
-                IngestSecurity::verify_request_signature(
-                    &signing_key,
-                    now,
-                    "nonce-xyz",
-                    b"tampered",
-                    &sig_hex,
-                )
-                .is_err()
             );
         });
     }
