@@ -20,7 +20,7 @@ struct ErrorBody<'a> {
 impl ResponseError for AppError {
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            Self::Unauthorized | Self::IngestTokenRequired => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::NotInitialized | Self::ServiceUnavailable { .. } => {
@@ -134,6 +134,14 @@ mod tests {
         assert_eq!(
             AppError::internal("serialize token", "unexpected state").status_code(),
             StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn direct_api_key_ingest_requires_device_token() {
+        assert_eq!(
+            AppError::IngestTokenRequired.status_code(),
+            StatusCode::UNAUTHORIZED
         );
     }
 }
