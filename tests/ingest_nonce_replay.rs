@@ -94,6 +94,7 @@ async fn signed_ingest_replay_is_rejected_across_independent_installed_states(
     )?;
 
     let timestamp = chrono::Utc::now().timestamp_millis();
+    let timestamp_header = timestamp.to_string();
     let nonce = "nonce-cross-replica-0001";
     let path = "/api/v1/ingest/events";
     let body = br#"{"items":[]}"#;
@@ -101,7 +102,14 @@ async fn signed_ingest_replay_is_rejected_across_independent_installed_states(
 
     let first = telemetry::scope_from_context_with_permission(
         &state_a,
-        request_context(&token, &signature, timestamp, nonce, user_agent, path),
+        request_context(
+            &token,
+            &signature,
+            &timestamp_header,
+            nonce,
+            user_agent,
+            path,
+        ),
         "telemetry.events",
         body,
     )
@@ -110,7 +118,14 @@ async fn signed_ingest_replay_is_rejected_across_independent_installed_states(
 
     let replay = telemetry::scope_from_context_with_permission(
         &state_b,
-        request_context(&token, &signature, timestamp, nonce, user_agent, path),
+        request_context(
+            &token,
+            &signature,
+            &timestamp_header,
+            nonce,
+            user_agent,
+            path,
+        ),
         "telemetry.events",
         body,
     )
@@ -123,12 +138,11 @@ async fn signed_ingest_replay_is_rejected_across_independent_installed_states(
 fn request_context<'a>(
     token: &'a str,
     signature: &'a str,
-    timestamp: i64,
+    timestamp: &'a str,
     nonce: &'a str,
     user_agent: &'a str,
     path: &'a str,
 ) -> IngestRequestContext<'a> {
-    let timestamp = Box::leak(timestamp.to_string().into_boxed_str());
     IngestRequestContext {
         client_ip: "127.0.0.1",
         user_agent,
