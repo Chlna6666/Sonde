@@ -3,6 +3,7 @@ mod alerts;
 mod applications;
 mod authentication;
 mod backup;
+mod error_response;
 mod errors;
 mod explorer;
 mod ingest;
