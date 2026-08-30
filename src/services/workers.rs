@@ -5,7 +5,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{
-    database::{alert_delivery_repo, device_risk_repo, first_seen_repo},
+    database::{alert_delivery_repo, device_risk_repo, first_seen_repo, ingest_nonce_repo},
     services::{alerts, job_lease, retention},
 };
 
@@ -19,6 +19,8 @@ const ALERT_DELIVERY_HISTORY_PRUNE_MAX: u64 = 5_000;
 const RETENTION_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
 const RETENTION_LEASE_TTL: Duration = Duration::from_secs(4 * 60 * 60 + 5 * 60);
 const DEVICE_RISK_DECAY_QUIET_MILLIS: i64 = 4 * 60 * 60 * 1_000;
+const NONCE_REPLAY_CLEANUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const NONCE_REPLAY_CLEANUP_LEASE_TTL: Duration = Duration::from_secs(60);
 const FIRST_SEEN_BACKFILL_INTERVAL: Duration = Duration::from_secs(10);
 const FIRST_SEEN_BACKFILL_LEASE_TTL: Duration = Duration::from_secs(60);
 const FIRST_SEEN_BACKFILL_BATCH: u64 = 32;
@@ -27,6 +29,7 @@ pub fn spawn_leased_workers(database: DatabaseConnection) {
     spawn_alert_worker(database.clone());
     spawn_alert_delivery_worker(database.clone());
     spawn_retention_worker(database.clone());
+    spawn_nonce_replay_cleanup_worker(database.clone());
     spawn_first_seen_backfill_worker(database);
 }
 
@@ -136,6 +139,40 @@ async fn run_retention_cycle(
         info!(devices = decayed, "decayed device abuse risk after quiet period");
     }
     Ok(report)
+}
+
+fn spawn_nonce_replay_cleanup_worker(database: DatabaseConnection) {
+    let holder_id = format!("ingest-nonce-cleanup:{}", Uuid::now_v7());
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(NONCE_REPLAY_CLEANUP_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            match job_lease::run_with_lease(
+                &database,
+                "ingest-nonce-cleanup-v1",
+                &holder_id,
+                NONCE_REPLAY_CLEANUP_LEASE_TTL,
+                || async {
+                    ingest_nonce_repo::cleanup_expired(
+                        &database,
+                        chrono::Utc::now().timestamp_millis(),
+                    )
+                    .await
+                },
+            )
+            .await
+            {
+                Ok(Some(pruned)) if pruned > 0 => {
+                    info!(pruned, "pruned expired ingest nonce replay records");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    warn!(error = %error, "leased ingest nonce cleanup encountered an error");
+                }
+            }
+        }
+    });
 }
 
 fn spawn_first_seen_backfill_worker(database: DatabaseConnection) {
