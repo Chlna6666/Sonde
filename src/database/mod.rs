@@ -19,6 +19,7 @@ pub mod explorer_repo;
 pub mod first_seen_repo;
 pub mod import_repo;
 pub mod ingest_auth_repo;
+pub mod ingest_nonce_repo;
 pub mod job_lease_repo;
 pub mod legacy_backup_repo;
 pub mod log_error_rollup_repo;
