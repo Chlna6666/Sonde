@@ -298,6 +298,34 @@ async fn signed_scope(
     )
     .await?
     {
+        let device_hash = anonymous_hash(
+            &claims.device_id,
+            &format!("{}:{}", claims.application_id, claims.environment_id),
+        );
+        let now = chrono::Utc::now().timestamp_millis();
+        if let Err(error) = device_risk_repo::record_replay_detected(
+            &installed.database,
+            &claims.application_id,
+            &claims.environment_id,
+            &device_hash,
+            now,
+        )
+        .await
+        {
+            warn!(
+                error = %error,
+                application_id = %claims.application_id,
+                environment_id = %claims.environment_id,
+                "failed to record verified ingest replay risk signal"
+            );
+        }
+        warn!(
+            application_id = %claims.application_id,
+            environment_id = %claims.environment_id,
+            source_ip = %request.client_ip,
+            device_hash = %device_hash,
+            "replayed signed ingest request rejected"
+        );
         return Err(AppError::Forbidden);
     }
 
