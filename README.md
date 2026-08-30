@@ -15,7 +15,7 @@ Sonde is a self-hosted telemetry analytics platform for teams that operate more 
 
 ## Security and privacy
 
-Sonde is designed for self-hosted deployments. Passwords use Argon2id; interactive sessions remain process-local; RBAC, CSRF validation, and adaptive login protection are included.
+Sonde is designed for self-hosted deployments. Passwords use Argon2id; interactive sessions, temporary 2FA state, and TOTP replay protection are stored in the configured database. RBAC, CSRF validation, and adaptive login protection are included. Ingest rate limits, login challenges, and ingest nonce replay caches are currently process-local, so horizontally scaled deployments should use a consistent routing or shared enforcement layer for those controls.
 
 Do not commit the generated `data/` directory, database files, `sonde.password-pepper`, production connection strings, ingest keys, or local `.env` files. The repository's [`.gitignore`](.gitignore) excludes these by default. Use [`.env.example`](.env.example) only as a starting point for local configuration.
 
@@ -31,7 +31,7 @@ Open <http://127.0.0.1:8080> and complete the initialization wizard. Docker pers
 
 ## Local development
 
-Requirements: Rust 1.85+, Node.js 22+, and pnpm 10+.
+Requirements: Rust 1.94+, Node.js 22+, and pnpm 10+.
 
 Start the frontend with hot reload:
 

@@ -15,7 +15,7 @@ Sonde 是面向多应用团队的自托管遥测分析平台。它将高吞吐�
 
 ## 安全与隐私
 
-Sonde 面向自托管部署：密码采用 Argon2id 哈希，交互会话仅保留在服务进程内，并提供 RBAC、CSRF 校验和自适应登录防护。
+Sonde 面向自托管部署：密码采用 Argon2id 哈希；交互会话、临时 2FA 状态与 TOTP 防重放状态存储在已配置的数据库中，并提供 RBAC、CSRF 校验和自适应登录防护。当前摄入限流、登录挑战与摄入 Nonce 防重放缓存仍属于进程内状态，因此水平扩展部署应采用一致路由或共享的安全控制层来统一这些约束。
 
 请勿提交运行时生成的 `data/` 目录、数据库文件、`sonde.password-pepper`、生产环境连接串、摄入密钥或本地 `.env` 文件。仓库的 [`.gitignore`](.gitignore) 已默认排除这些内容；本地配置请从脱敏的 [`.env.example`](.env.example) 开始。
 
@@ -31,7 +31,7 @@ docker compose up -d --build
 
 ## 本地开发
 
-依赖：Rust 1.85+、Node.js 22+、pnpm 10+。
+依赖：Rust 1.94+、Node.js 22+、pnpm 10+。
 
 先启动支持热更新的前端：
 
