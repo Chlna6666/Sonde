@@ -1,10 +1,5 @@
-import { useState } from "react";
-import { useTranslation } from "react-i18next";
-import {
-  Copy,
-  Check,
-  Sliders,
-} from "lucide-react";
+import { useMemo, useState } from "react";
+import { Check, Copy, KeyRound, ShieldCheck } from "lucide-react";
 import { Modal } from "./Modal";
 
 export type IntegrationDocsModalProps = {
@@ -19,676 +14,385 @@ export type IntegrationDocsModalProps = {
 
 type LanguageTab = "rust" | "typescript" | "go" | "python" | "csharp" | "cpp" | "curl";
 
+const tabs: Array<{ id: LanguageTab; label: string }> = [
+  { id: "rust", label: "Rust" },
+  { id: "typescript", label: "TypeScript / JS" },
+  { id: "go", label: "Go" },
+  { id: "python", label: "Python" },
+  { id: "csharp", label: "C# / .NET" },
+  { id: "cpp", label: "C++" },
+  { id: "curl", label: "cURL / shell" },
+];
+
 export function IntegrationDocsModal({
   isOpen,
   onClose,
   app,
   apiKeyPrefix,
 }: IntegrationDocsModalProps) {
-  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<LanguageTab>("rust");
-  const [disableLogs, setDisableLogs] = useState(false);
-  const [captureErrors, setCaptureErrors] = useState(true);
   const [copied, setCopied] = useState(false);
-
   const origin = typeof window !== "undefined" ? window.location.origin : "https://telemetry.yourdomain.com";
-  const apiKeyPlaceholder = apiKeyPrefix ? `${apiKeyPrefix}********************` : "sonde_key_xxxxxxxxxxxxxxxxxxxxxxxx";
+  const apiKeyPlaceholder = apiKeyPrefix
+    ? `${apiKeyPrefix}********************`
+    : "sonde_key_xxxxxxxxxxxxxxxxxxxxxxxx";
+  const codeSnippet = useMemo(
+    () => buildSnippet(activeTab, origin, apiKeyPlaceholder),
+    [activeTab, origin, apiKeyPlaceholder],
+  );
 
-  const generateCode = (lang: LanguageTab) => {
-    switch (lang) {
-      case "rust":
-        return `// Cargo.toml
-// [dependencies]
-// serde = { version = "1.0", features = ["derive"] }
-// serde_json = "1.0"
-// reqwest = { version = "0.12", features = ["json"] }
-// tokio = { version = "1", features = ["full"] }
-
-use reqwest::Client;
-use serde_json::json;
-
-pub struct SondeClient {
-    client: Client,
-    endpoint: String,
-    api_key: String,
-    disable_logs: bool,
-}
-
-impl SondeClient {
-    pub fn new(api_key: &str) -> Self {
-        Self {
-            client: Client::new(),
-            endpoint: "${origin}/api/v1/ingest".into(),
-            api_key: api_key.into(),
-            disable_logs: ${disableLogs},
-        }
-    }
-
-    /// 上报事件 (包含匿名设备 ID、日活与版本)
-    pub async fn track_event(&self, name: &str, device_id: &str, version: &str) -> Result<(), reqwest::Error> {
-        let payload = json!({
-            "items": [{
-                "name": name,
-                "anonymousId": device_id,
-                "appVersion": version,
-                "os": std::env::consts::OS,
-                "timestamp": chrono::Utc::now().timestamp_millis(),
-                "attributes": {
-                    "env": "production"
-                }
-            }]
-        });
-
-        self.client
-            .post(format!("{}/events", self.endpoint))
-            .header("x-sonde-key", &self.api_key)
-            .json(&payload)
-            .send()
-            .await?;
-        Ok(())
-    }
-${captureErrors ? `
-    /// 规范化上报崩溃与错误信号
-    pub async fn report_error(&self, err_type: &str, message: &str, stack: Option<&str>, handled: bool) -> Result<(), reqwest::Error> {
-        let payload = json!({
-            "items": [{
-                "name": err_type,
-                "message": message,
-                "stackTrace": stack,
-                "severity": if handled { "error" } else { "fatal" },
-                "handled": handled,
-                "timestamp": chrono::Utc::now().timestamp_millis()
-            }]
-        });
-
-        self.client
-            .post(format!("{}/errors", self.endpoint))
-            .header("x-sonde-key", &self.api_key)
-            .json(&payload)
-            .send()
-            .await?;
-        Ok(())
-    }` : ""}${!disableLogs ? `
-    /// 上报运行日志
-    pub async fn log(&self, level: &str, msg: &str) -> Result<(), reqwest::Error> {
-        if self.disable_logs { return Ok(()); }
-        let payload = json!({
-            "items": [{
-                "level": level,
-                "message": msg,
-                "timestamp": chrono::Utc::now().timestamp_millis()
-            }]
-        });
-
-        self.client
-            .post(format!("{}/logs", self.endpoint))
-            .header("x-sonde-key", &self.api_key)
-            .json(&payload)
-            .send()
-            .await?;
-        Ok(())
-    }` : ""}
-}
-
-#[tokio::main]
-async fn main() {
-    let client = SondeClient::new("${apiKeyPlaceholder}");
-    client.track_event("app_startup", "device-uuid-1234", "1.0.0").await.unwrap();
-}`;
-
-      case "typescript":
-        return `// npm install axios
-import axios from "axios";
-
-export interface SondeConfig {
-  apiKey: string;
-  endpoint?: string;
-  disableLogs?: boolean;
-  autoCaptureErrors?: boolean;
-}
-
-export class SondeTelemetry {
-  private apiKey: string;
-  private endpoint: string;
-  private disableLogs: boolean;
-
-  constructor(config: SondeConfig) {
-    this.apiKey = config.apiKey;
-    this.endpoint = config.endpoint || "${origin}/api/v1/ingest";
-    this.disableLogs = config.disableLogs ?? ${disableLogs};
-
-    ${captureErrors ? `// 全局异常自动监听
-    if (typeof window !== "undefined" && config.autoCaptureErrors !== false) {
-      window.addEventListener("error", (event) => {
-        this.reportError("UncaughtException", event.message, event.error?.stack, false);
-      });
-      window.addEventListener("unhandledrejection", (event) => {
-        this.reportError("UnhandledRejection", String(event.reason), event.reason?.stack, false);
-      });
-    }` : ""}
-  }
-
-  /** 上报事件与活跃用户 */
-  async track(name: string, properties: Record<string, any> = {}) {
-    await axios.post(
-      \`\${this.endpoint}/events\`,
-      {
-        items: [{
-          name,
-          anonymousId: properties.deviceId || "web-client",
-          appVersion: properties.version || "1.0.0",
-          os: navigator.userAgent,
-          timestamp: Date.now(),
-          attributes: properties,
-        }],
-      },
-      { headers: { "x-sonde-key": this.apiKey } }
-    );
-  }
-${captureErrors ? `
-  /** 规范化错误与异常上报 */
-  async reportError(name: string, message: string, stackTrace?: string, handled = true) {
-    await axios.post(
-      \`\${this.endpoint}/errors\`,
-      {
-        items: [{
-          name,
-          message,
-          stackTrace,
-          severity: handled ? "error" : "fatal",
-          handled,
-          timestamp: Date.now(),
-        }],
-      },
-      { headers: { "x-sonde-key": this.apiKey } }
-    );
-  }` : ""}${!disableLogs ? `
-  /** 上报业务日志 */
-  async log(level: "info" | "warn" | "error", message: string) {
-    if (this.disableLogs) return;
-    await axios.post(
-      \`\${this.endpoint}/logs\`,
-      {
-        items: [{ level, message, timestamp: Date.now() }],
-      },
-      { headers: { "x-sonde-key": this.apiKey } }
-    );
-  }` : ""}
-}
-
-// 初始化客户端
-const telemetry = new SondeTelemetry({
-  apiKey: "${apiKeyPlaceholder}",
-  disableLogs: ${disableLogs},
-});
-telemetry.track("page_view", { path: "/dashboard" });`;
-
-      case "go":
-        return `package main
-
-import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"time"
-)
-
-type SondeClient struct {
-	Endpoint    string
-	APIKey      string
-	DisableLogs bool
-	HttpClient  *http.Client
-}
-
-func NewSondeClient(apiKey string) *SondeClient {
-	return &SondeClient{
-		Endpoint:    "${origin}/api/v1/ingest",
-		APIKey:      apiKey,
-		DisableLogs: ${disableLogs},
-		HttpClient:  &http.Client{Timeout: 5 * time.Second},
-	}
-}
-
-func (s *SondeClient) TrackEvent(name, anonymousId, version string) error {
-	payload := map[string]interface{}{
-		"items": []map[string]interface{}{
-			{
-				"name":        name,
-				"anonymousId": anonymousId,
-				"appVersion":  version,
-				"timestamp":   time.Now().UnixMilli(),
-			},
-		},
-	}
-	return s.send("events", payload)
-}
-${captureErrors ? `
-func (s *SondeClient) ReportError(name, msg, stack string, handled bool) error {
-	severity := "error"
-	if !handled {
-		severity = "fatal"
-	}
-	payload := map[string]interface{}{
-		"items": []map[string]interface{}{
-			{
-				"name":       name,
-				"message":    msg,
-				"stackTrace": stack,
-				"severity":   severity,
-				"handled":    handled,
-				"timestamp":  time.Now().UnixMilli(),
-			},
-		},
-	}
-	return s.send("errors", payload)
-}` : ""}${!disableLogs ? `
-func (s *SondeClient) Log(level, message string) error {
-	if s.DisableLogs {
-		return nil
-	}
-	payload := map[string]interface{}{
-		"items": []map[string]interface{}{
-			{
-				"level":     level,
-				"message":   message,
-				"timestamp": time.Now().UnixMilli(),
-			},
-		},
-	}
-	return s.send("logs", payload)
-}` : ""}
-func (s *SondeClient) send(path string, data interface{}) error {
-	body, _ := json.Marshal(data)
-	req, _ := http.NewRequest("POST", fmt.Sprintf("%s/%s", s.Endpoint, path), bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-sonde-key", s.APIKey)
-	resp, err := s.HttpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	return nil
-}
-
-func main() {
-	client := NewSondeClient("${apiKeyPlaceholder}")
-	_ = client.TrackEvent("service_start", "srv-node-01", "v1.2.0")
-}`;
-
-      case "python":
-        return `import requests
-import time
-import sys
-import traceback
-
-class SondeClient:
-    def __init__(self, api_key: str, endpoint: str = "${origin}/api/v1/ingest", disable_logs: bool = ${disableLogs ? "True" : "False"}):
-        self.api_key = api_key
-        self.endpoint = endpoint
-        self.disable_logs = disable_logs
-        self.headers = {"x-sonde-key": self.api_key, "Content-Type": "application/json"}
-        ${captureErrors ? `# 安装未处理崩溃拦截钩子
-        sys.excepthook = self._handle_uncaught_exception` : ""}
-
-    def track(self, name: str, anonymous_id: str = None, version: str = "1.0.0", attributes: dict = None):
-        payload = {
-            "items": [{
-                "name": name,
-                "anonymousId": anonymous_id,
-                "appVersion": version,
-                "timestamp": int(time.time() * 1000),
-                "attributes": attributes or {}
-            }]
-        }
-        requests.post(f"{self.endpoint}/events", json=payload, headers=self.headers, timeout=5)
-${captureErrors ? `
-    def report_error(self, name: str, message: str, stack_trace: str = None, handled: bool = True):
-        payload = {
-            "items": [{
-                "name": name,
-                "message": message,
-                "stackTrace": stack_trace,
-                "severity": "error" if handled else "fatal",
-                "handled": handled,
-                "timestamp": int(time.time() * 1000)
-            }]
-        }
-        requests.post(f"{self.endpoint}/errors", json=payload, headers=self.headers, timeout=5)
-
-    def _handle_uncaught_exception(self, exc_type, exc_value, exc_traceback):
-        tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
-        self.report_error(exc_type.__name__, str(exc_value), tb_str, handled=False)
-        sys.__excepthook__(exc_type, exc_value, exc_traceback)` : ""}${!disableLogs ? `
-    def log(self, level: str, message: str):
-        if self.disable_logs:
-            return
-        payload = {
-            "items": [{
-                "level": level,
-                "message": message,
-                "timestamp": int(time.time() * 1000)
-            }]
-        }
-        requests.post(f"{self.endpoint}/logs", json=payload, headers=self.headers, timeout=5)` : ""}
-
-# 初始化
-sonde = SondeClient("${apiKeyPlaceholder}")
-sonde.track("startup", anonymous_id="usr-py-99", version="2.0.1")`;
-
-      case "csharp":
-        return `using System;
-using System.Net.Http;
-using System.Text;
-using System.Text.Json;
-using System.Threading.Tasks;
-
-public class SondeClient
-{
-    private readonly HttpClient _http = new HttpClient();
-    private readonly string _endpoint = "${origin}/api/v1/ingest";
-    private readonly string _apiKey;
-    public bool DisableLogs { get; set; } = ${disableLogs ? "true" : "false"};
-
-    public SondeClient(string apiKey)
-    {
-        _apiKey = apiKey;
-        _http.DefaultRequestHeaders.Add("x-sonde-key", _apiKey);
-        ${captureErrors ? `
-        AppDomain.CurrentDomain.UnhandledException += (s, e) => {
-            if (e.ExceptionObject is Exception ex)
-                ReportErrorAsync(ex.GetType().Name, ex.Message, ex.StackTrace, false).Wait();
-        };`: ""}
-    }
-
-    public async Task TrackEventAsync(string name, string deviceId, string version)
-    {
-        var payload = new {
-            items = new[] {
-                new {
-                    name = name,
-                    anonymousId = deviceId,
-                    appVersion = version,
-                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                }
-            }
-        };
-        await _http.PostAsync(\`\${_endpoint}/events\`, new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"));
-    }
-${captureErrors ? `
-    public async Task ReportErrorAsync(string name, string message, string stackTrace = null, bool handled = true)
-    {
-        var payload = new {
-            items = new[] {
-                new {
-                    name = name,
-                    message = message,
-                    stackTrace = stackTrace,
-                    severity = handled ? "error" : "fatal",
-                    handled = handled,
-                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                }
-            }
-        };
-        await _http.PostAsync(\`\${_endpoint}/errors\`, new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"));
-    }` : ""}${!disableLogs ? `
-    public async Task LogAsync(string level, string message)
-    {
-        if (DisableLogs) return;
-        var payload = new {
-            items = new[] {
-                new {
-                    level = level,
-                    message = message,
-                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                }
-            }
-        };
-        await _http.PostAsync(\`\${_endpoint}/logs\`, new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"));
-    }` : ""}
-}`;
-
-      case "cpp":
-        return `// C++ Standard Library & Libcurl example
-#include <iostream>
-#include <string>
-#include <curl/curl.h>
-
-void sonde_track_event(const std::string& api_key, const std::string& name, const std::string& device_id) {
-    CURL* curl = curl_easy_init();
-    if (curl) {
-        std::string json_data = "{\\"items\\":[{\\"name\\":\\"" + name + "\\",\\"anonymousId\\":\\"" + device_id + "\\"}]}";
-        struct curl_slist* headers = NULL;
-        headers = curl_slist_append(headers, "Content-Type: application/json");
-        std::string auth = "x-sonde-key: " + api_key;
-        headers = curl_slist_append(headers, auth.c_str());
-
-        curl_easy_setopt(curl, CURLOPT_URL, "${origin}/api/v1/ingest/events");
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_data.c_str());
-
-        curl_easy_perform(curl);
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
-    }
-}
-
-int main() {
-    sonde_track_event("${apiKeyPlaceholder}", "app_launch", "device_c_001");
-    return 0;
-}`;
-
-      case "curl":
-        return `# 1. 上报事件与日活 (Events)
-curl -X POST "${origin}/api/v1/ingest/events" \\
-  -H "Content-Type: application/json" \\
-  -H "x-sonde-key: ${apiKeyPlaceholder}" \\
-  -d '{
-    "items": [
-      {
-        "name": "login_success",
-        "anonymousId": "user_device_9921",
-        "appVersion": "1.4.0",
-        "os": "Windows 11 Build 26200",
-        "attributes": { "role": "admin" }
-      }
-    ]
-  }'
-
-# 2. 规范化错误与崩溃信号上报 (Errors)
-curl -X POST "${origin}/api/v1/ingest/errors" \\
-  -H "Content-Type: application/json" \\
-  -H "x-sonde-key: ${apiKeyPlaceholder}" \\
-  -d '{
-    "items": [
-      {
-        "name": "NullReferenceException",
-        "message": "Object reference not set to an instance of an object",
-        "stackTrace": "at App.MainModule.Execute() in MainModule.cs:line 42",
-        "severity": "fatal",
-        "handled": false
-      }
-    ]
-  }'
-${!disableLogs ? `
-# 3. 业务日志上传 (Logs)
-curl -X POST "${origin}/api/v1/ingest/logs" \\
-  -H "Content-Type: application/json" \\
-  -H "x-sonde-key: ${apiKeyPlaceholder}" \\
-  -d '{
-    "items": [
-      {
-        "level": "info",
-        "message": "Data pipeline initialized successfully"
-      }
-    ]
-  }'` : ""}`;
-    }
-  };
-
-  const codeSnippet = generateCode(activeTab);
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(codeSnippet);
+  async function handleCopy() {
+    await navigator.clipboard.writeText(codeSnippet);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+    window.setTimeout(() => setCopied(false), 1800);
+  }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Sonde SDK & 接入指南" size="xl">
+    <Modal isOpen={isOpen} onClose={onClose} title="Sonde 安全接入指南" size="xl">
       <div className="space-y-5">
-        {/* App Info Banner */}
-        <div className="flex items-center justify-between p-4 rounded-2xl bg-[var(--input-bg)] border border-[var(--border-soft)]">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-[var(--signal-subtle)] border border-[var(--signal)]/30 text-[var(--signal)] flex items-center justify-center font-bold">
-              {app.name.slice(0, 2).toUpperCase()}
+        <div className="rounded-2xl border border-[var(--border-soft)] bg-[var(--input-bg)] p-4">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border border-[var(--signal)]/30 bg-[var(--signal-subtle)] text-[var(--signal)]">
+              <ShieldCheck size={18} />
             </div>
-            <div>
-              <h4 className="text-sm font-bold text-[var(--text)] m-0">{app.name}</h4>
-              <p className="text-xs font-mono text-[var(--muted)] m-0 mt-0.5">
-                Slug: <span className="text-[var(--signal)] font-semibold">{app.slug}</span> · Endpoint: <span className="text-[var(--text)] font-semibold">{origin}/api/v1/ingest</span>
+            <div className="min-w-0">
+              <h4 className="m-0 text-sm font-bold text-[var(--text)]">{app.name}</h4>
+              <p className="m-0 mt-1 text-xs leading-relaxed text-[var(--muted)]">
+                API Key 只用于换取短期设备 Token。正式 telemetry 必须使用 device-bound Token、timestamp、nonce 和 HMAC-SHA256 签名；平台从可信 telemetry 自行维护设备状态与历史。
+              </p>
+              <p className="m-0 mt-2 break-all font-mono text-[10px] text-[var(--faint)]">
+                {origin}/api/v1/ingest · slug={app.slug}
               </p>
             </div>
           </div>
         </div>
 
-        {/* Dynamic Feature Config Toggles */}
-        <div className="p-3.5 rounded-2xl bg-[var(--panel-strong)] border border-[var(--border-soft)] flex flex-wrap items-center justify-between gap-4 text-xs">
-          <div className="flex items-center gap-2 font-bold text-[var(--text)]">
-            <Sliders size={15} className="text-[var(--signal)]" />
-            <span>实时代码配置生成器</span>
+        <div className="grid gap-3 md:grid-cols-4">
+          <Step number="1" title="Bootstrap" text="API Key + 当前稳定 pseudonymous deviceId → /ingest/token" />
+          <Step number="2" title="Short-lived token" text="保存 token、signingKey、expiresAt；到期后重新交换。" />
+          <Step number="3" title="Canonical request" text="对原始 body 做 SHA-256，并绑定 timestamp / nonce / method / path。" />
+          <Step number="4" title="Signed ingest" text="Authorization: Bearer sndt_… + HMAC headers → events / metrics / logs / errors" />
+        </div>
+
+        <div className="rounded-2xl border border-[var(--amber)]/30 bg-[var(--amber-subtle)] p-3.5 text-xs leading-relaxed text-[var(--text)]">
+          <div className="flex items-center gap-2 font-bold">
+            <KeyRound size={15} className="text-[var(--amber)]" />
+            长期 API Key 不允许直接写入 telemetry
           </div>
+          <p className="m-0 mt-1.5 text-[var(--muted)]">
+            将 API Key 直接发送到 /events、/metrics、/logs 或 /errors 会返回
+            <code className="mx-1 rounded bg-[var(--input-bg)] px-1.5 py-0.5">ingest_token_required</code>。
+            客户端也不应把 Session、版本或 OS 历史放进 Token 请求；这些状态由平台从 telemetry 推导。
+          </p>
+        </div>
 
-          <div className="flex items-center gap-4 flex-wrap">
-            <label className="inline-flex items-center gap-1.5 cursor-pointer select-none text-[var(--text)] font-medium">
-              <input
-                type="checkbox"
-                checked={captureErrors}
-                onChange={(e) => setCaptureErrors(e.target.checked)}
-                className="rounded text-[var(--signal)] focus:ring-0"
-              />
-              <span>捕获未处理崩溃与异常</span>
-            </label>
-
-            <label className="inline-flex items-center gap-1.5 cursor-pointer select-none text-[var(--text)] font-medium">
-              <input
-                type="checkbox"
-                checked={disableLogs}
-                onChange={(e) => setDisableLogs(e.target.checked)}
-                className="rounded text-[var(--signal)] focus:ring-0"
-              />
-              <span className={disableLogs ? "text-[var(--amber)] font-bold" : ""}>
-                关闭日志上传 (disable_logs)
-              </span>
-            </label>
+        <div className="overflow-x-auto border-b border-[var(--border-soft)] pb-1">
+          <div className="flex min-w-max gap-1.5">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-colors ${
+                  activeTab === tab.id
+                    ? "bg-[var(--signal)] text-white"
+                    : "text-[var(--muted)] hover:bg-[var(--input-bg)] hover:text-[var(--text)]"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Language Tabs */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none border-b border-[var(--border-soft)]">
-          <button
-            type="button"
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
-              activeTab === "rust"
-                ? "bg-[var(--signal)] text-white shadow-xs"
-                : "text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--input-bg)]"
-            }`}
-            onClick={() => setActiveTab("rust")}
-          >
-            <span>🦀 Rust</span>
-          </button>
-
-          <button
-            type="button"
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
-              activeTab === "typescript"
-                ? "bg-[var(--signal)] text-white shadow-xs"
-                : "text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--input-bg)]"
-            }`}
-            onClick={() => setActiveTab("typescript")}
-          >
-            <span>🌐 TypeScript / JS</span>
-          </button>
-
-          <button
-            type="button"
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
-              activeTab === "go"
-                ? "bg-[var(--signal)] text-white shadow-xs"
-                : "text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--input-bg)]"
-            }`}
-            onClick={() => setActiveTab("go")}
-          >
-            <span>🐹 Go</span>
-          </button>
-
-          <button
-            type="button"
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
-              activeTab === "python"
-                ? "bg-[var(--signal)] text-white shadow-xs"
-                : "text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--input-bg)]"
-            }`}
-            onClick={() => setActiveTab("python")}
-          >
-            <span>🐍 Python</span>
-          </button>
-
-          <button
-            type="button"
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
-              activeTab === "csharp"
-                ? "bg-[var(--signal)] text-white shadow-xs"
-                : "text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--input-bg)]"
-            }`}
-            onClick={() => setActiveTab("csharp")}
-          >
-            <span>🔷 C# / .NET</span>
-          </button>
-
-          <button
-            type="button"
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
-              activeTab === "cpp"
-                ? "bg-[var(--signal)] text-white shadow-xs"
-                : "text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--input-bg)]"
-            }`}
-            onClick={() => setActiveTab("cpp")}
-          >
-            <span>⚡ C++</span>
-          </button>
-
-          <button
-            type="button"
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
-              activeTab === "curl"
-                ? "bg-[var(--signal)] text-white shadow-xs"
-                : "text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--input-bg)]"
-            }`}
-            onClick={() => setActiveTab("curl")}
-          >
-            <span>🐚 cURL / REST</span>
-          </button>
-        </div>
-
-        {/* Code Snippet Box */}
-        <div className="relative rounded-2xl bg-[#0d1117] border border-[var(--border)] overflow-hidden shadow-2xl">
-          <div className="flex items-center justify-between px-4 py-2 bg-[#161b22] border-b border-[#30363d] text-xs">
-            <span className="font-mono text-gray-400 font-semibold uppercase">{activeTab} SDK Integration</span>
+        <div className="relative overflow-hidden rounded-2xl border border-[var(--border)] bg-[#0d1117] shadow-2xl">
+          <div className="flex items-center justify-between border-b border-[#30363d] bg-[#161b22] px-4 py-2 text-xs">
+            <span className="font-mono font-semibold uppercase text-gray-400">
+              {activeTab} · sonde-hmac-sha256-v2
+            </span>
             <button
               type="button"
-              onClick={handleCopy}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[var(--signal)] text-white font-bold hover:brightness-110 active:scale-95 transition-all cursor-pointer shadow-xs"
+              onClick={() => void handleCopy()}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--signal)] px-3 py-1 font-bold text-white transition-all hover:brightness-110 active:scale-95"
             >
               {copied ? <Check size={13} /> : <Copy size={13} />}
-              <span>{copied ? "已复制到剪贴板" : "复制代码"}</span>
+              {copied ? "已复制" : "复制代码"}
             </button>
           </div>
-          <pre className="p-4 text-xs font-mono text-gray-200 overflow-x-auto max-h-[380px] leading-relaxed select-text">
+          <pre className="max-h-[480px] overflow-auto p-4 font-mono text-xs leading-relaxed text-gray-200">
             <code>{codeSnippet}</code>
           </pre>
+        </div>
+
+        <div className="rounded-2xl border border-[var(--border-soft)] bg-[var(--panel-strong)] p-4 text-xs leading-relaxed text-[var(--muted)]">
+          <strong className="text-[var(--text)]">Canonical request</strong>
+          <pre className="m-0 mt-2 overflow-x-auto rounded-xl bg-[var(--input-bg)] p-3 font-mono text-[11px] text-[var(--text)]">{`sonde-hmac-sha256-v2\n
+timestampMillis\n
+nonce\n
+HTTP_METHOD_UPPERCASE\n
+/api/v1/ingest/events\n
+hex(sha256(rawBodyBytes))`}</pre>
+          <p className="m-0 mt-2">
+            签名为 <code>hex(HMAC-SHA256(signingKey, canonicalBytes))</code>。必须签名与实际发送完全相同的原始 body bytes；不要签名后再次格式化 JSON。
+          </p>
         </div>
       </div>
     </Modal>
   );
+}
+
+function Step({ number, title, text }: { number: string; title: string; text: string }) {
+  return (
+    <div className="rounded-2xl border border-[var(--border-soft)] bg-[var(--panel)] p-3.5">
+      <div className="mb-2 flex h-6 w-6 items-center justify-center rounded-lg bg-[var(--signal-subtle)] text-[10px] font-extrabold text-[var(--signal)]">
+        {number}
+      </div>
+      <div className="text-xs font-bold text-[var(--text)]">{title}</div>
+      <p className="m-0 mt-1 text-[11px] leading-relaxed text-[var(--muted)]">{text}</p>
+    </div>
+  );
+}
+
+function buildSnippet(lang: LanguageTab, origin: string, apiKey: string): string {
+  switch (lang) {
+    case "rust":
+      return rustSnippet(origin, apiKey);
+    case "typescript":
+      return typescriptSnippet(origin, apiKey);
+    case "python":
+      return pythonSnippet(origin, apiKey);
+    case "go":
+      return protocolSnippet("//", origin, apiKey, "Go: crypto/hmac + crypto/sha256 + encoding/hex");
+    case "csharp":
+      return protocolSnippet("//", origin, apiKey, "C#: HMACSHA256 + SHA256.HashData + Convert.ToHexString(...).ToLowerInvariant()");
+    case "cpp":
+      return protocolSnippet("//", origin, apiKey, "C++: OpenSSL HMAC(EVP_sha256) + SHA256 + libcurl");
+    case "curl":
+      return shellSnippet(origin, apiKey);
+  }
+}
+
+function protocolSnippet(comment: string, origin: string, apiKey: string, cryptoHint: string): string {
+  return `${comment} ${cryptoHint}
+${comment} 1) Bootstrap only: exchange API Key for a device token.
+POST ${origin}/api/v1/ingest/token
+Authorization: Bearer ${apiKey}
+Content-Type: application/json
+
+{"deviceId":"stable-pseudonymous-device-id"}
+
+${comment} Response fields used by the SDK:
+${comment} token, signingKey, expiresAt, signatureVersion
+
+${comment} 2) Serialize telemetry exactly once to rawBodyBytes.
+${comment} 3) timestamp = current Unix epoch milliseconds.
+${comment} 4) nonce = cryptographically random 16+ byte printable identifier.
+${comment} 5) bodyHash = lowercaseHex(SHA256(rawBodyBytes)).
+${comment} 6) canonical =
+${comment}    "sonde-hmac-sha256-v2\\n" +
+${comment}    timestamp + "\\n" + nonce + "\\n" +
+${comment}    "POST\\n/api/v1/ingest/events\\n" + bodyHash
+${comment} 7) signature = lowercaseHex(HMAC-SHA256(signingKey, UTF8(canonical))).
+
+POST ${origin}/api/v1/ingest/events
+Authorization: Bearer <sndt_device_token>
+x-sonde-timestamp: <timestamp>
+x-sonde-nonce: <nonce>
+x-sonde-signature: <signature>
+Content-Type: application/json
+
+{"items":[{"name":"app_startup","appVersion":"1.0.0","os":"windows","timestamp":<timestamp>}]}
+
+${comment} Do not send the bootstrap API Key to telemetry endpoints.`;
+}
+
+function rustSnippet(origin: string, apiKey: string): string {
+  return `// Cargo.toml: reqwest, serde, serde_json, sha2, hmac, hex, uuid, chrono
+use hmac::{Hmac, Mac};
+use reqwest::Client;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+
+type HmacSha256 = Hmac<Sha256>;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TokenResponse {
+    token: String,
+    signing_key: String,
+    expires_at: i64,
+}
+
+async fn exchange(client: &Client, device_id: &str) -> reqwest::Result<TokenResponse> {
+    client.post("${origin}/api/v1/ingest/token")
+        .bearer_auth("${apiKey}")
+        .json(&serde_json::json!({ "deviceId": device_id }))
+        .send().await?.error_for_status()?.json().await
+}
+
+fn sign(signing_key: &str, timestamp: i64, nonce: &str, path: &str, body: &[u8]) -> String {
+    let body_hash = hex::encode(Sha256::digest(body));
+    let canonical = format!(
+        "sonde-hmac-sha256-v2\\n{}\\n{}\\nPOST\\n{}\\n{}",
+        timestamp, nonce, path, body_hash,
+    );
+    let mut mac = HmacSha256::new_from_slice(signing_key.as_bytes()).unwrap();
+    mac.update(canonical.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+async fn send_event(client: &Client, auth: &TokenResponse) -> reqwest::Result<()> {
+    let timestamp = chrono::Utc::now().timestamp_millis();
+    let nonce = uuid::Uuid::now_v7().to_string();
+    let path = "/api/v1/ingest/events";
+    let body = serde_json::to_vec(&serde_json::json!({
+        "items": [{
+            "name": "app_startup",
+            "appVersion": "1.0.0",
+            "os": std::env::consts::OS,
+            "timestamp": timestamp
+        }]
+    })).unwrap();
+    let signature = sign(&auth.signing_key, timestamp, &nonce, path, &body);
+
+    client.post(format!("${origin}{}", path))
+        .bearer_auth(&auth.token)
+        .header("content-type", "application/json")
+        .header("x-sonde-timestamp", timestamp.to_string())
+        .header("x-sonde-nonce", nonce)
+        .header("x-sonde-signature", signature)
+        .body(body)
+        .send().await?.error_for_status()?;
+    Ok(())
+}`;
+}
+
+function typescriptSnippet(origin: string, apiKey: string): string {
+  return `const endpoint = "${origin}/api/v1/ingest";
+const apiKey = "${apiKey}"; // bootstrap only
+const deviceId = "stable-pseudonymous-device-id";
+const encoder = new TextEncoder();
+
+const tokenResponse = await fetch(endpoint + "/token", {
+  method: "POST",
+  headers: {
+    authorization: "Bearer " + apiKey,
+    "content-type": "application/json",
+  },
+  body: JSON.stringify({ deviceId }),
+});
+const auth = await tokenResponse.json();
+
+function hex(bytes: ArrayBuffer) {
+  return [...new Uint8Array(bytes)]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function sendEvent() {
+  const timestamp = Date.now();
+  const nonce = crypto.randomUUID();
+  const path = "/events";
+  const canonicalPath = "/api/v1/ingest/events";
+  const rawBody = JSON.stringify({
+    items: [{ name: "app_startup", appVersion: "1.0.0", timestamp }],
+  });
+  const bodyHash = hex(await crypto.subtle.digest("SHA-256", encoder.encode(rawBody)));
+  const canonical =
+    "sonde-hmac-sha256-v2\\n" + timestamp + "\\n" + nonce +
+    "\\nPOST\\n" + canonicalPath + "\\n" + bodyHash;
+  const key = await crypto.subtle.importKey(
+    "raw", encoder.encode(auth.signingKey), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  const signature = hex(await crypto.subtle.sign("HMAC", key, encoder.encode(canonical)));
+
+  await fetch(endpoint + path, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer " + auth.token,
+      "content-type": "application/json",
+      "x-sonde-timestamp": String(timestamp),
+      "x-sonde-nonce": nonce,
+      "x-sonde-signature": signature,
+    },
+    body: rawBody,
+  });
+}`;
+}
+
+function pythonSnippet(origin: string, apiKey: string): string {
+  return `import hashlib
+import hmac
+import json
+import time
+import uuid
+import requests
+
+ENDPOINT = "${origin}/api/v1/ingest"
+API_KEY = "${apiKey}"  # bootstrap only
+DEVICE_ID = "stable-pseudonymous-device-id"
+
+auth = requests.post(
+    ENDPOINT + "/token",
+    headers={"Authorization": "Bearer " + API_KEY},
+    json={"deviceId": DEVICE_ID},
+    timeout=5,
+).json()
+
+timestamp = int(time.time() * 1000)
+nonce = str(uuid.uuid4())
+path = "/api/v1/ingest/events"
+raw_body = json.dumps({
+    "items": [{"name": "app_startup", "appVersion": "1.0.0", "timestamp": timestamp}]
+}, separators=(",", ":")).encode()
+body_hash = hashlib.sha256(raw_body).hexdigest()
+canonical = (
+    "sonde-hmac-sha256-v2\\n"
+    + str(timestamp) + "\\n" + nonce + "\\nPOST\\n" + path + "\\n" + body_hash
+).encode()
+signature = hmac.new(auth["signingKey"].encode(), canonical, hashlib.sha256).hexdigest()
+
+requests.post(
+    "${origin}" + path,
+    data=raw_body,
+    headers={
+        "Authorization": "Bearer " + auth["token"],
+        "Content-Type": "application/json",
+        "x-sonde-timestamp": str(timestamp),
+        "x-sonde-nonce": nonce,
+        "x-sonde-signature": signature,
+    },
+    timeout=5,
+).raise_for_status()`;
+}
+
+function shellSnippet(origin: string, apiKey: string): string {
+  return `# API Key is bootstrap-only.
+API_KEY='${apiKey}'
+DEVICE_ID='stable-pseudonymous-device-id'
+BASE='${origin}'
+
+curl -sS -X POST "$BASE/api/v1/ingest/token" \\
+  -H "Authorization: Bearer $API_KEY" \\
+  -H 'Content-Type: application/json' \\
+  --data "{\\"deviceId\\":\\"$DEVICE_ID\\"}"
+
+# Read token + signingKey from the JSON response.
+# For each telemetry request:
+#   timestamp = Unix milliseconds
+#   nonce = cryptographically random unique value
+#   body_hash = lowercase hex SHA-256 of the EXACT raw body bytes
+#   canonical = sonde-hmac-sha256-v2 + newline + timestamp + newline + nonce
+#               + newline + POST + newline + /api/v1/ingest/events
+#               + newline + body_hash
+#   signature = lowercase hex HMAC-SHA256(signingKey, canonical)
+#
+# Then send:
+curl -X POST "$BASE/api/v1/ingest/events" \\
+  -H 'Authorization: Bearer <sndt_device_token>' \\
+  -H 'Content-Type: application/json' \\
+  -H 'x-sonde-timestamp: <timestamp>' \\
+  -H 'x-sonde-nonce: <nonce>' \\
+  -H 'x-sonde-signature: <signature>' \\
+  --data-binary @telemetry.json`;
 }
