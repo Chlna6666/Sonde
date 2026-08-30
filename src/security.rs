@@ -17,10 +17,13 @@ const DEVICE_ENROLLMENT_WINDOW_MILLIS: i64 = 60 * 60 * 1_000;
 const IP_TOKEN_REQUESTS_PER_MINUTE: u64 = 30;
 const IP_INGEST_REQUESTS_PER_MINUTE: u64 = 120;
 const IP_INGEST_BYTES_PER_MINUTE: u64 = 8 * 1024 * 1024;
+const IP_INGEST_ITEMS_PER_MINUTE: u64 = 10_000;
 const LEGACY_INGEST_REQUESTS_PER_MINUTE: u64 = 30;
 const LEGACY_INGEST_BYTES_PER_MINUTE: u64 = 1024 * 1024;
+const LEGACY_INGEST_ITEMS_PER_MINUTE: u64 = 1_000;
 const DEVICE_INGEST_REQUESTS_PER_MINUTE: u64 = 60;
 const DEVICE_INGEST_BYTES_PER_MINUTE: u64 = 2 * 1024 * 1024;
+const DEVICE_INGEST_ITEMS_PER_MINUTE: u64 = 2_000;
 const DEVICE_TOKEN_REQUESTS_PER_MINUTE: u64 = 8;
 const NEW_DEVICES_PER_IP_PER_HOUR: u64 = 128;
 
@@ -103,10 +106,13 @@ pub struct IngestSecurity {
     ip_token_rate: Mutex<HashMap<String, RateBucket>>,
     ip_ingest_rate: Mutex<HashMap<String, RateBucket>>,
     ip_ingest_bytes: Mutex<HashMap<String, RateBucket>>,
+    ip_ingest_items: Mutex<HashMap<String, RateBucket>>,
     legacy_ingest_rate: Mutex<HashMap<String, RateBucket>>,
     legacy_ingest_bytes: Mutex<HashMap<String, RateBucket>>,
+    legacy_ingest_items: Mutex<HashMap<String, RateBucket>>,
     device_rate: Mutex<HashMap<String, RateBucket>>,
     device_ingest_bytes: Mutex<HashMap<String, RateBucket>>,
+    device_ingest_items: Mutex<HashMap<String, RateBucket>>,
     device_token_rate: Mutex<HashMap<String, RateBucket>>,
     new_device_rate: Mutex<HashMap<String, RateBucket>>,
     seen_devices: Mutex<HashMap<String, i64>>,
@@ -125,10 +131,13 @@ impl IngestSecurity {
             ip_token_rate: Mutex::new(HashMap::new()),
             ip_ingest_rate: Mutex::new(HashMap::new()),
             ip_ingest_bytes: Mutex::new(HashMap::new()),
+            ip_ingest_items: Mutex::new(HashMap::new()),
             legacy_ingest_rate: Mutex::new(HashMap::new()),
             legacy_ingest_bytes: Mutex::new(HashMap::new()),
+            legacy_ingest_items: Mutex::new(HashMap::new()),
             device_rate: Mutex::new(HashMap::new()),
             device_ingest_bytes: Mutex::new(HashMap::new()),
+            device_ingest_items: Mutex::new(HashMap::new()),
             device_token_rate: Mutex::new(HashMap::new()),
             new_device_rate: Mutex::new(HashMap::new()),
             seen_devices: Mutex::new(HashMap::new()),
@@ -175,8 +184,21 @@ impl IngestSecurity {
         .await
     }
 
+    /// Parsed-item budget charges even tiny or invalid telemetry records by count.
+    pub async fn check_ip_ingest_items(&self, ip: &str, item_count: usize) -> bool {
+        charge_rate(
+            &self.ip_ingest_items,
+            ip,
+            item_count.max(1) as u64,
+            IP_INGEST_ITEMS_PER_MINUTE,
+            RATE_WINDOW_MILLIS,
+            20_000,
+        )
+        .await
+    }
+
     /// Legacy direct API-key ingestion remains compatible but receives a deliberately smaller
-    /// process-local budget. Signed short-lived tokens are the preferred ingest path.
+    /// process-local request/byte budget. Signed short-lived tokens are the preferred ingest path.
     pub async fn check_legacy_ingest_budget(&self, ip: &str, body_bytes: usize) -> bool {
         if !charge_rate(
             &self.legacy_ingest_rate,
@@ -195,6 +217,18 @@ impl IngestSecurity {
             ip,
             body_bytes.max(1) as u64,
             LEGACY_INGEST_BYTES_PER_MINUTE,
+            RATE_WINDOW_MILLIS,
+            20_000,
+        )
+        .await
+    }
+
+    pub async fn check_legacy_ingest_items(&self, ip: &str, item_count: usize) -> bool {
+        charge_rate(
+            &self.legacy_ingest_items,
+            ip,
+            item_count.max(1) as u64,
+            LEGACY_INGEST_ITEMS_PER_MINUTE,
             RATE_WINDOW_MILLIS,
             20_000,
         )
@@ -228,6 +262,24 @@ impl IngestSecurity {
             &key,
             body_bytes.max(1) as u64,
             DEVICE_INGEST_BYTES_PER_MINUTE,
+            RATE_WINDOW_MILLIS,
+            50_000,
+        )
+        .await
+    }
+
+    pub async fn check_device_ingest_items(
+        &self,
+        app_id: &str,
+        device_id: &str,
+        item_count: usize,
+    ) -> bool {
+        let key = format!("{app_id}:{device_id}");
+        charge_rate(
+            &self.device_ingest_items,
+            &key,
+            item_count.max(1) as u64,
+            DEVICE_INGEST_ITEMS_PER_MINUTE,
             RATE_WINDOW_MILLIS,
             50_000,
         )
@@ -768,6 +820,32 @@ pub mod tests {
             assert!(
                 !ingest
                     .check_device_ingest_bytes("app", "device", 1)
+                    .await
+            );
+        });
+    }
+
+    #[test]
+    fn tiny_records_still_consume_item_budget() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let ingest = IngestSecurity::new();
+            assert!(
+                ingest
+                    .check_device_ingest_items("app", "device", 1_000)
+                    .await
+            );
+            assert!(
+                ingest
+                    .check_device_ingest_items("app", "device", 1_000)
+                    .await
+            );
+            assert!(
+                !ingest
+                    .check_device_ingest_items("app", "device", 1)
                     .await
             );
         });
