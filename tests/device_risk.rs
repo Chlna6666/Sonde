@@ -1,8 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use sonde::database::{
-    self,
-    device_risk_repo,
+    self, device_risk_repo,
     device_state_repo::{self, DeviceObservation, DeviceTelemetryKind, TimedDimension},
     telemetry_repo::TelemetryScope,
 };
@@ -48,6 +47,37 @@ async fn risk_is_read_by_device_scope_and_decays_only_after_quiet_cutoff(
         &observation(now, now, "windows"),
     )
     .await?;
+    let baseline = device_risk_repo::risk_score_for_device(
+        &database,
+        &scope.application_id,
+        &scope.environment_id,
+        device_hash,
+    )
+    .await?
+    .unwrap();
+    assert_eq!(baseline, 0);
+
+    assert_eq!(
+        device_risk_repo::record_replay_detected(
+            &database,
+            &scope.application_id,
+            &scope.environment_id,
+            device_hash,
+            now + 500,
+        )
+        .await?,
+        1
+    );
+    let replay_risk = device_risk_repo::risk_score_for_device(
+        &database,
+        &scope.application_id,
+        &scope.environment_id,
+        device_hash,
+    )
+    .await?
+    .unwrap();
+    assert_eq!(replay_risk, 2);
+
     device_state_repo::observe(
         &database,
         &scope,
@@ -64,7 +94,7 @@ async fn risk_is_read_by_device_scope_and_decays_only_after_quiet_cutoff(
     )
     .await?
     .unwrap();
-    assert!(risk > 0);
+    assert!(risk > replay_risk);
 
     let untouched = device_risk_repo::decay_scores(&database, now + 500).await?;
     assert_eq!(untouched, 0);
