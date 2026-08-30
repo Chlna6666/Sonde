@@ -1,3 +1,5 @@
+mod bootstrap;
+
 pub mod api;
 pub mod auth;
 pub mod config;
@@ -28,8 +30,6 @@ pub async fn run() -> io::Result<()> {
             .map_err(io::Error::other)?,
     );
 
-    // AppState owns background-worker lifecycle. Keeping worker startup in one place prevents
-    // duplicate retention/alert/rollup loops after a normal restart.
     if !state.is_installed().await {
         info!("Sonde is waiting for one-time web setup");
     }
