@@ -42,9 +42,9 @@ pub struct IngestRequestContext<'a> {
 pub struct IngestScope {
     pub application_id: String,
     pub environment_id: String,
-    source_ip: Option<String>,
-    device_id: Option<String>,
-    risk_tier: Option<RiskTier>,
+    source_ip: String,
+    device_id: String,
+    risk_tier: RiskTier,
 }
 
 impl IngestScope {
@@ -55,8 +55,8 @@ impl IngestScope {
         }
     }
 
-    pub(crate) fn signed_device_id(&self) -> Option<&str> {
-        self.device_id.as_deref()
+    pub(crate) fn signed_device_id(&self) -> &str {
+        &self.device_id
     }
 }
 
@@ -327,52 +327,10 @@ async fn signed_scope(
     Ok(IngestScope {
         application_id: claims.application_id,
         environment_id: claims.environment_id,
-        source_ip: Some(request.client_ip.to_owned()),
-        device_id: Some(claims.device_id),
-        risk_tier: Some(policy.tier),
+        source_ip: request.client_ip.to_owned(),
+        device_id: claims.device_id,
+        risk_tier: policy.tier,
     })
-}
-
-pub async fn scope_from_context(
-    installed: &InstalledState,
-    request: IngestRequestContext<'_>,
-    raw_body: &[u8],
-) -> Result<IngestScope, AppError> {
-    scope_from_context_with_permission(installed, request, "telemetry.ingest", raw_body).await
-}
-
-pub async fn scope_for_key_with_permission(
-    installed: &InstalledState,
-    raw_key: &str,
-    required_perm: &str,
-) -> Result<IngestScope, AppError> {
-    let hash = hex::encode(Sha256::digest(raw_key.as_bytes()));
-    let context = ingest_auth_repo::api_key_context(
-        &installed.database,
-        &hash,
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await?
-    .ok_or(AppError::Unauthorized)?;
-
-    if !has_permission(&context.scopes, required_perm) {
-        return Err(AppError::Forbidden);
-    }
-
-    Ok(IngestScope {
-        application_id: context.application_id,
-        environment_id: context.environment_id,
-        source_ip: None,
-        device_id: None,
-        risk_tier: None,
-    })
-}
-
-pub async fn scope_for_key(
-    installed: &InstalledState,
-    raw_key: &str,
-) -> Result<IngestScope, AppError> {
-    scope_for_key_with_permission(installed, raw_key, "telemetry.ingest").await
 }
 
 pub async fn events(
@@ -472,11 +430,11 @@ async fn observe_signed_device(
     storage_scope: &TelemetryScope,
     observation: Option<DeviceObservation>,
 ) {
-    let (Some(device_id), Some(observation)) = (scope.signed_device_id(), observation) else {
+    let Some(observation) = observation else {
         return;
     };
     let salt = format!("{}:{}", scope.application_id, scope.environment_id);
-    let device_hash = anonymous_hash(device_id, &salt);
+    let device_hash = anonymous_hash(scope.signed_device_id(), &salt);
     if let Err(error) = device_state_repo::observe(
         &installed.database,
         storage_scope,
@@ -607,27 +565,21 @@ async fn charge_item_budget(
     scope: &IngestScope,
     item_count: usize,
 ) -> Result<(), AppError> {
-    let Some(source_ip) = scope.source_ip.as_deref() else {
-        return Ok(());
-    };
     if !installed
         .auth_security
         .ingest
-        .check_ip_ingest_items(source_ip, item_count)
+        .check_ip_ingest_items(&scope.source_ip, item_count)
         .await
     {
         return Err(AppError::TooManyRequests);
     }
-    let Some(device_id) = scope.device_id.as_deref() else {
-        return Err(AppError::IngestTokenRequired);
-    };
-    let policy = ingest_abuse::policy_for_tier(scope.risk_tier.unwrap_or_default());
+    let policy = ingest_abuse::policy_for_tier(scope.risk_tier);
     if !installed
         .auth_security
         .ingest
         .check_device_ingest_items(
             &scope.application_id,
-            device_id,
+            &scope.device_id,
             ingest_abuse::scaled_cost(item_count, policy.item_cost_multiplier),
         )
         .await
@@ -705,17 +657,14 @@ fn validate_with<T: ValidateTelemetry>(
 }
 
 fn bind_event_device(scope: &IngestScope, item: &mut EventInput) -> Result<(), &'static str> {
-    bind_device_id(scope.device_id.as_deref(), &mut item.anonymous_id)
+    bind_device_id(&scope.device_id, &mut item.anonymous_id)
 }
 
 fn bind_error_device(scope: &IngestScope, item: &mut ErrorInput) -> Result<(), &'static str> {
-    bind_device_id(scope.device_id.as_deref(), &mut item.anonymous_id)
+    bind_device_id(&scope.device_id, &mut item.anonymous_id)
 }
 
-fn bind_device_id(bound: Option<&str>, value: &mut Option<String>) -> Result<(), &'static str> {
-    let Some(bound) = bound else {
-        return Ok(());
-    };
+fn bind_device_id(bound: &str, value: &mut Option<String>) -> Result<(), &'static str> {
     match value.as_deref() {
         Some(current) if current != bound => {
             Err("anonymous_id must match deviceId used to issue the ingest token")
@@ -795,9 +744,9 @@ mod tests {
         IngestScope {
             application_id: "app".into(),
             environment_id: "env".into(),
-            source_ip: Some("127.0.0.1".into()),
-            device_id: Some("device-1234".into()),
-            risk_tier: Some(RiskTier::Low),
+            source_ip: "127.0.0.1".into(),
+            device_id: "device-1234".into(),
+            risk_tier: RiskTier::Low,
         }
     }
 
