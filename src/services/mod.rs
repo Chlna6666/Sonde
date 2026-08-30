@@ -4,6 +4,8 @@ mod application_models;
 pub mod applications;
 pub mod authentication;
 pub mod backup;
+mod device_models;
+pub mod devices;
 mod error_query_models;
 pub mod errors;
 mod explorer_models;
