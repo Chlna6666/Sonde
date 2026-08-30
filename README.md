@@ -15,7 +15,7 @@ Sonde is a self-hosted telemetry analytics platform for teams that operate more 
 
 ## Security and privacy
 
-Sonde is designed for self-hosted deployments. Passwords use Argon2id; interactive sessions, temporary 2FA state, and TOTP replay protection are stored in the configured database. RBAC, CSRF validation, and adaptive login protection are included. Ingest rate limits, login challenges, and ingest nonce replay caches are currently process-local, so horizontally scaled deployments should use a consistent routing or shared enforcement layer for those controls.
+Sonde is designed for self-hosted deployments. Passwords use Argon2id; interactive sessions, temporary 2FA state, TOTP replay protection, ingest bootstrap rate windows, and signed-request nonce replay protection are stored in the configured database. RBAC, CSRF validation, device-bound short-lived ingest tokens, HMAC request signing, and adaptive device-risk controls are included. High-throughput ingest request/byte/item buckets and adaptive login challenges remain process-local, so horizontally scaled deployments should keep an edge or shared traffic-control layer for aggregate hot-path quotas.
 
 Do not commit the generated `data/` directory, database files, `sonde.password-pepper`, production connection strings, ingest keys, or local `.env` files. The repository's [`.gitignore`](.gitignore) excludes these by default. Use [`.env.example`](.env.example) only as a starting point for local configuration.
 
@@ -65,16 +65,41 @@ Debug builds skip the embedded production frontend bundle. Set `SONDE_BUILD_WEB=
 
 ## Ingest telemetry
 
-Create an application in the console, then copy its ingest key once.
+Create an application in the console and copy its long-lived ingest key once. That key is a bootstrap credential only: telemetry endpoints require a short-lived device token.
+
+The client should generate or read one stable pseudonymous device identifier. Do not use a raw MAC address, hardware serial number, or another directly identifying hardware value.
+
+First exchange the ingest key for a device-bound token:
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/ingest/events \
-  -H "Authorization: Bearer sonde_..." \
+curl -X POST http://127.0.0.1:8080/api/v1/ingest/token \
+  -H "Authorization: Bearer <INGEST_KEY>" \
   -H "Content-Type: application/json" \
-  -d '{"items":[{"name":"application.start","anonymousId":"client-1","appVersion":"2.0.0","os":"Windows","attributes":{}}]}'
+  -H "User-Agent: MyApp/2.0.0" \
+  -d '{"deviceId":"device-pseudonymous-id"}'
 ```
 
-Batches accept 1–1000 items and are limited to 1 MiB. Invalid items return their indexes while valid entries in the same request can still be stored.
+The response contains `token`, `signingKey`, `expiresAt`, and `signatureVersion`. For every telemetry request, serialize the JSON body once and sign those exact raw bytes. For signature version `sonde-hmac-sha256-v2`, join the following lines with LF (`\n`):
+
+```text
+sonde-hmac-sha256-v2
+<timestampMillis>
+<nonce>
+<METHOD>
+<PATH>
+<hex(SHA256(rawBody))>
+```
+
+Compute `hex(HMAC-SHA256(signingKey, canonical))`, then send the telemetry request with:
+
+```text
+Authorization: Bearer <DEVICE_TOKEN>
+x-sonde-timestamp: <timestampMillis>
+x-sonde-nonce: <fresh random nonce>
+x-sonde-signature: <hex hmac>
+```
+
+Use `/api/v1/ingest/events`, `/metrics`, `/logs`, or `/errors` as the signed path. Never send the long-lived bootstrap ingest key directly to those telemetry endpoints. Batches accept 1–1000 items and are limited to 1 MiB. Invalid items return their indexes while valid entries in the same request can still be stored.
 
 ## Quality checks
 
