@@ -5,31 +5,14 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use rand::RngCore;
 use sha2::Sha256;
-use tokio::sync::{Mutex, RwLock};
-use uuid::Uuid;
+use tokio::sync::Mutex;
 
 use crate::{auth, error::AppError};
 
-const SESSION_ABSOLUTE_MILLIS: i64 = 8 * 60 * 60 * 1_000;
-const SESSION_IDLE_MILLIS: i64 = 30 * 60 * 1_000;
 const CHALLENGE_MILLIS: i64 = 5 * 60 * 1_000;
 const INGEST_SIGNING_CONTEXT: &[u8] = b"sonde-ingest-signing-v1\n";
 
 type HmacSha256 = Hmac<Sha256>;
-
-#[derive(Clone, Debug)]
-pub struct SessionSnapshot {
-    pub user_id: String,
-    pub csrf_token: String,
-}
-
-#[derive(Debug)]
-struct MemorySession {
-    user_id: String,
-    csrf_token: String,
-    expires_at: i64,
-    last_seen_at: i64,
-}
 
 #[derive(Debug, Default)]
 struct Attempt {
@@ -293,18 +276,13 @@ pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     output
 }
 
-#[derive(Debug)]
-struct TwoFactorPending {
-    user_id: String,
-    expires_at: i64,
-}
-
+/// Process-local security state that is intentionally not durable.
+///
+/// Durable sessions, 2FA pending tokens, and TOTP replay protection live in
+/// `database::auth_state_repo`, so they remain consistent across application replicas.
 pub struct AuthSecurity {
-    sessions: RwLock<HashMap<String, MemorySession>>,
     attempts: Mutex<HashMap<String, Attempt>>,
     challenges: Mutex<HashMap<String, Challenge>>,
-    two_factor_tokens: Mutex<HashMap<String, TwoFactorPending>>,
-    used_totp_steps: Mutex<HashMap<String, u64>>,
     pub ingest: Arc<IngestSecurity>,
     pepper: Vec<u8>,
     dummy_password_hash: String,
@@ -313,11 +291,8 @@ pub struct AuthSecurity {
 impl AuthSecurity {
     pub fn new(pepper: &[u8]) -> Result<Self, AppError> {
         Ok(Self {
-            sessions: RwLock::new(HashMap::new()),
             attempts: Mutex::new(HashMap::new()),
             challenges: Mutex::new(HashMap::new()),
-            two_factor_tokens: Mutex::new(HashMap::new()),
-            used_totp_steps: Mutex::new(HashMap::new()),
             ingest: Arc::new(IngestSecurity::new()),
             pepper: pepper.to_vec(),
             dummy_password_hash: auth::hash_password(
@@ -333,97 +308,6 @@ impl AuthSecurity {
 
     pub fn dummy_password_hash(&self) -> &str {
         &self.dummy_password_hash
-    }
-
-    pub async fn issue_2fa_temp_token(&self, user_id: &str) -> String {
-        let token = format!("2fa_{}_{}", Uuid::now_v7(), auth::random_token(16));
-        let now = chrono::Utc::now().timestamp_millis();
-        let mut tokens = self.two_factor_tokens.lock().await;
-        if tokens.len() > 10_000 {
-            tokens.retain(|_, v| v.expires_at > now);
-        }
-        tokens.insert(
-            token.clone(),
-            TwoFactorPending {
-                user_id: user_id.to_owned(),
-                expires_at: now + 5 * 60 * 1_000,
-            },
-        );
-        token
-    }
-
-    pub async fn consume_2fa_temp_token(&self, token: &str) -> Option<String> {
-        let now = chrono::Utc::now().timestamp_millis();
-        let mut tokens = self.two_factor_tokens.lock().await;
-        let entry = tokens.remove(token)?;
-        if entry.expires_at > now {
-            Some(entry.user_id)
-        } else {
-            None
-        }
-    }
-
-    pub async fn verify_and_consume_totp(&self, user_id: &str, secret: &str, code: &str) -> bool {
-        let Some(step) = crate::totp::verify_totp_step(secret, code) else {
-            return false;
-        };
-
-        let mut used_steps = self.used_totp_steps.lock().await;
-        let now_sec = chrono::Utc::now().timestamp() as u64;
-        if used_steps.len() > 20_000 {
-            let oldest_allowed_step = (now_sec / 30).saturating_sub(10);
-            used_steps.retain(|_, last_step| *last_step >= oldest_allowed_step);
-        }
-
-        if let Some(&last_step) = used_steps.get(user_id)
-            && step <= last_step
-        {
-            return false;
-        }
-
-        used_steps.insert(user_id.to_owned(), step);
-        true
-    }
-
-    pub async fn create_session(&self, user_id: &str) -> (String, String) {
-        let token = auth::random_token(32);
-        let csrf_token = auth::random_token(24);
-        let now = chrono::Utc::now().timestamp_millis();
-        let mut sessions = self.sessions.write().await;
-        if sessions.len() > 10_000 {
-            sessions.retain(|_, s| {
-                s.expires_at > now && s.last_seen_at + SESSION_IDLE_MILLIS > now
-            });
-        }
-        sessions.insert(
-            auth::token_hash(&token),
-            MemorySession {
-                user_id: user_id.to_owned(),
-                csrf_token: csrf_token.clone(),
-                expires_at: now + SESSION_ABSOLUTE_MILLIS,
-                last_seen_at: now,
-            },
-        );
-        (token, csrf_token)
-    }
-
-    pub async fn session(&self, token_hash: &str) -> Option<SessionSnapshot> {
-        let now = chrono::Utc::now().timestamp_millis();
-        let mut sessions = self.sessions.write().await;
-        let session = sessions.get_mut(token_hash)?;
-        if session.expires_at <= now || session.last_seen_at + SESSION_IDLE_MILLIS <= now {
-            sessions.remove(token_hash);
-            return None;
-        }
-        session.last_seen_at = now;
-        Some(SessionSnapshot {
-            user_id: session.user_id.clone(),
-            csrf_token: session.csrf_token.clone(),
-        })
-    }
-
-    pub async fn revoke_session(&self, token_hash: &str) {
-        self.sessions.write().await.remove(token_hash);
     }
 
     pub async fn login_gate(
@@ -551,23 +435,6 @@ pub mod tests {
     use super::*;
 
     #[test]
-    fn sessions_are_process_local_and_revocable() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let security = AuthSecurity::new(b"pepper").unwrap();
-            let (token, csrf) = security.create_session("usr_1").await;
-            let snapshot = security.session(&auth::token_hash(&token)).await.unwrap();
-            assert_eq!(snapshot.user_id, "usr_1");
-            assert_eq!(snapshot.csrf_token, csrf);
-            security.revoke_session(&auth::token_hash(&token)).await;
-            assert!(security.session(&auth::token_hash(&token)).await.is_none());
-        });
-    }
-
-    #[test]
     fn first_failure_requires_a_one_time_challenge() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -678,45 +545,6 @@ pub mod tests {
                 )
                 .is_err()
             );
-        });
-    }
-
-    #[test]
-    fn test_totp_anti_replay_and_temp_tokens() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let security = AuthSecurity::new(b"pepper").unwrap();
-            let secret = crate::totp::generate_totp_secret();
-            let now_step = (chrono::Utc::now().timestamp() as u64) / 30;
-            let code = crate::totp::compute_totp(&secret, now_step).unwrap();
-
-            assert!(
-                security
-                    .verify_and_consume_totp("user-1", &secret, &code)
-                    .await
-            );
-            assert!(
-                !security
-                    .verify_and_consume_totp("user-1", &secret, &code)
-                    .await
-            );
-
-            let past_code = crate::totp::compute_totp(&secret, now_step - 1).unwrap();
-            assert!(
-                !security
-                    .verify_and_consume_totp("user-1", &secret, &past_code)
-                    .await
-            );
-
-            let temp_token = security.issue_2fa_temp_token("user-2").await;
-            assert_eq!(
-                security.consume_2fa_temp_token(&temp_token).await,
-                Some("user-2".into())
-            );
-            assert_eq!(security.consume_2fa_temp_token(&temp_token).await, None);
         });
     }
 }
