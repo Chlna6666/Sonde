@@ -20,6 +20,7 @@ pub struct RetentionReport {
     pub logs_deleted: u64,
     pub error_occurrences_deleted: u64,
     pub error_groups_deleted: u64,
+    pub device_profiles_deleted: u64,
     pub rollups_deleted: u64,
     pub dimension_rollups_deleted: u64,
     pub user_rollups_deleted: u64,
@@ -68,6 +69,14 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             cutoff,
         )
         .await?;
+        let device_profiles_deleted = delete_in_batches(
+            database,
+            "telemetry_devices",
+            "last_seen_at",
+            &app_id,
+            cutoff,
+        )
+        .await?;
         first_seen_needs_rebuild |= events_deleted > 0;
         report.events_deleted = report.events_deleted.saturating_add(events_deleted);
         report.metrics_deleted = report.metrics_deleted.saturating_add(metrics_deleted);
@@ -75,6 +84,9 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
         report.error_occurrences_deleted = report
             .error_occurrences_deleted
             .saturating_add(error_occurrences_deleted);
+        report.device_profiles_deleted = report
+            .device_profiles_deleted
+            .saturating_add(device_profiles_deleted);
         report.error_groups_deleted +=
             delete_in_batches(database, "error_groups", "last_seen", &app_id, cutoff).await?;
         report.rollups_deleted += delete_string_in_batches(
@@ -153,6 +165,7 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             app_id = %app_id,
             app_name = %app_name,
             retention_days = %retention_days,
+            device_profiles_pruned = device_profiles_deleted,
             "retention sweep completed for application"
         );
     }
@@ -175,6 +188,7 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             logs_pruned = report.logs_deleted,
             error_occurrences_pruned = report.error_occurrences_deleted,
             error_groups_pruned = report.error_groups_deleted,
+            device_profiles_pruned = report.device_profiles_deleted,
             rollups_pruned = report.rollups_deleted,
             dimension_rollups_pruned = report.dimension_rollups_deleted,
             user_rollups_pruned = report.user_rollups_deleted,
