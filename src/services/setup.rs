@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fs, path::Path, sync::Arc};
 
 use crate::{
     auth,
@@ -9,7 +9,6 @@ use crate::{
     security::AuthSecurity,
     state::{AppState, InstalledState},
 };
-use std::{fs, path::Path};
 
 pub struct SetupInput<'a> {
     pub database_type: &'a str,
@@ -47,7 +46,7 @@ pub async fn complete(state: &AppState, input: SetupInput<'_>) -> Result<(), App
     let password_hash =
         tokio::task::spawn_blocking(move || auth::hash_password(&password, &pepper))
             .await
-            .map_err(|_| AppError::Internal)??;
+            .map_err(|error| AppError::internal("hash setup password", error))??;
     auth_repo::create_super_admin(
         &database,
         input.email,
@@ -64,7 +63,7 @@ pub async fn complete(state: &AppState, input: SetupInput<'_>) -> Result<(), App
     };
     config
         .write_atomic(&state.runtime.config_path)
-        .map_err(|_| AppError::Internal)?;
+        .map_err(|error| AppError::internal("write installation config after setup", error))?;
     let auth_security = Arc::new(AuthSecurity::new(state.runtime.password_pepper.as_bytes())?);
     state
         .finish_setup(InstalledState::new(database, config, auth_security))
@@ -134,7 +133,8 @@ fn prepare_sqlite_path(database_url: &str) -> Result<(), AppError> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
-        fs::create_dir_all(parent).map_err(|_| AppError::Internal)?;
+        fs::create_dir_all(parent)
+            .map_err(|error| AppError::internal("create SQLite database directory", error))?;
     }
     Ok(())
 }

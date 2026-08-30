@@ -334,11 +334,13 @@ fn require_system_backup_access(user: &AuthenticatedUser) -> Result<(), AppError
 
 fn map_backup_v2_error(error: backup_v2_repo::BackupV2Error) -> AppError {
     match error {
-        backup_v2_repo::BackupV2Error::Database(error) => AppError::Database(error),
+        backup_v2_repo::BackupV2Error::Database(error) => AppError::from(error),
         backup_v2_repo::BackupV2Error::Invalid(message) => AppError::Validation(message),
         backup_v2_repo::BackupV2Error::Json(error) => {
             AppError::Validation(format!("invalid backup JSON: {error}"))
         }
-        backup_v2_repo::BackupV2Error::Io(_) => AppError::Internal,
+        backup_v2_repo::BackupV2Error::Io(error) => {
+            AppError::internal("restore backup file", error)
+        }
     }
 }

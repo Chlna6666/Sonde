@@ -1,12 +1,20 @@
-use actix_web::{HttpResponse, ResponseError, http::StatusCode};
+use actix_web::{
+    HttpResponse, ResponseError,
+    error::{JsonPayloadError, PathError, QueryPayloadError},
+    http::StatusCode,
+    web,
+};
 use serde::Serialize;
 
 use crate::error::AppError;
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ErrorBody<'a> {
     code: &'a str,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_id: Option<String>,
 }
 
 impl ResponseError for AppError {
@@ -15,34 +23,92 @@ impl ResponseError for AppError {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
-            Self::NotInitialized => StatusCode::SERVICE_UNAVAILABLE,
-            Self::AlreadyInitialized => StatusCode::CONFLICT,
+            Self::NotInitialized | Self::ServiceUnavailable { .. } => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+            Self::AlreadyInitialized | Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Validation(_) | Self::PasswordLength | Self::PasswordBlocked => {
                 StatusCode::BAD_REQUEST
             }
+            Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
-            Self::Database(_) | Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Upstream { .. } => StatusCode::BAD_GATEWAY,
+            Self::Database(_) | Self::Internal | Self::InternalContext { .. } => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         }
     }
 
     fn error_response(&self) -> HttpResponse {
-        let code = match self {
-            Self::Unauthorized => "unauthorized",
-            Self::Forbidden => "forbidden",
-            Self::NotFound => "not_found",
-            Self::NotInitialized => "not_initialized",
-            Self::AlreadyInitialized => "already_initialized",
-            Self::Validation(_) => "validation_error",
-            Self::PayloadTooLarge => "payload_too_large",
-            Self::PasswordLength => "password_length",
-            Self::PasswordBlocked => "password_blocked",
-            Self::TooManyRequests => "rate_limited",
-            Self::Database(_) | Self::Internal => "internal_error",
+        let error_id = if self.is_server_failure() {
+            let error_id = uuid::Uuid::now_v7().to_string();
+            tracing::error!(
+                error_id = %error_id,
+                code = self.code(),
+                error = ?self,
+                "request failed"
+            );
+            Some(error_id)
+        } else {
+            None
         };
+
         HttpResponse::build(self.status_code()).json(ErrorBody {
-            code,
-            message: self.to_string(),
+            code: self.code(),
+            message: self.public_message(),
+            error_id,
         })
+    }
+}
+
+pub(crate) fn json_config(limit: usize) -> web::JsonConfig {
+    web::JsonConfig::default()
+        .limit(limit)
+        .error_handler(|error, _request| json_payload_error(error).into())
+}
+
+pub(crate) fn query_config() -> web::QueryConfig {
+    web::QueryConfig::default().error_handler(|error, _request| {
+        let error = match error {
+            QueryPayloadError::Deserialize(error) => {
+                AppError::Validation(format!("invalid query parameters: {error}"))
+            }
+            other => AppError::Validation(format!("invalid query parameters: {other}")),
+        };
+        error.into()
+    })
+}
+
+pub(crate) fn path_config() -> web::PathConfig {
+    web::PathConfig::default().error_handler(|error, _request| {
+        let error = match error {
+            PathError::Deserialize(error) => {
+                AppError::Validation(format!("invalid route parameters: {error}"))
+            }
+            other => AppError::Validation(format!("invalid route parameters: {other}")),
+        };
+        error.into()
+    })
+}
+
+fn json_payload_error(error: JsonPayloadError) -> AppError {
+    match error {
+        JsonPayloadError::OverflowKnownLength { .. } | JsonPayloadError::Overflow { .. } => {
+            AppError::PayloadTooLarge
+        }
+        JsonPayloadError::ContentType => AppError::UnsupportedMediaType(
+            "content-type must be application/json".into(),
+        ),
+        JsonPayloadError::Deserialize(_) => {
+            AppError::Validation("invalid JSON request body".into())
+        }
+        JsonPayloadError::Payload(error) => {
+            AppError::Validation(format!("request body could not be read: {error}"))
+        }
+        JsonPayloadError::Serialize(error) => {
+            AppError::internal("serialize extracted JSON request", error)
+        }
+        other => AppError::internal("extract JSON request body", other),
     }
 }

@@ -32,8 +32,8 @@ pub async fn load_installed(
 }
 
 async fn load_from_config(runtime: &RuntimeConfig) -> Result<Arc<InstalledState>, AppError> {
-    let mut config =
-        InstallationConfig::read(&runtime.config_path).map_err(|_| AppError::Internal)?;
+    let mut config = InstallationConfig::read(&runtime.config_path)
+        .map_err(|error| AppError::internal("read installation config", error))?;
     if let Some(url) = &runtime.database_url_override {
         config.database_url.clone_from(url);
     }
@@ -64,7 +64,7 @@ async fn recover_existing_database(
     };
     config
         .write_atomic(&runtime.config_path)
-        .map_err(|_| AppError::Internal)?;
+        .map_err(|error| AppError::internal("write recovered installation config", error))?;
     build_installed(runtime, database, config).map(Some)
 }
 

@@ -88,7 +88,9 @@ async fn update_system_settings(
     user.require("settings.manage", None)?;
 
     let payload = body.into_inner();
-    let updated = state.get_ref().as_ref()
+    let updated = state
+        .get_ref()
+        .as_ref()
         .update_installed_config(|cfg| {
             if let Some(tz) = payload.timezone {
                 if !tz.trim().is_empty() {
@@ -178,9 +180,10 @@ async fn export_system_backup_v2(
     let user = authentication::authenticate(&installed, &req).await?;
     let stream = backup::export_full_system_v2(&installed, &user).await?;
     let body = stream.map(|chunk| {
-        chunk
-            .map(web::Bytes::from)
-            .map_err(web_error::ErrorInternalServerError)
+        chunk.map(web::Bytes::from).map_err(|error| {
+            tracing::error!(error = ?error, "backup export stream failed");
+            web_error::ErrorInternalServerError("backup export stream failed")
+        })
     });
     let date = chrono::Utc::now().format("%Y-%m-%d");
 
@@ -207,14 +210,17 @@ async fn restore_system_backup_v2(
 
     // NamedTempFile owns deletion. The async handle returned by reopen writes to the same inode,
     // while the guard keeps the path alive for the validation and restore passes.
-    let staging = tempfile::NamedTempFile::new().map_err(|_| AppError::Internal)?;
-    let staging_file = staging.reopen().map_err(|_| AppError::Internal)?;
+    let staging = tempfile::NamedTempFile::new()
+        .map_err(|error| AppError::internal("create backup restore staging file", error))?;
+    let staging_file = staging
+        .reopen()
+        .map_err(|error| AppError::internal("reopen backup restore staging file", error))?;
     let mut staging_file = tokio::fs::File::from_std(staging_file);
     let mut current_record_bytes = 0_usize;
 
     while let Some(chunk) = body.next().await {
         let chunk = chunk
-            .map_err(|_| AppError::Validation("backup upload was interrupted".into()))?;
+            .map_err(|error| AppError::Validation(format!("backup upload was interrupted: {error}")))?;
         for byte in chunk.as_ref() {
             if *byte == b'\n' {
                 current_record_bytes = 0;
@@ -228,16 +234,16 @@ async fn restore_system_backup_v2(
         staging_file
             .write_all(&chunk)
             .await
-            .map_err(|_| AppError::Internal)?;
+            .map_err(|error| AppError::internal("write backup restore staging file", error))?;
     }
     staging_file
         .flush()
         .await
-        .map_err(|_| AppError::Internal)?;
+        .map_err(|error| AppError::internal("flush backup restore staging file", error))?;
     staging_file
         .sync_all()
         .await
-        .map_err(|_| AppError::Internal)?;
+        .map_err(|error| AppError::internal("sync backup restore staging file", error))?;
     drop(staging_file);
 
     let restored = backup::restore_full_system_v2(&installed, &user, staging.path()).await?;

@@ -19,11 +19,12 @@ pub fn hash_password(password: &str, pepper: &[u8]) -> Result<String, AppError> 
 pub fn hash_password_unchecked(password: &str, pepper: &[u8]) -> Result<String, AppError> {
     let mut salt_bytes = [0_u8; 16];
     rand::rng().fill_bytes(&mut salt_bytes);
-    let salt = SaltString::encode_b64(&salt_bytes).map_err(|_| AppError::Internal)?;
+    let salt = SaltString::encode_b64(&salt_bytes)
+        .map_err(|error| AppError::internal("encode password salt", error))?;
     password_hasher(pepper)?
         .hash_password(password.as_bytes(), &salt)
         .map(|hash| hash.to_string())
-        .map_err(|_| AppError::Internal)
+        .map_err(|error| AppError::internal("hash password", error))
 }
 
 pub fn validate_password(password: &str) -> Result<(), AppError> {
@@ -67,7 +68,7 @@ fn password_hasher(pepper: &[u8]) -> Result<Argon2<'_>, AppError> {
         Version::V0x13,
         Params::default(),
     )
-    .map_err(|_| AppError::Internal)
+    .map_err(|error| AppError::internal("initialize password hasher", error))
 }
 
 pub fn random_token(byte_length: usize) -> String {

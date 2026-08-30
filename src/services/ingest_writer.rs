@@ -23,16 +23,22 @@ pub struct IngestWriter {
     errors: mpsc::Sender<WriteRequest<ErrorInput>>,
 }
 
+#[derive(Clone, Debug)]
+enum WriteFailure {
+    Database(String),
+    Unavailable(&'static str),
+}
+
 struct WriteRequest<T> {
     scope: TelemetryScope,
     items: Vec<T>,
-    response: oneshot::Sender<Result<(), String>>,
+    response: oneshot::Sender<Result<(), WriteFailure>>,
 }
 
 struct WriteGroup<T> {
     scope: TelemetryScope,
     items: Vec<T>,
-    responses: Vec<oneshot::Sender<Result<(), String>>>,
+    responses: Vec<oneshot::Sender<Result<(), WriteFailure>>>,
 }
 
 impl IngestWriter {
@@ -150,13 +156,19 @@ async fn enqueue<T: Send + 'static>(
     };
     sender.try_send(request).map_err(|error| match error {
         mpsc::error::TrySendError::Full(_) => AppError::TooManyRequests,
-        mpsc::error::TrySendError::Closed(_) => AppError::Internal,
+        mpsc::error::TrySendError::Closed(_) => {
+            AppError::unavailable("ingest writer queue", "writer task stopped")
+        }
     })?;
 
-    receiver
-        .await
-        .map_err(|_| AppError::Internal)?
-        .map_err(|message| AppError::Database(DbErr::Custom(message)))
+    match receiver.await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(WriteFailure::Database(message))) => Err(AppError::from(DbErr::Custom(message))),
+        Ok(Err(WriteFailure::Unavailable(message))) => {
+            Err(AppError::unavailable("ingest writer", message))
+        }
+        Err(error) => Err(AppError::unavailable("ingest writer response", error)),
+    }
 }
 
 fn spawn_lane<T, F, Fut>(
@@ -210,14 +222,16 @@ fn spawn_lane<T, F, Fut>(
                     Ok(permit) => permit,
                     Err(_) => {
                         for response in group.responses {
-                            let _ = response.send(Err("ingest writer is shutting down".into()));
+                            let _ = response.send(Err(WriteFailure::Unavailable(
+                                "write concurrency gate closed",
+                            )));
                         }
                         continue;
                     }
                 };
                 let result = insert(database.clone(), group.scope, group.items)
                     .await
-                    .map_err(|error| error.to_string());
+                    .map_err(|error| WriteFailure::Database(error.to_string()));
                 drop(permit);
 
                 for response in group.responses {

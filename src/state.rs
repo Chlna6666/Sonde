@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
-use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore, broadcast};
+use tokio::sync::{
+    Mutex, OwnedSemaphorePermit, RwLock, Semaphore, TryAcquireError, broadcast,
+};
 
 use crate::{
     config::{InstallationConfig, RuntimeConfig},
@@ -79,14 +81,14 @@ impl AppState {
         self.ingest_gate
             .clone()
             .try_acquire_owned()
-            .map_err(|_| AppError::TooManyRequests)
+            .map_err(|error| admission_error("ingest admission gate", error))
     }
 
     pub fn try_acquire_analytics(&self) -> Result<OwnedSemaphorePermit, AppError> {
         self.analytics_gate
             .clone()
             .try_acquire_owned()
-            .map_err(|_| AppError::TooManyRequests)
+            .map_err(|error| admission_error("analytics admission gate", error))
     }
 
     pub async fn update_installed_config<F>(
@@ -102,7 +104,7 @@ impl AppState {
             update_fn(&mut new_config);
             new_config
                 .write_atomic(&self.runtime.config_path)
-                .map_err(|_| AppError::Internal)?;
+                .map_err(|error| AppError::internal("write installation config", error))?;
             *guard = Some(Arc::new(InstalledState {
                 database: installed_ref.database.clone(),
                 config: new_config.clone(),
@@ -123,5 +125,12 @@ impl AppState {
         crate::bootstrap::spawn_background_workers(&state);
         *guard = Some(Arc::new(state));
         Ok(())
+    }
+}
+
+fn admission_error(context: &'static str, error: TryAcquireError) -> AppError {
+    match error {
+        TryAcquireError::NoPermits => AppError::TooManyRequests,
+        TryAcquireError::Closed => AppError::unavailable(context, error),
     }
 }

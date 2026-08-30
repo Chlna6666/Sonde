@@ -108,7 +108,9 @@ pub async fn login(
         }
     })
     .await
-    .map_err(|_| LoginFailure::Application(AppError::Internal))?;
+    .map_err(|error| {
+        LoginFailure::Application(AppError::internal("verify login password", error))
+    })?;
 
     if needs_upgrade && let Some(user) = credential.as_mut() {
         let password_str = input.password.to_owned();
@@ -117,7 +119,9 @@ pub async fn login(
             auth::hash_password_unchecked(&password_str, &pepper_bytes)
         })
         .await
-        .map_err(|_| LoginFailure::Application(AppError::Internal))?
+        .map_err(|error| {
+            LoginFailure::Application(AppError::internal("upgrade password hash", error))
+        })?
         .map_err(LoginFailure::Application)?;
 
         auth_repo::update_password_hash(&installed.database, &user.id, &upgraded_hash)
@@ -134,7 +138,12 @@ pub async fn login(
         return Err(login_challenge(installed, &account_key, &source_key).await);
     }
 
-    let credential = credential.ok_or(LoginFailure::Application(AppError::Internal))?;
+    let credential = credential.ok_or_else(|| {
+        LoginFailure::Application(AppError::internal(
+            "load authenticated credential",
+            "credential disappeared after successful validation",
+        ))
+    })?;
     installed
         .auth_security
         .record_success(&account_key, &source_key)
@@ -428,7 +437,7 @@ async fn verify_account_password(
     let pepper = pepper.to_vec();
     tokio::task::spawn_blocking(move || auth::verify_password(&password, &password_hash, &pepper))
         .await
-        .map_err(|_| AppError::Internal)
+        .map_err(|error| AppError::internal("verify account password", error))
 }
 
 async fn verify_totp_once(

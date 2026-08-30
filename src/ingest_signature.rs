@@ -27,7 +27,7 @@ pub fn verify(
     let provided = hex::decode(provided_signature_hex).map_err(|_| AppError::Forbidden)?;
     let canonical = canonical_request(timestamp_ms, nonce, method, path, body);
     let mut mac = HmacSha256::new_from_slice(signing_key.as_bytes())
-        .map_err(|_| AppError::Internal)?;
+        .map_err(|error| AppError::internal("initialize request signature verifier", error))?;
     mac.update(&canonical);
     mac.verify_slice(&provided).map_err(|_| AppError::Forbidden)
 }

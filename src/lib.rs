@@ -38,7 +38,9 @@ pub async fn run() -> io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(state.clone()))
-            .app_data(web::JsonConfig::default().limit(2_097_152))
+            .app_data(api::json_config(2_097_152))
+            .app_data(api::query_config())
+            .app_data(api::path_config())
             .app_data(web::PayloadConfig::default().limit(4_194_304))
             .wrap(
                 middleware::DefaultHeaders::new()

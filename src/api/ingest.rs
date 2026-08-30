@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use actix_web::{HttpRequest, HttpResponse, http::header, web};
+use futures_util::StreamExt;
 use serde::de::DeserializeOwned;
 
 use crate::{
@@ -18,8 +19,7 @@ const MAX_TOKEN_BODY_BYTES: usize = 16_384;
 pub fn configure(config: &mut web::ServiceConfig) {
     config.service(
         web::scope("/api/v1/ingest")
-            .app_data(web::PayloadConfig::new(MAX_INGEST_BODY_BYTES))
-            .app_data(web::JsonConfig::default().limit(MAX_TOKEN_BODY_BYTES))
+            .app_data(super::json_config(MAX_TOKEN_BODY_BYTES))
             .route("/token", web::post().to(token))
             .route("/events", web::post().to(events))
             .route("/metrics", web::post().to(metrics))
@@ -48,9 +48,9 @@ async fn token(
 async fn events(
     state: web::Data<Arc<AppState>>,
     request: HttpRequest,
-    body: web::Bytes,
+    body: web::Payload,
 ) -> Result<HttpResponse, AppError> {
-    ensure_body_size(&body)?;
+    let body = read_ingest_body(body).await?;
     let _permit = state.try_acquire_ingest()?;
     let installed = state.installed().await?;
     let client_ip = extract_client_ip(&request);
@@ -70,9 +70,9 @@ async fn events(
 async fn metrics(
     state: web::Data<Arc<AppState>>,
     request: HttpRequest,
-    body: web::Bytes,
+    body: web::Payload,
 ) -> Result<HttpResponse, AppError> {
-    ensure_body_size(&body)?;
+    let body = read_ingest_body(body).await?;
     let _permit = state.try_acquire_ingest()?;
     let installed = state.installed().await?;
     let client_ip = extract_client_ip(&request);
@@ -92,9 +92,9 @@ async fn metrics(
 async fn logs(
     state: web::Data<Arc<AppState>>,
     request: HttpRequest,
-    body: web::Bytes,
+    body: web::Payload,
 ) -> Result<HttpResponse, AppError> {
-    ensure_body_size(&body)?;
+    let body = read_ingest_body(body).await?;
     let _permit = state.try_acquire_ingest()?;
     let installed = state.installed().await?;
     let client_ip = extract_client_ip(&request);
@@ -114,9 +114,9 @@ async fn logs(
 async fn errors(
     state: web::Data<Arc<AppState>>,
     request: HttpRequest,
-    body: web::Bytes,
+    body: web::Payload,
 ) -> Result<HttpResponse, AppError> {
-    ensure_body_size(&body)?;
+    let body = read_ingest_body(body).await?;
     let _permit = state.try_acquire_ingest()?;
     let installed = state.installed().await?;
     let client_ip = extract_client_ip(&request);
@@ -133,11 +133,17 @@ async fn errors(
     Ok(HttpResponse::Accepted().json(receipt))
 }
 
-fn ensure_body_size(body: &[u8]) -> Result<(), AppError> {
-    if body.len() > MAX_INGEST_BODY_BYTES {
-        return Err(AppError::PayloadTooLarge);
+async fn read_ingest_body(mut payload: web::Payload) -> Result<web::Bytes, AppError> {
+    let mut body = web::BytesMut::new();
+    while let Some(chunk) = payload.next().await {
+        let chunk = chunk
+            .map_err(|error| AppError::Validation(format!("request body could not be read: {error}")))?;
+        if body.len().saturating_add(chunk.len()) > MAX_INGEST_BODY_BYTES {
+            return Err(AppError::PayloadTooLarge);
+        }
+        body.extend_from_slice(&chunk);
     }
-    Ok(())
+    Ok(body.freeze())
 }
 
 fn parse_batch<T: DeserializeOwned>(body: &[u8]) -> Result<Batch<T>, AppError> {

@@ -20,6 +20,8 @@ use actix_web::{HttpResponse, web};
 
 use crate::state::AppState;
 
+pub(crate) use error_response::{json_config, path_config, query_config};
+
 pub fn configure(config: &mut web::ServiceConfig) {
     config
         .route("/health/live", web::get().to(|| async { "ok" }))
