@@ -18,7 +18,10 @@ async fn nonce_replay_is_rejected_across_independent_database_connections(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("nonce-replay.sqlite");
-    let database_url = format!("sqlite://{}?mode=rwc", path.to_string_lossy().replace('\\', "/"));
+    let database_url = format!(
+        "sqlite://{}?mode=rwc",
+        path.to_string_lossy().replace('\\', "/")
+    );
 
     let replica_a = database::connect(&database_url).await?;
     database::migrate(&replica_a).await?;
@@ -59,7 +62,10 @@ async fn signed_ingest_replay_is_rejected_across_independent_installed_states(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("signed-replay.sqlite");
-    let database_url = format!("sqlite://{}?mode=rwc", path.to_string_lossy().replace('\\', "/"));
+    let database_url = format!(
+        "sqlite://{}?mode=rwc",
+        path.to_string_lossy().replace('\\', "/")
+    );
     let replica_a = database::connect(&database_url).await?;
     database::migrate(&replica_a).await?;
     let replica_b = database::connect(&database_url).await?;
@@ -76,7 +82,11 @@ async fn signed_ingest_replay_is_rejected_across_independent_installed_states(
         config.clone(),
         Arc::new(AuthSecurity::new(pepper)?),
     );
-    let state_b = InstalledState::new(replica_b, config, Arc::new(AuthSecurity::new(pepper)?));
+    let state_b = InstalledState::new(
+        replica_b,
+        config,
+        Arc::new(AuthSecurity::new(pepper)?),
+    );
 
     let user_agent = "SondeReplayTest/1.0";
     let client_binding = state_a
