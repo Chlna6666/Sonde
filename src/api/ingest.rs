@@ -50,13 +50,14 @@ async fn events(
     request: HttpRequest,
     body: web::Payload,
 ) -> Result<HttpResponse, AppError> {
-    let body = read_ingest_body(body).await?;
     let _permit = state.try_acquire_ingest()?;
+    preflight_device_token(&request)?;
+    let body = read_ingest_body(body).await?;
     let installed = state.installed().await?;
     let client_ip = extract_client_ip(&request);
     let scope = telemetry::scope_from_context_with_permission(
         &installed,
-        ingest_request_context(&request, &client_ip)?,
+        ingest_request_context(&request, &client_ip),
         "telemetry.events",
         body.as_ref(),
     )
@@ -72,13 +73,14 @@ async fn metrics(
     request: HttpRequest,
     body: web::Payload,
 ) -> Result<HttpResponse, AppError> {
-    let body = read_ingest_body(body).await?;
     let _permit = state.try_acquire_ingest()?;
+    preflight_device_token(&request)?;
+    let body = read_ingest_body(body).await?;
     let installed = state.installed().await?;
     let client_ip = extract_client_ip(&request);
     let scope = telemetry::scope_from_context_with_permission(
         &installed,
-        ingest_request_context(&request, &client_ip)?,
+        ingest_request_context(&request, &client_ip),
         "telemetry.metrics",
         body.as_ref(),
     )
@@ -94,13 +96,14 @@ async fn logs(
     request: HttpRequest,
     body: web::Payload,
 ) -> Result<HttpResponse, AppError> {
-    let body = read_ingest_body(body).await?;
     let _permit = state.try_acquire_ingest()?;
+    preflight_device_token(&request)?;
+    let body = read_ingest_body(body).await?;
     let installed = state.installed().await?;
     let client_ip = extract_client_ip(&request);
     let scope = telemetry::scope_from_context_with_permission(
         &installed,
-        ingest_request_context(&request, &client_ip)?,
+        ingest_request_context(&request, &client_ip),
         "telemetry.logs",
         body.as_ref(),
     )
@@ -116,13 +119,14 @@ async fn errors(
     request: HttpRequest,
     body: web::Payload,
 ) -> Result<HttpResponse, AppError> {
-    let body = read_ingest_body(body).await?;
     let _permit = state.try_acquire_ingest()?;
+    preflight_device_token(&request)?;
+    let body = read_ingest_body(body).await?;
     let installed = state.installed().await?;
     let client_ip = extract_client_ip(&request);
     let scope = telemetry::scope_from_context_with_permission(
         &installed,
-        ingest_request_context(&request, &client_ip)?,
+        ingest_request_context(&request, &client_ip),
         "telemetry.errors",
         body.as_ref(),
     )
@@ -186,24 +190,28 @@ fn extract_raw_key(request: &HttpRequest) -> Option<&str> {
         .or_else(|| optional_header(request, "x-api-key"))
 }
 
+fn preflight_device_token(request: &HttpRequest) -> Result<(), AppError> {
+    match extract_raw_key(request) {
+        Some(credential) if credential.starts_with("sndt_") => Ok(()),
+        Some(_) => Err(AppError::IngestTokenRequired),
+        None => Err(AppError::Unauthorized),
+    }
+}
+
 fn ingest_request_context<'a>(
     request: &'a HttpRequest,
     client_ip: &'a str,
-) -> Result<IngestRequestContext<'a>, AppError> {
-    let credential = extract_raw_key(request);
-    if credential.is_some_and(|value| !value.starts_with("sndt_")) {
-        return Err(AppError::IngestTokenRequired);
-    }
-    Ok(IngestRequestContext {
+) -> IngestRequestContext<'a> {
+    IngestRequestContext {
         client_ip,
         user_agent: user_agent(request),
-        credential,
+        credential: extract_raw_key(request),
         signature: optional_header(request, "x-sonde-signature"),
         timestamp: optional_header(request, "x-sonde-timestamp"),
         nonce: optional_header(request, "x-sonde-nonce"),
         method: request.method().as_str(),
         path: request.path(),
-    })
+    }
 }
 
 fn optional_header<'a>(request: &'a HttpRequest, name: &str) -> Option<&'a str> {
