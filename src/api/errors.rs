@@ -4,7 +4,6 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use serde::Deserialize;
 
 use crate::{
-    database::error_query_repo::ErrorGroupFilter,
     error::AppError,
     services::{authentication, errors},
     state::AppState,
@@ -58,7 +57,7 @@ async fn groups(
     }
     validate_window(query.from, query.to)?;
     let severity = normalize_severity(query.severity)?;
-    let filter = ErrorGroupFilter {
+    let filter = errors::ErrorGroupFilter {
         application_id: query.application_id,
         environment_id: clean(query.environment_id),
         severity,
