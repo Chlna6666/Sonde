@@ -1,5 +1,5 @@
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DbErr, TransactionTrait,
+    ConnectionTrait, DatabaseConnection, DbBackend, DbErr, TransactionTrait,
     sea_query::{Alias, Expr, ExprTrait, LockType, Query},
 };
 
@@ -103,8 +103,8 @@ pub async fn observe(
     )
     .await?;
 
-    // Serialize profile updates for the same device on databases that support row locks. SQLite
-    // ignores FOR UPDATE, but its write transaction already serializes these updates.
+    // Serialize profile updates for the same device on databases with row-lock support. SQLite
+    // serializes writes through its transaction semantics and must not receive FOR UPDATE syntax.
     let current = load_device_for_update(&transaction, device_hash)
         .await?
         .ok_or_else(|| DbErr::Custom("device profile row disappeared during update".into()))?;
@@ -345,7 +345,8 @@ async fn load_device_for_update(
     database: &impl ConnectionTrait,
     device_hash: &str,
 ) -> Result<Option<DeviceRow>, DbErr> {
-    let query = Query::select()
+    let mut query = Query::select();
+    query
         .columns(
             [
                 "last_seen_at",
@@ -377,9 +378,11 @@ async fn load_device_for_update(
         )
         .from(Alias::new("telemetry_devices"))
         .and_where(Expr::col(Alias::new("id")).eq(device_hash))
-        .lock(LockType::Update)
-        .limit(1)
-        .to_owned();
+        .limit(1);
+    if database.get_database_backend() != DbBackend::Sqlite {
+        query.lock(LockType::Update);
+    }
+    let query = query.to_owned();
     database
         .query_one(&query)
         .await?
