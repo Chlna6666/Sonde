@@ -10,6 +10,7 @@ mod error_query_models;
 pub mod errors;
 mod explorer_models;
 pub mod explorer;
+mod ingest_abuse;
 pub mod ingest_writer;
 pub mod job_lease;
 pub mod migrations;
