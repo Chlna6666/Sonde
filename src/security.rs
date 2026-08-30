@@ -107,7 +107,6 @@ pub struct IngestSecurity {
     device_token_rate: Mutex<HashMap<String, RateBucket>>,
     new_device_rate: Mutex<HashMap<String, RateBucket>>,
     seen_devices: Mutex<HashMap<String, i64>>,
-    seen_nonces: Mutex<HashMap<String, i64>>,
 }
 
 impl Default for IngestSecurity {
@@ -129,7 +128,6 @@ impl IngestSecurity {
             device_token_rate: Mutex::new(HashMap::new()),
             new_device_rate: Mutex::new(HashMap::new()),
             seen_devices: Mutex::new(HashMap::new()),
-            seen_nonces: Mutex::new(HashMap::new()),
         }
     }
 
@@ -275,20 +273,6 @@ impl IngestSecurity {
             seen_key,
             now.saturating_add(DEVICE_ENROLLMENT_WINDOW_MILLIS),
         );
-        true
-    }
-
-    pub async fn check_and_record_nonce(&self, token_id: &str, nonce: &str, expires_at: i64) -> bool {
-        let now = chrono::Utc::now().timestamp_millis();
-        let key = format!("{token_id}:{nonce}");
-        let mut nonces = self.seen_nonces.lock().await;
-        if nonces.len() > 50_000 {
-            nonces.retain(|_, exp| *exp > now);
-        }
-        if nonces.get(&key).is_some_and(|exp| *exp > now) {
-            return false;
-        }
-        nonces.insert(key, expires_at);
         true
     }
 
@@ -608,59 +592,41 @@ pub mod tests {
     }
 
     #[test]
-    fn ingest_token_and_nonce_replay_protection() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
+    fn ingest_token_is_signed_and_bound_to_device_and_client() {
+        let pepper = b"test-secret-pepper-32-bytes-long!";
+        let ingest = IngestSecurity::new();
+        let user_agent = "SondeTest/1.0";
+        let client_binding = ingest.client_binding(user_agent, pepper);
+
+        let (token, signing_key, expires_at) = ingest
+            .issue_ingest_token(
+                "app-uuid-1",
+                "env-uuid-1",
+                "device-12345",
+                &client_binding,
+                &["telemetry.events".into(), "telemetry.errors".into()],
+                120,
+                pepper,
+            )
             .unwrap();
-        runtime.block_on(async {
-            let pepper = b"test-secret-pepper-32-bytes-long!";
-            let ingest = IngestSecurity::new();
-            let user_agent = "SondeTest/1.0";
-            let client_binding = ingest.client_binding(user_agent, pepper);
 
-            let (token, signing_key, expires_at) = ingest
-                .issue_ingest_token(
-                    "app-uuid-1",
-                    "env-uuid-1",
-                    "device-12345",
-                    &client_binding,
-                    &["telemetry.events".into(), "telemetry.errors".into()],
-                    120,
-                    pepper,
-                )
-                .unwrap();
+        assert!(token.starts_with("sndt_"));
+        let claims = ingest.verify_ingest_token(&token, pepper).unwrap();
+        assert_eq!(claims.application_id, "app-uuid-1");
+        assert_eq!(claims.device_id, "device-12345");
+        assert_eq!(claims.client_binding, client_binding);
+        assert_eq!(ingest.signing_key_for_claims(&claims, pepper), signing_key);
+        assert_eq!(claims.expires_at, expires_at);
+        assert!(claims.scopes.contains(&"telemetry.events".to_string()));
 
-            assert!(token.starts_with("sndt_"));
-            let claims = ingest.verify_ingest_token(&token, pepper).unwrap();
-            assert_eq!(claims.application_id, "app-uuid-1");
-            assert_eq!(claims.device_id, "device-12345");
-            assert_eq!(claims.client_binding, client_binding);
-            assert_eq!(ingest.signing_key_for_claims(&claims, pepper), signing_key);
-            assert_eq!(claims.expires_at, expires_at);
-            assert!(claims.scopes.contains(&"telemetry.events".to_string()));
-
-            let payload_b64 = token
-                .strip_prefix("sndt_")
-                .and_then(|value| value.split_once('.'))
-                .map(|(payload, _)| payload)
-                .unwrap();
-            let decoded = String::from_utf8(URL_SAFE_NO_PAD.decode(payload_b64).unwrap()).unwrap();
-            assert!(!decoded.contains(&signing_key));
-            assert!(!decoded.contains(user_agent));
-
-            let now = chrono::Utc::now().timestamp_millis();
-            assert!(
-                ingest
-                    .check_and_record_nonce("token-1", "nonce-abc", now + 120_000)
-                    .await
-            );
-            assert!(
-                !ingest
-                    .check_and_record_nonce("token-1", "nonce-abc", now + 120_000)
-                    .await
-            );
-        });
+        let payload_b64 = token
+            .strip_prefix("sndt_")
+            .and_then(|value| value.split_once('.'))
+            .map(|(payload, _)| payload)
+            .unwrap();
+        let decoded = String::from_utf8(URL_SAFE_NO_PAD.decode(payload_b64).unwrap()).unwrap();
+        assert!(!decoded.contains(&signing_key));
+        assert!(!decoded.contains(user_agent));
     }
 
     #[test]
