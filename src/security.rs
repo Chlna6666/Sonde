@@ -183,7 +183,8 @@ impl IngestSecurity {
             token_id,
         };
 
-        let json_bytes = serde_json::to_vec(&claims).map_err(|_| AppError::Internal)?;
+        let json_bytes = serde_json::to_vec(&claims)
+            .map_err(|error| AppError::internal("serialize ingest token claims", error))?;
         let payload_b64 = URL_SAFE_NO_PAD.encode(json_bytes);
         let sig = hmac_sha256(pepper, payload_b64.as_bytes());
         let token = format!("sndt_{}.{}", payload_b64, hex::encode(sig));

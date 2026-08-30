@@ -39,8 +39,6 @@ pub enum AppError {
         context: &'static str,
         detail: String,
     },
-    #[error("internal operation failed")]
-    Internal,
     #[error("internal operation failed: {context}: {detail}")]
     InternalContext {
         context: &'static str,
@@ -84,7 +82,7 @@ impl AppError {
             Self::PasswordLength => "password_length",
             Self::PasswordBlocked => "password_blocked",
             Self::TooManyRequests => "rate_limited",
-            Self::Database(_) | Self::Internal | Self::InternalContext { .. } => "internal_error",
+            Self::Database(_) | Self::InternalContext { .. } => "internal_error",
             Self::ServiceUnavailable { .. } => "service_unavailable",
             Self::Upstream { .. } => "upstream_error",
         }
@@ -93,7 +91,7 @@ impl AppError {
     pub fn public_message(&self) -> String {
         match self {
             Self::Database(_) => "database operation failed".into(),
-            Self::Internal | Self::InternalContext { .. } => "internal operation failed".into(),
+            Self::InternalContext { .. } => "internal operation failed".into(),
             Self::ServiceUnavailable { .. } => "service temporarily unavailable".into(),
             Self::Upstream { .. } => "upstream service request failed".into(),
             _ => self.to_string(),
@@ -106,7 +104,6 @@ impl AppError {
             Self::Database(_)
                 | Self::ServiceUnavailable { .. }
                 | Self::Upstream { .. }
-                | Self::Internal
                 | Self::InternalContext { .. }
         )
     }
@@ -137,6 +134,15 @@ mod tests {
         assert_eq!(error.public_message(), "internal operation failed");
         assert!(error.is_server_failure());
         assert!(error.to_string().contains("sensitive/path/value"));
+    }
+
+    #[test]
+    fn upstream_context_is_redacted_from_public_message() {
+        let error = AppError::upstream("send webhook", "https://secret.example/token");
+        assert_eq!(error.code(), "upstream_error");
+        assert_eq!(error.public_message(), "upstream service request failed");
+        assert!(error.is_server_failure());
+        assert!(error.to_string().contains("secret.example"));
     }
 
     #[test]

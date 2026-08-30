@@ -51,7 +51,8 @@ pub async fn create(
     if name.trim().is_empty() || cooldown_seconds < 0 {
         return Err(AppError::Validation("invalid rule name or cooldown".into()));
     }
-    let query = serde_json::to_value(expression).map_err(|_| AppError::Internal)?;
+    let query = serde_json::to_value(expression)
+        .map_err(|error| AppError::internal("serialize alert expression", error))?;
     let id = alert_repo::create_rule(
         &installed.database,
         NewRule {
@@ -97,7 +98,8 @@ pub async fn update(
     if name.trim().is_empty() || cooldown_seconds < 0 {
         return Err(AppError::Validation("invalid rule name or cooldown".into()));
     }
-    let query = serde_json::to_value(expression).map_err(|_| AppError::Internal)?;
+    let query = serde_json::to_value(expression)
+        .map_err(|error| AppError::internal("serialize alert expression", error))?;
     alert_repo::update_rule(
         &installed.database,
         id,
@@ -265,7 +267,7 @@ pub async fn test_channel(
 
     dispatch_to_channel(&channel, &test_payload)
         .await
-        .map_err(|err| AppError::Validation(format!("Failed to send test notification: {err}")))?;
+        .map_err(|error| AppError::upstream("send test notification", error))?;
 
     Ok(())
 }
@@ -305,16 +307,21 @@ pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, 
 
         let window_ms = i64::from(expression.window_minutes) * 60_000;
         let window_start = now - window_ms;
-        let (condition_met, current_value) =
-            match evaluate_rule_condition(database, &rule.application_id, &expression, window_start, now)
-                .await
-            {
-                Ok(result) => result,
-                Err(err) => {
-                    warn!(rule_id = %rule.id, error = %err, "error evaluating alert condition");
-                    continue;
-                }
-            };
+        let (condition_met, current_value) = match evaluate_rule_condition(
+            database,
+            &rule.application_id,
+            &expression,
+            window_start,
+            now,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                warn!(rule_id = %rule.id, error = %err, "error evaluating alert condition");
+                continue;
+            }
+        };
 
         let is_currently_firing = rule.last_state == "firing";
         let pending_hits = parse_pending_hits(&rule.last_state);
@@ -725,7 +732,11 @@ async fn dispatch_to_channel(
         "webhook" => {
             let url = channel_url(&channel.config)?;
             let mut request = client.post(url).header("content-type", "application/json");
-            if let Some(headers) = channel.config.get("headers").and_then(|value| value.as_object()) {
+            if let Some(headers) = channel
+                .config
+                .get("headers")
+                .and_then(|value| value.as_object())
+            {
                 for (key, value) in headers {
                     if let Some(value) = value.as_str() {
                         request = request.header(key.as_str(), value);
@@ -742,7 +753,10 @@ async fn dispatch_to_channel(
             } else {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
-                Err(format!("HTTP status {status}: {}", truncate_error_body(&body)))
+                Err(format!(
+                    "HTTP status {status}: {}",
+                    truncate_error_body(&body)
+                ))
             }
         }
         "slack" => {
@@ -924,7 +938,10 @@ fn validate_outbound_url(raw: &str) -> Result<(), String> {
         return Err("notification URL must not contain userinfo credentials".into());
     }
 
-    match parsed.host().ok_or("notification URL must contain a host")? {
+    match parsed
+        .host()
+        .ok_or("notification URL must contain a host")?
+    {
         Host::Domain(domain) => {
             let domain = domain.trim_end_matches('.').to_ascii_lowercase();
             if domain == "localhost"

@@ -34,7 +34,7 @@ impl ResponseError for AppError {
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
             Self::Upstream { .. } => StatusCode::BAD_GATEWAY,
-            Self::Database(_) | Self::Internal | Self::InternalContext { .. } => {
+            Self::Database(_) | Self::InternalContext { .. } => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         }
@@ -54,11 +54,13 @@ impl ResponseError for AppError {
             None
         };
 
-        HttpResponse::build(self.status_code()).json(ErrorBody {
-            code: self.code(),
-            message: self.public_message(),
-            error_id,
-        })
+        HttpResponse::build(self.status_code())
+            .insert_header(("cache-control", "no-store"))
+            .json(ErrorBody {
+                code: self.code(),
+                message: self.public_message(),
+                error_id,
+            })
     }
 }
 
@@ -97,9 +99,9 @@ fn json_payload_error(error: JsonPayloadError) -> AppError {
         JsonPayloadError::OverflowKnownLength { .. } | JsonPayloadError::Overflow { .. } => {
             AppError::PayloadTooLarge
         }
-        JsonPayloadError::ContentType => AppError::UnsupportedMediaType(
-            "content-type must be application/json".into(),
-        ),
+        JsonPayloadError::ContentType => {
+            AppError::UnsupportedMediaType("content-type must be application/json".into())
+        }
         JsonPayloadError::Deserialize(_) => {
             AppError::Validation("invalid JSON request body".into())
         }
@@ -110,5 +112,28 @@ fn json_payload_error(error: JsonPayloadError) -> AppError {
             AppError::internal("serialize extracted JSON request", error)
         }
         other => AppError::internal("extract JSON request body", other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use actix_web::{ResponseError, http::StatusCode};
+
+    use crate::error::AppError;
+
+    #[test]
+    fn infrastructure_errors_use_gateway_or_service_statuses() {
+        assert_eq!(
+            AppError::upstream("send webhook", "connection refused").status_code(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            AppError::unavailable("ingest writer", "closed").status_code(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            AppError::internal("serialize token", "unexpected state").status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }
