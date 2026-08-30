@@ -12,6 +12,7 @@ pub mod migrations;
 pub mod retention;
 pub mod rollups;
 pub mod setup;
+mod statistics_models;
 pub mod statistics;
 pub mod telemetry;
 pub mod workers;

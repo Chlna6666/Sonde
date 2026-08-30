@@ -4,7 +4,6 @@ use actix_web::{HttpResponse, Responder, web};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    database::stats_repo,
     error::AppError,
     services::{applications, statistics},
     state::AppState,
@@ -20,7 +19,7 @@ struct PublicStatsQuery {
 pub struct PublicApplicationDetails {
     #[serde(flatten)]
     pub application: applications::PublicApplicationInfo,
-    pub stats: stats_repo::AppTelemetryStats,
+    pub stats: statistics::AppTelemetryStats,
 }
 
 pub fn configure(config: &mut web::ServiceConfig) {
@@ -41,8 +40,7 @@ async fn get_public_application(
     let app = applications::public_by_slug(&installed, &slug)
         .await?
         .ok_or(AppError::NotFound)?;
-    let days = statistics::validate_days(query.days)?;
-    let stats = stats_repo::application_stats(&installed.database, &app.id, None, days).await?;
+    let stats = statistics::public_application_stats(&installed, &app.id, query.days).await?;
 
     Ok(HttpResponse::Ok().json(PublicApplicationDetails {
         application: app,
