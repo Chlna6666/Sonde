@@ -13,16 +13,12 @@ const CHALLENGE_MILLIS: i64 = 5 * 60 * 1_000;
 const INGEST_SIGNING_CONTEXT: &[u8] = b"sonde-ingest-signing-v1\n";
 const INGEST_CLIENT_BINDING_CONTEXT: &[u8] = b"sonde-ingest-client-binding-v1\n";
 const RATE_WINDOW_MILLIS: i64 = 60_000;
-const DEVICE_ENROLLMENT_WINDOW_MILLIS: i64 = 60 * 60 * 1_000;
-const IP_TOKEN_REQUESTS_PER_MINUTE: u64 = 30;
 const IP_INGEST_REQUESTS_PER_MINUTE: u64 = 120;
 const IP_INGEST_BYTES_PER_MINUTE: u64 = 8 * 1024 * 1024;
 const IP_INGEST_ITEMS_PER_MINUTE: u64 = 10_000;
 const DEVICE_INGEST_REQUESTS_PER_MINUTE: u64 = 60;
 const DEVICE_INGEST_BYTES_PER_MINUTE: u64 = 2 * 1024 * 1024;
 const DEVICE_INGEST_ITEMS_PER_MINUTE: u64 = 2_000;
-const DEVICE_TOKEN_REQUESTS_PER_MINUTE: u64 = 8;
-const NEW_DEVICES_PER_IP_PER_HOUR: u64 = 128;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -97,16 +93,12 @@ impl RateBucket {
 }
 
 pub struct IngestSecurity {
-    ip_token_rate: Mutex<HashMap<String, RateBucket>>,
     ip_ingest_rate: Mutex<HashMap<String, RateBucket>>,
     ip_ingest_bytes: Mutex<HashMap<String, RateBucket>>,
     ip_ingest_items: Mutex<HashMap<String, RateBucket>>,
     device_rate: Mutex<HashMap<String, RateBucket>>,
     device_ingest_bytes: Mutex<HashMap<String, RateBucket>>,
     device_ingest_items: Mutex<HashMap<String, RateBucket>>,
-    device_token_rate: Mutex<HashMap<String, RateBucket>>,
-    new_device_rate: Mutex<HashMap<String, RateBucket>>,
-    seen_devices: Mutex<HashMap<String, i64>>,
 }
 
 impl Default for IngestSecurity {
@@ -118,29 +110,13 @@ impl Default for IngestSecurity {
 impl IngestSecurity {
     pub fn new() -> Self {
         Self {
-            ip_token_rate: Mutex::new(HashMap::new()),
             ip_ingest_rate: Mutex::new(HashMap::new()),
             ip_ingest_bytes: Mutex::new(HashMap::new()),
             ip_ingest_items: Mutex::new(HashMap::new()),
             device_rate: Mutex::new(HashMap::new()),
             device_ingest_bytes: Mutex::new(HashMap::new()),
             device_ingest_items: Mutex::new(HashMap::new()),
-            device_token_rate: Mutex::new(HashMap::new()),
-            new_device_rate: Mutex::new(HashMap::new()),
-            seen_devices: Mutex::new(HashMap::new()),
         }
-    }
-
-    pub async fn check_ip_token_rate(&self, ip: &str) -> bool {
-        charge_rate(
-            &self.ip_token_rate,
-            ip,
-            1,
-            IP_TOKEN_REQUESTS_PER_MINUTE,
-            RATE_WINDOW_MILLIS,
-            20_000,
-        )
-        .await
     }
 
     pub async fn check_ip_ingest_rate(&self, ip: &str) -> bool {
@@ -226,54 +202,6 @@ impl IngestSecurity {
             50_000,
         )
         .await
-    }
-
-    pub async fn check_device_token_rate(&self, app_id: &str, device_id: &str) -> bool {
-        let key = format!("{app_id}:{device_id}");
-        charge_rate(
-            &self.device_token_rate,
-            &key,
-            1,
-            DEVICE_TOKEN_REQUESTS_PER_MINUTE,
-            RATE_WINDOW_MILLIS,
-            50_000,
-        )
-        .await
-    }
-
-    /// Bound how many distinct pseudonymous device IDs one source IP can introduce per app.
-    pub async fn check_device_enrollment(&self, ip: &str, app_id: &str, device_id: &str) -> bool {
-        let now = chrono::Utc::now().timestamp_millis();
-        let seen_key = format!("{ip}:{app_id}:{device_id}");
-        {
-            let mut seen = self.seen_devices.lock().await;
-            if seen.len() > 100_000 {
-                seen.retain(|_, expires_at| *expires_at > now);
-            }
-            if seen.get(&seen_key).is_some_and(|expires_at| *expires_at > now) {
-                return true;
-            }
-        }
-
-        let source_key = format!("{ip}:{app_id}");
-        if !charge_rate(
-            &self.new_device_rate,
-            &source_key,
-            1,
-            NEW_DEVICES_PER_IP_PER_HOUR,
-            DEVICE_ENROLLMENT_WINDOW_MILLIS,
-            20_000,
-        )
-        .await
-        {
-            return false;
-        }
-
-        self.seen_devices.lock().await.insert(
-            seen_key,
-            now.saturating_add(DEVICE_ENROLLMENT_WINDOW_MILLIS),
-        );
-        true
     }
 
     pub fn client_binding(&self, user_agent: &str, pepper: &[u8]) -> String {

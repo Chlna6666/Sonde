@@ -17,7 +17,10 @@ use crate::{
     state::InstalledState,
 };
 
-use super::ingest_abuse::{self, RiskTier};
+use super::{
+    ingest_abuse::{self, RiskTier},
+    ingest_bootstrap,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct IngestTokenContext<'a> {
@@ -128,13 +131,9 @@ pub async fn issue_token(
     body: IngestTokenRequest,
 ) -> Result<IngestTokenResponse, AppError> {
     let user_agent = validate_user_agent(request.user_agent)?;
+    let pepper = installed.auth_security.pepper();
 
-    if !installed
-        .auth_security
-        .ingest
-        .check_ip_token_rate(request.client_ip)
-        .await
-    {
+    if !ingest_bootstrap::charge_ip_token(&installed.database, pepper, request.client_ip).await? {
         return Err(AppError::TooManyRequests);
     }
 
@@ -149,11 +148,14 @@ pub async fn issue_token(
     .await?
     .ok_or(AppError::Unauthorized)?;
 
-    if !installed
-        .auth_security
-        .ingest
-        .check_device_enrollment(request.client_ip, &context.application_id, &device_id)
-        .await
+    if !ingest_bootstrap::check_device_enrollment(
+        &installed.database,
+        pepper,
+        request.client_ip,
+        &context.application_id,
+        &device_id,
+    )
+    .await?
     {
         return Err(AppError::TooManyRequests);
     }
@@ -175,7 +177,7 @@ pub async fn issue_token(
         &device_id,
         policy.token_cost_multiplier,
     )
-    .await
+    .await?
     {
         return Err(AppError::TooManyRequests);
     }
@@ -183,7 +185,7 @@ pub async fn issue_token(
     let client_binding = installed
         .auth_security
         .ingest
-        .client_binding(user_agent, installed.auth_security.pepper());
+        .client_binding(user_agent, pepper);
     let claim_scopes = ingest_abuse::claims_scopes(&context.scopes, policy.tier);
     let (token, signing_key, expires_at) = installed.auth_security.ingest.issue_ingest_token(
         &context.application_id,
@@ -192,7 +194,7 @@ pub async fn issue_token(
         &client_binding,
         &claim_scopes,
         policy.token_ttl_seconds,
-        installed.auth_security.pepper(),
+        pepper,
     )?;
 
     Ok(IngestTokenResponse {
@@ -619,18 +621,15 @@ async fn charge_device_token_budget(
     application_id: &str,
     device_id: &str,
     multiplier: u64,
-) -> bool {
-    for _ in 0..multiplier.max(1) {
-        if !installed
-            .auth_security
-            .ingest
-            .check_device_token_rate(application_id, device_id)
-            .await
-        {
-            return false;
-        }
-    }
-    true
+) -> Result<bool, AppError> {
+    Ok(ingest_bootstrap::charge_device_token(
+        &installed.database,
+        installed.auth_security.pepper(),
+        application_id,
+        device_id,
+        multiplier,
+    )
+    .await?)
 }
 
 async fn charge_device_request_budget(

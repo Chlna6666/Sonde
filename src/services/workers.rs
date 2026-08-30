@@ -5,7 +5,10 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{
-    database::{alert_delivery_repo, device_risk_repo, first_seen_repo, ingest_nonce_repo},
+    database::{
+        alert_delivery_repo, device_risk_repo, first_seen_repo, ingest_bootstrap_repo,
+        ingest_nonce_repo,
+    },
     services::{alerts, job_lease, retention},
 };
 
@@ -19,8 +22,8 @@ const ALERT_DELIVERY_HISTORY_PRUNE_MAX: u64 = 5_000;
 const RETENTION_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
 const RETENTION_LEASE_TTL: Duration = Duration::from_secs(4 * 60 * 60 + 5 * 60);
 const DEVICE_RISK_DECAY_QUIET_MILLIS: i64 = 4 * 60 * 60 * 1_000;
-const NONCE_REPLAY_CLEANUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
-const NONCE_REPLAY_CLEANUP_LEASE_TTL: Duration = Duration::from_secs(60);
+const INGEST_SECURITY_CLEANUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const INGEST_SECURITY_CLEANUP_LEASE_TTL: Duration = Duration::from_secs(60);
 const FIRST_SEEN_BACKFILL_INTERVAL: Duration = Duration::from_secs(10);
 const FIRST_SEEN_BACKFILL_LEASE_TTL: Duration = Duration::from_secs(60);
 const FIRST_SEEN_BACKFILL_BATCH: u64 = 32;
@@ -29,7 +32,7 @@ pub fn spawn_leased_workers(database: DatabaseConnection) {
     spawn_alert_worker(database.clone());
     spawn_alert_delivery_worker(database.clone());
     spawn_retention_worker(database.clone());
-    spawn_nonce_replay_cleanup_worker(database.clone());
+    spawn_ingest_security_cleanup_worker(database.clone());
     spawn_first_seen_backfill_worker(database);
 }
 
@@ -141,34 +144,35 @@ async fn run_retention_cycle(
     Ok(report)
 }
 
-fn spawn_nonce_replay_cleanup_worker(database: DatabaseConnection) {
-    let holder_id = format!("ingest-nonce-cleanup:{}", Uuid::now_v7());
+fn spawn_ingest_security_cleanup_worker(database: DatabaseConnection) {
+    let holder_id = format!("ingest-security-cleanup:{}", Uuid::now_v7());
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(NONCE_REPLAY_CLEANUP_INTERVAL);
+        let mut interval = tokio::time::interval(INGEST_SECURITY_CLEANUP_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
             match job_lease::run_with_lease(
                 &database,
+                // Keep the original lease name so rolling upgrades do not run the old nonce-only
+                // cleaner and the new combined cleaner concurrently.
                 "ingest-nonce-cleanup-v1",
                 &holder_id,
-                NONCE_REPLAY_CLEANUP_LEASE_TTL,
+                INGEST_SECURITY_CLEANUP_LEASE_TTL,
                 || async {
-                    ingest_nonce_repo::cleanup_expired(
-                        &database,
-                        chrono::Utc::now().timestamp_millis(),
-                    )
-                    .await
+                    let now = chrono::Utc::now().timestamp_millis();
+                    let replay = ingest_nonce_repo::cleanup_expired(&database, now).await?;
+                    let bootstrap = ingest_bootstrap_repo::cleanup_expired(&database, now).await?;
+                    Ok(replay.saturating_add(bootstrap))
                 },
             )
             .await
             {
                 Ok(Some(pruned)) if pruned > 0 => {
-                    info!(pruned, "pruned expired ingest nonce replay records");
+                    info!(pruned, "pruned expired ingest security records");
                 }
                 Ok(_) => {}
                 Err(error) => {
-                    warn!(error = %error, "leased ingest nonce cleanup encountered an error");
+                    warn!(error = %error, "leased ingest security cleanup encountered an error");
                 }
             }
         }

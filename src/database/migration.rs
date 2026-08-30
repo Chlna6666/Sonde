@@ -10,6 +10,7 @@ mod dirty_source_mask;
 mod error_model;
 mod first_seen_epoch;
 mod first_seen_index;
+mod ingest_bootstrap_limits;
 mod ingest_nonce_replay;
 mod job_leases;
 mod log_error_rollups;
@@ -30,6 +31,7 @@ use dirty_source_mask::DirtySourceMask;
 use error_model::ErrorTelemetryModel;
 use first_seen_epoch::FirstSeenEpoch;
 use first_seen_index::FirstSeenIndex;
+use ingest_bootstrap_limits::IngestBootstrapLimits;
 use ingest_nonce_replay::IngestNonceReplay;
 use job_leases::JobLeases;
 use log_error_rollups::LogErrorRollups;
@@ -72,6 +74,7 @@ impl MigratorTrait for Migrator {
             Box::new(AlertDeliveryQueue),
             Box::new(DeviceProfiles),
             Box::new(IngestNonceReplay),
+            Box::new(IngestBootstrapLimits),
         ]
     }
 }
@@ -314,6 +317,8 @@ impl MigrationTrait for InitialSchema {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for table in [
+            "ingest_device_enrollments",
+            "ingest_rate_windows",
             "ingest_nonce_replay",
             "telemetry_devices",
             "telemetry_first_seen_backfill_days",

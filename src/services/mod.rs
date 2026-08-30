@@ -11,6 +11,7 @@ pub mod errors;
 mod explorer_models;
 pub mod explorer;
 mod ingest_abuse;
+mod ingest_bootstrap;
 pub mod ingest_writer;
 pub mod job_lease;
 pub mod migrations;
