@@ -17,7 +17,7 @@ use crate::{
     state::InstalledState,
 };
 
-use super::ingest_abuse::{self, IngestAbusePolicy, RiskTier};
+use super::ingest_abuse::{self, RiskTier};
 
 #[derive(Clone, Copy, Debug)]
 pub struct IngestTokenContext<'a> {
@@ -229,21 +229,10 @@ pub async fn scope_from_context_with_permission(
     }
 
     let auth_header = request.credential.ok_or(AppError::Unauthorized)?;
-    if auth_header.starts_with("sndt_") {
-        signed_scope(installed, request, required_perm, raw_body, auth_header, user_agent).await
-    } else {
-        if !installed
-            .auth_security
-            .ingest
-            .check_legacy_ingest_budget(request.client_ip, raw_body.len())
-            .await
-        {
-            return Err(AppError::TooManyRequests);
-        }
-        let mut scope = scope_for_key_with_permission(installed, auth_header, required_perm).await?;
-        scope.source_ip = Some(request.client_ip.to_owned());
-        Ok(scope)
+    if !auth_header.starts_with("sndt_") {
+        return Err(AppError::IngestTokenRequired);
     }
+    signed_scope(installed, request, required_perm, raw_body, auth_header, user_agent).await
 }
 
 async fn signed_scope(
@@ -629,24 +618,18 @@ async fn charge_item_budget(
     {
         return Err(AppError::TooManyRequests);
     }
-    if let Some(device_id) = scope.device_id.as_deref() {
-        let policy = ingest_abuse::policy_for_tier(scope.risk_tier.unwrap_or_default());
-        if !installed
-            .auth_security
-            .ingest
-            .check_device_ingest_items(
-                &scope.application_id,
-                device_id,
-                ingest_abuse::scaled_cost(item_count, policy.item_cost_multiplier),
-            )
-            .await
-        {
-            return Err(AppError::TooManyRequests);
-        }
-    } else if !installed
+    let Some(device_id) = scope.device_id.as_deref() else {
+        return Err(AppError::IngestTokenRequired);
+    };
+    let policy = ingest_abuse::policy_for_tier(scope.risk_tier.unwrap_or_default());
+    if !installed
         .auth_security
         .ingest
-        .check_legacy_ingest_items(source_ip, item_count)
+        .check_device_ingest_items(
+            &scope.application_id,
+            device_id,
+            ingest_abuse::scaled_cost(item_count, policy.item_cost_multiplier),
+        )
         .await
     {
         return Err(AppError::TooManyRequests);
