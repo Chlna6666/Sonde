@@ -27,42 +27,7 @@ pub(crate) fn policy_for_claims(scopes: &[String]) -> IngestAbusePolicy {
     policy_for_tier(tier_from_claim_scopes(scopes))
 }
 
-pub(crate) fn claims_scopes(scopes: &[String], tier: RiskTier) -> Vec<String> {
-    let mut result = scopes
-        .iter()
-        .filter(|scope| !scope.starts_with(INTERNAL_RISK_SCOPE_PREFIX))
-        .cloned()
-        .collect::<Vec<_>>();
-    result.push(format!("{INTERNAL_RISK_SCOPE_PREFIX}{}", tier_name(tier)));
-    result
-}
-
-pub(crate) fn scaled_cost(value: usize, multiplier: u64) -> usize {
-    value.saturating_mul(usize::try_from(multiplier).unwrap_or(usize::MAX))
-}
-
-fn tier_for_score(score: i32) -> RiskTier {
-    match score {
-        80.. => RiskTier::Critical,
-        50..=79 => RiskTier::High,
-        20..=49 => RiskTier::Medium,
-        _ => RiskTier::Low,
-    }
-}
-
-fn tier_from_claim_scopes(scopes: &[String]) -> RiskTier {
-    scopes.iter().fold(RiskTier::Low, |current, scope| {
-        let tier = match scope.strip_prefix(INTERNAL_RISK_SCOPE_PREFIX) {
-            Some("medium") => RiskTier::Medium,
-            Some("high") => RiskTier::High,
-            Some("critical") => RiskTier::Critical,
-            _ => RiskTier::Low,
-        };
-        current.max(tier)
-    })
-}
-
-fn policy_for_tier(tier: RiskTier) -> IngestAbusePolicy {
+pub(crate) fn policy_for_tier(tier: RiskTier) -> IngestAbusePolicy {
     match tier {
         RiskTier::Low => IngestAbusePolicy {
             tier,
@@ -97,6 +62,41 @@ fn policy_for_tier(tier: RiskTier) -> IngestAbusePolicy {
             item_cost_multiplier: 8,
         },
     }
+}
+
+pub(crate) fn claims_scopes(scopes: &[String], tier: RiskTier) -> Vec<String> {
+    let mut result = scopes
+        .iter()
+        .filter(|scope| !scope.starts_with(INTERNAL_RISK_SCOPE_PREFIX))
+        .cloned()
+        .collect::<Vec<_>>();
+    result.push(format!("{INTERNAL_RISK_SCOPE_PREFIX}{}", tier_name(tier)));
+    result
+}
+
+pub(crate) fn scaled_cost(value: usize, multiplier: u64) -> usize {
+    value.saturating_mul(usize::try_from(multiplier).unwrap_or(usize::MAX))
+}
+
+fn tier_for_score(score: i32) -> RiskTier {
+    match score {
+        80.. => RiskTier::Critical,
+        50..=79 => RiskTier::High,
+        20..=49 => RiskTier::Medium,
+        _ => RiskTier::Low,
+    }
+}
+
+fn tier_from_claim_scopes(scopes: &[String]) -> RiskTier {
+    scopes.iter().fold(RiskTier::Low, |current, scope| {
+        let tier = match scope.strip_prefix(INTERNAL_RISK_SCOPE_PREFIX) {
+            Some("medium") => RiskTier::Medium,
+            Some("high") => RiskTier::High,
+            Some("critical") => RiskTier::Critical,
+            _ => RiskTier::Low,
+        };
+        current.max(tier)
+    })
 }
 
 fn tier_name(tier: RiskTier) -> &'static str {
