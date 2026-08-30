@@ -3,6 +3,7 @@ use tracing::warn;
 
 use crate::{
     database::{
+        device_risk_repo,
         device_state_repo::{self, DeviceObservation, DeviceTelemetryKind, TimedDimension},
         ingest_auth_repo,
         telemetry_repo::TelemetryScope,
@@ -15,6 +16,8 @@ use crate::{
     ingest_signature,
     state::InstalledState,
 };
+
+use super::ingest_abuse::{self, IngestAbusePolicy, RiskTier};
 
 #[derive(Clone, Copy, Debug)]
 pub struct IngestTokenContext<'a> {
@@ -41,6 +44,7 @@ pub struct IngestScope {
     pub environment_id: String,
     source_ip: Option<String>,
     device_id: Option<String>,
+    risk_tier: Option<RiskTier>,
 }
 
 impl IngestScope {
@@ -150,11 +154,28 @@ pub async fn issue_token(
         .ingest
         .check_device_enrollment(request.client_ip, &context.application_id, &device_id)
         .await
-        || !installed
-            .auth_security
-            .ingest
-            .check_device_token_rate(&context.application_id, &device_id)
-            .await
+    {
+        return Err(AppError::TooManyRequests);
+    }
+
+    let salt = format!("{}:{}", context.application_id, context.environment_id);
+    let device_hash = anonymous_hash(&device_id, &salt);
+    let risk_score = device_risk_repo::risk_score_for_device(
+        &installed.database,
+        &context.application_id,
+        &context.environment_id,
+        &device_hash,
+    )
+    .await?
+    .unwrap_or(0);
+    let policy = ingest_abuse::policy_for_score(risk_score);
+    if !charge_device_token_budget(
+        installed,
+        &context.application_id,
+        &device_id,
+        policy.token_cost_multiplier,
+    )
+    .await
     {
         return Err(AppError::TooManyRequests);
     }
@@ -163,20 +184,21 @@ pub async fn issue_token(
         .auth_security
         .ingest
         .client_binding(user_agent, installed.auth_security.pepper());
+    let claim_scopes = ingest_abuse::claims_scopes(&context.scopes, policy.tier);
     let (token, signing_key, expires_at) = installed.auth_security.ingest.issue_ingest_token(
         &context.application_id,
         &context.environment_id,
         &device_id,
         &client_binding,
-        &context.scopes,
-        120,
+        &claim_scopes,
+        policy.token_ttl_seconds,
         installed.auth_security.pepper(),
     )?;
 
     Ok(IngestTokenResponse {
         token,
         token_type: "Bearer",
-        expires_in: 120,
+        expires_in: policy.token_ttl_seconds,
         expires_at,
         signing_key,
         signature_version: ingest_signature::SIGNATURE_VERSION,
@@ -237,6 +259,7 @@ async fn signed_scope(
         .ingest
         .verify_ingest_token(token, installed.auth_security.pepper())
         .ok_or(AppError::Unauthorized)?;
+    let policy = ingest_abuse::policy_for_claims(&claims.scopes);
 
     let expected_binding = installed
         .auth_security
@@ -282,24 +305,30 @@ async fn signed_scope(
     if !installed
         .auth_security
         .ingest
-        .check_and_record_nonce(&claims.token_id, nonce, now.saturating_add(120_000))
+        .check_and_record_nonce(
+            &claims.token_id,
+            nonce,
+            claims.expires_at.min(now.saturating_add(120_000)),
+        )
         .await
     {
         return Err(AppError::Forbidden);
     }
 
-    if !installed
-        .auth_security
-        .ingest
-        .check_device_rate(&claims.application_id, &claims.device_id)
-        .await
+    if !charge_device_request_budget(
+        installed,
+        &claims.application_id,
+        &claims.device_id,
+        policy.request_cost_multiplier,
+    )
+    .await
         || !installed
             .auth_security
             .ingest
             .check_device_ingest_bytes(
                 &claims.application_id,
                 &claims.device_id,
-                raw_body.len(),
+                ingest_abuse::scaled_cost(raw_body.len(), policy.byte_cost_multiplier),
             )
             .await
     {
@@ -311,6 +340,7 @@ async fn signed_scope(
         environment_id: claims.environment_id,
         source_ip: Some(request.client_ip.to_owned()),
         device_id: Some(claims.device_id),
+        risk_tier: Some(policy.tier),
     })
 }
 
@@ -345,6 +375,7 @@ pub async fn scope_for_key_with_permission(
         environment_id: context.environment_id,
         source_ip: None,
         device_id: None,
+        risk_tier: None,
     })
 }
 
@@ -599,10 +630,15 @@ async fn charge_item_budget(
         return Err(AppError::TooManyRequests);
     }
     if let Some(device_id) = scope.device_id.as_deref() {
+        let policy = ingest_abuse::policy_for_tier(scope.risk_tier.unwrap_or_default());
         if !installed
             .auth_security
             .ingest
-            .check_device_ingest_items(&scope.application_id, device_id, item_count)
+            .check_device_ingest_items(
+                &scope.application_id,
+                device_id,
+                ingest_abuse::scaled_cost(item_count, policy.item_cost_multiplier),
+            )
             .await
         {
             return Err(AppError::TooManyRequests);
@@ -616,6 +652,44 @@ async fn charge_item_budget(
         return Err(AppError::TooManyRequests);
     }
     Ok(())
+}
+
+async fn charge_device_token_budget(
+    installed: &InstalledState,
+    application_id: &str,
+    device_id: &str,
+    multiplier: u64,
+) -> bool {
+    for _ in 0..multiplier.max(1) {
+        if !installed
+            .auth_security
+            .ingest
+            .check_device_token_rate(application_id, device_id)
+            .await
+        {
+            return false;
+        }
+    }
+    true
+}
+
+async fn charge_device_request_budget(
+    installed: &InstalledState,
+    application_id: &str,
+    device_id: &str,
+    multiplier: u64,
+) -> bool {
+    for _ in 0..multiplier.max(1) {
+        if !installed
+            .auth_security
+            .ingest
+            .check_device_rate(application_id, device_id)
+            .await
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn ensure_batch_size(length: usize) -> Result<(), AppError> {
@@ -731,6 +805,7 @@ mod tests {
     use crate::{
         database::device_state_repo::DeviceTelemetryKind,
         domain::telemetry::EventInput,
+        services::ingest_abuse::RiskTier,
     };
 
     fn scope() -> IngestScope {
@@ -739,6 +814,7 @@ mod tests {
             environment_id: "env".into(),
             source_ip: Some("127.0.0.1".into()),
             device_id: Some("device-1234".into()),
+            risk_tier: Some(RiskTier::Low),
         }
     }
 
