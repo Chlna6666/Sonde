@@ -60,9 +60,6 @@ pub struct IngestTokenClaims {
     pub application_id: String,
     pub environment_id: String,
     pub device_id: String,
-    pub session_id: Option<String>,
-    pub app_version: Option<String>,
-    pub os: Option<String>,
     pub client_binding: String,
     pub scopes: Vec<String>,
     pub issued_at: i64,
@@ -145,7 +142,6 @@ impl IngestSecurity {
         }
     }
 
-    /// IP rate limit for token exchange.
     pub async fn check_ip_token_rate(&self, ip: &str) -> bool {
         charge_rate(
             &self.ip_token_rate,
@@ -158,7 +154,6 @@ impl IngestSecurity {
         .await
     }
 
-    /// Request-count budget applied to every ingest request before authentication.
     pub async fn check_ip_ingest_rate(&self, ip: &str) -> bool {
         charge_rate(
             &self.ip_ingest_rate,
@@ -171,7 +166,6 @@ impl IngestSecurity {
         .await
     }
 
-    /// Byte budget applied to every ingest request so a large batch costs more than a tiny one.
     pub async fn check_ip_ingest_bytes(&self, ip: &str, body_bytes: usize) -> bool {
         charge_rate(
             &self.ip_ingest_bytes,
@@ -184,7 +178,6 @@ impl IngestSecurity {
         .await
     }
 
-    /// Parsed-item budget charges even tiny or invalid telemetry records by count.
     pub async fn check_ip_ingest_items(&self, ip: &str, item_count: usize) -> bool {
         charge_rate(
             &self.ip_ingest_items,
@@ -197,8 +190,7 @@ impl IngestSecurity {
         .await
     }
 
-    /// Legacy direct API-key ingestion remains compatible but receives a deliberately smaller
-    /// process-local request/byte budget. Signed short-lived tokens are the preferred ingest path.
+    /// Direct API-key ingestion is retained for compatibility but has a smaller abuse budget.
     pub async fn check_legacy_ingest_budget(&self, ip: &str, body_bytes: usize) -> bool {
         if !charge_rate(
             &self.legacy_ingest_rate,
@@ -235,7 +227,6 @@ impl IngestSecurity {
         .await
     }
 
-    /// Device request-count budget for signed-token ingestion.
     pub async fn check_device_rate(&self, app_id: &str, device_id: &str) -> bool {
         let key = format!("{app_id}:{device_id}");
         charge_rate(
@@ -249,7 +240,6 @@ impl IngestSecurity {
         .await
     }
 
-    /// Device byte budget prevents one signed request from hiding thousands of telemetry items.
     pub async fn check_device_ingest_bytes(
         &self,
         app_id: &str,
@@ -286,7 +276,6 @@ impl IngestSecurity {
         .await
     }
 
-    /// Limit token churn for one device even when the long-lived bootstrap API key leaks.
     pub async fn check_device_token_rate(&self, app_id: &str, device_id: &str) -> bool {
         let key = format!("{app_id}:{device_id}");
         charge_rate(
@@ -300,8 +289,7 @@ impl IngestSecurity {
         .await
     }
 
-    /// Bound the number of new device identities one source IP can introduce per application.
-    /// Reusing an already-seen device does not consume another enrollment unit.
+    /// Bound how many distinct pseudonymous device IDs one source IP can introduce per app.
     pub async fn check_device_enrollment(&self, ip: &str, app_id: &str, device_id: &str) -> bool {
         let now = chrono::Utc::now().timestamp_millis();
         let seen_key = format!("{ip}:{app_id}:{device_id}");
@@ -336,7 +324,6 @@ impl IngestSecurity {
         true
     }
 
-    /// Anti-replay nonce validation for the lifetime of a short-lived ingest token.
     pub async fn check_and_record_nonce(&self, token_id: &str, nonce: &str, expires_at: i64) -> bool {
         let now = chrono::Utc::now().timestamp_millis();
         let key = format!("{token_id}:{nonce}");
@@ -358,17 +345,14 @@ impl IngestSecurity {
         hex::encode(hmac_sha256(pepper, &context))
     }
 
-    /// Issue an ephemeral ingest token. The request signing key is returned separately and is not
-    /// embedded in the token claims. Claims bind the token to one device and one client profile.
+    /// Issue a short-lived ingest token bound only to the current pseudonymous device identity and
+    /// transport client profile. Version/session/OS history stays in telemetry and is platform-owned.
     #[allow(clippy::too_many_arguments)]
     pub fn issue_ingest_token(
         &self,
         application_id: &str,
         environment_id: &str,
         device_id: &str,
-        session_id: Option<&str>,
-        app_version: Option<&str>,
-        os: Option<&str>,
         client_binding: &str,
         scopes: &[String],
         ttl_seconds: i64,
@@ -383,9 +367,6 @@ impl IngestSecurity {
             application_id: application_id.to_owned(),
             environment_id: environment_id.to_owned(),
             device_id: device_id.to_owned(),
-            session_id: session_id.map(str::to_owned),
-            app_version: app_version.map(str::to_owned),
-            os: os.map(str::to_owned),
             client_binding: client_binding.to_owned(),
             scopes: scopes.to_vec(),
             issued_at: now,
@@ -402,7 +383,6 @@ impl IngestSecurity {
         Ok((token, signing_key, expires_at))
     }
 
-    /// Verify an ephemeral ingest token and reject malformed lifetime claims.
     pub fn verify_ingest_token(
         &self,
         token_str: &str,
@@ -438,7 +418,6 @@ impl IngestSecurity {
         derive_ingest_signing_key(pepper, &claims.token_id)
     }
 
-    /// Verify the legacy body-only HMAC helper retained for tests/compatibility utilities.
     pub fn verify_request_signature(
         signing_key: &str,
         timestamp_ms: i64,
@@ -518,10 +497,6 @@ pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     output
 }
 
-/// Process-local security state that is intentionally not durable.
-///
-/// Durable sessions, 2FA pending tokens, and TOTP replay protection live in
-/// `database::auth_state_repo`, so they remain consistent across application replicas.
 pub struct AuthSecurity {
     attempts: Mutex<HashMap<String, Attempt>>,
     challenges: Mutex<HashMap<String, Challenge>>,
@@ -724,9 +699,6 @@ pub mod tests {
                     "app-uuid-1",
                     "env-uuid-1",
                     "device-12345",
-                    Some("session-1"),
-                    Some("1.0.0"),
-                    Some("windows"),
                     &client_binding,
                     &["telemetry.events".into(), "telemetry.errors".into()],
                     120,
@@ -738,7 +710,6 @@ pub mod tests {
             let claims = ingest.verify_ingest_token(&token, pepper).unwrap();
             assert_eq!(claims.application_id, "app-uuid-1");
             assert_eq!(claims.device_id, "device-12345");
-            assert_eq!(claims.session_id.as_deref(), Some("session-1"));
             assert_eq!(claims.client_binding, client_binding);
             assert_eq!(ingest.signing_key_for_claims(&claims, pepper), signing_key);
             assert_eq!(claims.expires_at, expires_at);
