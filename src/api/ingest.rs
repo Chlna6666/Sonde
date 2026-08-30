@@ -56,7 +56,7 @@ async fn events(
     let client_ip = extract_client_ip(&request);
     let scope = telemetry::scope_from_context_with_permission(
         &installed,
-        ingest_request_context(&request, &client_ip),
+        ingest_request_context(&request, &client_ip)?,
         "telemetry.events",
         body.as_ref(),
     )
@@ -78,7 +78,7 @@ async fn metrics(
     let client_ip = extract_client_ip(&request);
     let scope = telemetry::scope_from_context_with_permission(
         &installed,
-        ingest_request_context(&request, &client_ip),
+        ingest_request_context(&request, &client_ip)?,
         "telemetry.metrics",
         body.as_ref(),
     )
@@ -100,7 +100,7 @@ async fn logs(
     let client_ip = extract_client_ip(&request);
     let scope = telemetry::scope_from_context_with_permission(
         &installed,
-        ingest_request_context(&request, &client_ip),
+        ingest_request_context(&request, &client_ip)?,
         "telemetry.logs",
         body.as_ref(),
     )
@@ -122,7 +122,7 @@ async fn errors(
     let client_ip = extract_client_ip(&request);
     let scope = telemetry::scope_from_context_with_permission(
         &installed,
-        ingest_request_context(&request, &client_ip),
+        ingest_request_context(&request, &client_ip)?,
         "telemetry.errors",
         body.as_ref(),
     )
@@ -189,17 +189,21 @@ fn extract_raw_key(request: &HttpRequest) -> Option<&str> {
 fn ingest_request_context<'a>(
     request: &'a HttpRequest,
     client_ip: &'a str,
-) -> IngestRequestContext<'a> {
-    IngestRequestContext {
+) -> Result<IngestRequestContext<'a>, AppError> {
+    let credential = extract_raw_key(request);
+    if credential.is_some_and(|value| !value.starts_with("sndt_")) {
+        return Err(AppError::IngestTokenRequired);
+    }
+    Ok(IngestRequestContext {
         client_ip,
         user_agent: user_agent(request),
-        credential: extract_raw_key(request),
+        credential,
         signature: optional_header(request, "x-sonde-signature"),
         timestamp: optional_header(request, "x-sonde-timestamp"),
         nonce: optional_header(request, "x-sonde-nonce"),
         method: request.method().as_str(),
         path: request.path(),
-    }
+    })
 }
 
 fn optional_header<'a>(request: &'a HttpRequest, name: &str) -> Option<&'a str> {
