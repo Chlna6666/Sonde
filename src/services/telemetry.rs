@@ -1,8 +1,6 @@
-use actix_web::HttpRequest;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    auth,
     database::{ingest_auth_repo, telemetry_repo::TelemetryScope},
     domain::telemetry::{
         BatchReceipt, ErrorInput, EventInput, LogInput, MAX_BATCH_ITEMS, MetricInput, RejectedItem,
@@ -12,6 +10,25 @@ use crate::{
     ingest_signature,
     state::InstalledState,
 };
+
+#[derive(Clone, Copy, Debug)]
+pub struct IngestTokenContext<'a> {
+    pub client_ip: &'a str,
+    pub user_agent: &'a str,
+    pub raw_key: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct IngestRequestContext<'a> {
+    pub client_ip: &'a str,
+    pub user_agent: &'a str,
+    pub credential: Option<&'a str>,
+    pub signature: Option<&'a str>,
+    pub timestamp: Option<&'a str>,
+    pub nonce: Option<&'a str>,
+    pub method: &'a str,
+    pub path: &'a str,
+}
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,41 +49,6 @@ pub struct IngestTokenResponse {
     pub signing_key: String,
     pub signature_version: &'static str,
     pub scopes: Vec<String>,
-}
-
-/// Return the transport peer address used by Actix.
-///
-/// Forwarded/X-Forwarded-For are deliberately not trusted by default: accepting them without a
-/// configured trusted-proxy boundary would allow a direct client to bypass IP based throttling by
-/// spoofing request headers. Reverse proxies should therefore enforce rate limits themselves until
-/// Sonde grows an explicit trusted-proxy configuration.
-pub fn extract_client_ip(request: &HttpRequest) -> String {
-    request
-        .peer_addr()
-        .map(|address| address.ip().to_string())
-        .unwrap_or_else(|| "unknown".into())
-}
-
-pub fn extract_raw_key(request: &HttpRequest) -> Option<&str> {
-    auth::bearer_token(request)
-        .or_else(|| {
-            request
-                .headers()
-                .get("x-sonde-token")
-                .and_then(|value| value.to_str().ok())
-        })
-        .or_else(|| {
-            request
-                .headers()
-                .get("x-sonde-key")
-                .and_then(|value| value.to_str().ok())
-        })
-        .or_else(|| {
-            request
-                .headers()
-                .get("x-api-key")
-                .and_then(|value| value.to_str().ok())
-        })
 }
 
 pub fn has_permission(scopes: &[String], required_perm: &str) -> bool {
@@ -111,29 +93,22 @@ pub fn match_user_agent(rule: &str, user_agent: &str) -> bool {
 }
 
 /// Exchange API Key + Device ID for an ephemeral 2-minute Ingest Token.
-pub async fn issue_token_from_request(
+pub async fn issue_token(
     installed: &InstalledState,
-    request: &HttpRequest,
+    request: IngestTokenContext<'_>,
     body: IngestTokenRequest,
 ) -> Result<IngestTokenResponse, AppError> {
-    let user_agent = request
-        .headers()
-        .get("user-agent")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim();
-
+    let user_agent = request.user_agent.trim();
     if user_agent.is_empty() {
         return Err(AppError::Validation(
             "valid User-Agent header is required to request ingest token".into(),
         ));
     }
 
-    let client_ip = extract_client_ip(request);
     if !installed
         .auth_security
         .ingest
-        .check_ip_token_rate(&client_ip)
+        .check_ip_token_rate(request.client_ip)
         .await
     {
         return Err(AppError::TooManyRequests);
@@ -146,7 +121,7 @@ pub async fn issue_token_from_request(
         ));
     }
 
-    let raw_key = extract_raw_key(request).ok_or(AppError::Unauthorized)?;
+    let raw_key = request.raw_key.ok_or(AppError::Unauthorized)?;
     let hash = hex::encode(Sha256::digest(raw_key.as_bytes()));
     let context = ingest_auth_repo::api_key_context(
         &installed.database,
@@ -176,36 +151,29 @@ pub async fn issue_token_from_request(
     })
 }
 
-pub async fn scope_from_request_with_permission(
+pub async fn scope_from_context_with_permission(
     installed: &InstalledState,
-    request: &HttpRequest,
+    request: IngestRequestContext<'_>,
     required_perm: &str,
     raw_body: &[u8],
 ) -> Result<TelemetryScope, AppError> {
-    let user_agent = request
-        .headers()
-        .get("user-agent")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim();
-
+    let user_agent = request.user_agent.trim();
     if user_agent.is_empty() {
         return Err(AppError::Validation(
             "valid User-Agent header is required for telemetry ingestion".into(),
         ));
     }
 
-    let client_ip = extract_client_ip(request);
     if !installed
         .auth_security
         .ingest
-        .check_ip_ingest_rate(&client_ip)
+        .check_ip_ingest_rate(request.client_ip)
         .await
     {
         return Err(AppError::TooManyRequests);
     }
 
-    let auth_header = extract_raw_key(request).ok_or(AppError::Unauthorized)?;
+    let auth_header = request.credential.ok_or(AppError::Unauthorized)?;
 
     if auth_header.starts_with("sndt_") {
         let claims = installed
@@ -218,11 +186,13 @@ pub async fn scope_from_request_with_permission(
             return Err(AppError::Forbidden);
         }
 
-        let signature = required_header(request, "x-sonde-signature")?;
-        let timestamp = required_header(request, "x-sonde-timestamp")?
+        let signature = request.signature.ok_or(AppError::Forbidden)?;
+        let timestamp = request
+            .timestamp
+            .ok_or(AppError::Forbidden)?
             .parse::<i64>()
             .map_err(|_| AppError::Validation("invalid x-sonde-timestamp".into()))?;
-        let nonce = required_header(request, "x-sonde-nonce")?;
+        let nonce = request.nonce.ok_or(AppError::Forbidden)?;
         if nonce.is_empty() || nonce.len() > 128 {
             return Err(AppError::Validation(
                 "x-sonde-nonce must be 1..128 bytes".into(),
@@ -237,8 +207,8 @@ pub async fn scope_from_request_with_permission(
             &signing_key,
             timestamp,
             nonce,
-            request.method().as_str(),
-            request.path(),
+            request.method,
+            request.path,
             raw_body,
             signature,
         )?;
@@ -271,20 +241,12 @@ pub async fn scope_from_request_with_permission(
     }
 }
 
-pub async fn scope_from_request(
+pub async fn scope_from_context(
     installed: &InstalledState,
-    request: &HttpRequest,
+    request: IngestRequestContext<'_>,
     raw_body: &[u8],
 ) -> Result<TelemetryScope, AppError> {
-    scope_from_request_with_permission(installed, request, "telemetry.ingest", raw_body).await
-}
-
-fn required_header<'a>(request: &'a HttpRequest, name: &str) -> Result<&'a str, AppError> {
-    request
-        .headers()
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .ok_or(AppError::Forbidden)
+    scope_from_context_with_permission(installed, request, "telemetry.ingest", raw_body).await
 }
 
 pub async fn scope_for_key_with_permission(
