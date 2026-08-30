@@ -5,6 +5,9 @@ use serde_json::Value;
 
 pub const MAX_BATCH_ITEMS: usize = 1_000;
 const MAX_FUTURE_SKEW_MILLIS: i64 = 5 * 60 * 1_000;
+const MAX_PAST_AGE_MILLIS: i64 = 7 * 24 * 60 * 60 * 1_000;
+const MAX_ABS_METRIC_VALUE: f64 = 1.0e18;
+const MAX_HISTOGRAM_COUNT: u64 = 10_000_000;
 const MAX_ATTRIBUTE_DEPTH: usize = 6;
 const MAX_ATTRIBUTE_STRING_BYTES: usize = 16_384;
 const MAX_ATTRIBUTE_ARRAY_ITEMS: usize = 128;
@@ -233,8 +236,11 @@ impl ValidateTelemetry for MetricInput {
         if self.unit.as_ref().is_some_and(|unit| unit.len() > 64) {
             return Err("metric unit must be at most 64 bytes");
         }
-        if self.value.is_some_and(|value| !value.is_finite()) {
-            return Err("metric value must be finite");
+        if self
+            .value
+            .is_some_and(|value| !value.is_finite() || value.abs() > MAX_ABS_METRIC_VALUE)
+        {
+            return Err("metric value must be finite and within +/-1e18");
         }
 
         match self.metric_type {
@@ -278,8 +284,8 @@ impl ValidateTelemetry for LogInput {
 }
 
 fn validate_histogram(histogram: &HistogramInput) -> Result<(), &'static str> {
-    if histogram.count > i64::MAX as u64 {
-        return Err("histogram count exceeds supported range");
+    if histogram.count > MAX_HISTOGRAM_COUNT {
+        return Err("histogram count must not exceed 10000000 per point");
     }
     if histogram.explicit_bounds.len() > MAX_HISTOGRAM_BOUNDS {
         return Err("histogram supports at most 256 explicit bounds");
@@ -289,12 +295,16 @@ fn validate_histogram(histogram: &HistogramInput) -> Result<(), &'static str> {
         .into_iter()
         .chain(histogram.min)
         .chain(histogram.max)
-        .any(|value| !value.is_finite())
+        .any(|value| !value.is_finite() || value.abs() > MAX_ABS_METRIC_VALUE)
     {
-        return Err("histogram sum/min/max must be finite");
+        return Err("histogram sum/min/max must be finite and within +/-1e18");
     }
-    if histogram.explicit_bounds.iter().any(|value| !value.is_finite()) {
-        return Err("histogram bounds must be finite");
+    if histogram
+        .explicit_bounds
+        .iter()
+        .any(|value| !value.is_finite() || value.abs() > MAX_ABS_METRIC_VALUE)
+    {
+        return Err("histogram bounds must be finite and within +/-1e18");
     }
     if histogram
         .explicit_bounds
@@ -339,11 +349,12 @@ fn validate_name(name: &str) -> Result<(), &'static str> {
 
 fn validate_timestamp(timestamp: Option<i64>) -> Result<(), &'static str> {
     if let Some(timestamp) = timestamp {
-        let max_timestamp = chrono::Utc::now()
-            .timestamp_millis()
-            .saturating_add(MAX_FUTURE_SKEW_MILLIS);
-        if timestamp > max_timestamp {
+        let now = chrono::Utc::now().timestamp_millis();
+        if timestamp > now.saturating_add(MAX_FUTURE_SKEW_MILLIS) {
             return Err("timestamp must not be more than 5 minutes in the future");
+        }
+        if timestamp < now.saturating_sub(MAX_PAST_AGE_MILLIS) {
+            return Err("timestamp must not be more than 7 days in the past for live ingestion");
         }
     }
     Ok(())
@@ -468,10 +479,31 @@ mod tests {
     }
 
     #[test]
+    fn stale_live_timestamp_is_rejected() {
+        let mut event = event("application.start");
+        event.timestamp = Some(chrono::Utc::now().timestamp_millis() - 8 * 24 * 60 * 60 * 1_000);
+        assert!(event.validate().is_err());
+    }
+
+    #[test]
     fn oversized_idempotency_key_is_rejected() {
         let mut event = event("application.start");
         event.idempotency_key = Some("x".repeat(129));
         assert!(event.validate().is_err());
+    }
+
+    #[test]
+    fn absurd_metric_magnitude_is_rejected() {
+        let metric = MetricInput {
+            name: "counter".into(),
+            metric_type: MetricType::Counter,
+            value: Some(1.0e30),
+            histogram: None,
+            unit: None,
+            timestamp: None,
+            attributes: Attributes::new(),
+        };
+        assert!(metric.validate().is_err());
     }
 
     #[test]
@@ -482,6 +514,15 @@ mod tests {
 
         let mut invalid = histogram();
         invalid.histogram.as_mut().unwrap().bucket_counts = vec![1, 1, 1];
+        assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn oversized_histogram_population_is_rejected() {
+        let mut invalid = histogram();
+        let histogram = invalid.histogram.as_mut().unwrap();
+        histogram.count = 10_000_001;
+        histogram.bucket_counts = vec![10_000_001, 0, 0];
         assert!(invalid.validate().is_err());
     }
 
