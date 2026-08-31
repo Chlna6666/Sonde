@@ -2,9 +2,9 @@
 
 use sonde::database::{
     self,
-    device_query_repo::{self, DeviceProfileFilter},
-    device_state_repo::{self, DeviceObservation, DeviceTelemetryKind, TimedDimension},
-    telemetry_repo::TelemetryScope,
+    device_query::{self, DeviceProfileFilter},
+    device_state::{self, DeviceObservation, DeviceTelemetryKind, TimedDimension},
+    telemetry::TelemetryScope,
 };
 
 fn observation(received_at: i64, os: &str) -> DeviceObservation {
@@ -30,7 +30,7 @@ fn observation(received_at: i64, os: &str) -> DeviceObservation {
 }
 
 #[tokio::test]
-async fn query_repo_filters_device_risk_and_scope() -> Result<(), Box<dyn std::error::Error>> {
+async fn query_filters_device_risk_and_scope() -> Result<(), Box<dyn std::error::Error>> {
     let database = database::connect("sqlite::memory:").await?;
     database::migrate(&database).await?;
     let scope = TelemetryScope {
@@ -41,9 +41,9 @@ async fn query_repo_filters_device_risk_and_scope() -> Result<(), Box<dyn std::e
     let low = "1111111111111111111111111111111111111111111111111111111111111111";
     let risky = "2222222222222222222222222222222222222222222222222222222222222222";
 
-    device_state_repo::observe(&database, &scope, low, &observation(now, "windows")).await?;
-    device_state_repo::observe(&database, &scope, risky, &observation(now, "windows")).await?;
-    device_state_repo::observe(
+    device_state::observe(&database, &scope, low, &observation(now, "windows")).await?;
+    device_state::observe(&database, &scope, risky, &observation(now, "windows")).await?;
+    device_state::observe(
         &database,
         &scope,
         risky,
@@ -51,7 +51,7 @@ async fn query_repo_filters_device_risk_and_scope() -> Result<(), Box<dyn std::e
     )
     .await?;
 
-    let page = device_query_repo::list_profiles(
+    let page = device_query::list_profiles(
         &database,
         &DeviceProfileFilter {
             application_id: &scope.application_id,
@@ -71,7 +71,7 @@ async fn query_repo_filters_device_risk_and_scope() -> Result<(), Box<dyn std::e
     assert_eq!(page.items[0].id, risky);
     assert!(page.items[0].risk_score >= 20);
 
-    let summary = device_query_repo::security_summary(
+    let summary = device_query::security_summary(
         &database,
         &scope.application_id,
         Some(&scope.environment_id),
