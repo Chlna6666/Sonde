@@ -7,11 +7,11 @@ use sea_orm::{
 };
 use sha2::{Digest, Sha256};
 
-use super::{rollup_repo, telemetry_repo::TelemetryScope};
-pub use super::rollup_repo::DIRTY_SOURCE_LOG_ERROR;
+use super::{rollups, telemetry::TelemetryScope};
+pub use super::rollups::DIRTY_SOURCE_LOG_ERROR;
 
 const GLOBAL_ENVIRONMENT: &str = "*";
-const BACKFILL_KEY: &str = "telemetry_log_error_rollup_backfill_v2";
+const BACKFILL_KEY: &str = "telemetry_log_error_rollup_backfill";
 
 pub async fn seed_historical_dirty_days_once(
     database: &DatabaseConnection,
@@ -52,7 +52,7 @@ pub async fn seed_historical_dirty_days_once(
             application_id,
             environment_id,
         };
-        rollup_repo::mark_dirty_timestamps_for_source(
+        rollups::mark_dirty_timestamps_for_source(
             database,
             &scope,
             DIRTY_SOURCE_LOG_ERROR,
@@ -90,7 +90,7 @@ pub async fn invalidate_backfill(database: &DatabaseConnection) -> Result<(), Db
 
 pub async fn recompute_claimed_day(
     database: &DatabaseConnection,
-    dirty: &rollup_repo::DirtyDay,
+    dirty: &rollups::DirtyDay,
 ) -> Result<bool, DbErr> {
     if !dirty.has_source(DIRTY_SOURCE_LOG_ERROR) {
         return Ok(true);
@@ -130,12 +130,14 @@ pub async fn recompute_claimed_day(
     if dirty.environment_id != GLOBAL_ENVIRONMENT {
         count.and_where(Expr::col(Alias::new("environment_id")).eq(&dirty.environment_id));
     }
-    let error_logs = transaction
-        .query_one(&count)
-        .await?
-        .and_then(|row| row.try_get::<i64>("", "total").ok())
-        .unwrap_or(0)
-        .max(0);
+    let error_logs = std::cmp::max(
+        transaction
+            .query_one(&count)
+            .await?
+            .and_then(|row| row.try_get::<i64>("", "total").ok())
+            .unwrap_or(0),
+        0,
+    );
 
     let mut upsert = Query::insert();
     upsert
