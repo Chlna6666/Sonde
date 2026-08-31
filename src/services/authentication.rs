@@ -1,6 +1,6 @@
 use crate::{
     auth,
-    database::{auth_repo, auth_state_repo},
+    database::{applications, auth as auth_store, auth_state},
     domain::permission::PermissionGrant,
     error::AppError,
     security::LoginGate,
@@ -80,7 +80,7 @@ pub async fn login(
     let source_key = format!("source:{}", auth::token_hash(input.source));
     require_login_gate(installed, &input, &account_key, &source_key).await?;
 
-    let mut credential = auth_repo::user_by_identifier(&installed.database, input.email)
+    let mut credential = auth_store::user_by_identifier(&installed.database, input.email)
         .await
         .map_err(AppError::from)
         .map_err(LoginFailure::Application)?;
@@ -124,7 +124,7 @@ pub async fn login(
         })?
         .map_err(LoginFailure::Application)?;
 
-        auth_repo::update_password_hash(&installed.database, &user.id, &upgraded_hash)
+        auth_store::update_password_hash(&installed.database, &user.id, &upgraded_hash)
             .await
             .map_err(AppError::from)
             .map_err(LoginFailure::Application)?;
@@ -150,7 +150,7 @@ pub async fn login(
         .await;
 
     if credential.totp_enabled {
-        let temp_token = auth_state_repo::issue_2fa_temp_token(&installed.database, &credential.id)
+        let temp_token = auth_state::issue_2fa_temp_token(&installed.database, &credential.id)
             .await
             .map_err(AppError::from)
             .map_err(LoginFailure::Application)?;
@@ -158,7 +158,7 @@ pub async fn login(
     }
 
     let (session_token, csrf_token) =
-        auth_state_repo::create_session(&installed.database, &credential.id)
+        auth_state::create_session(&installed.database, &credential.id)
             .await
             .map_err(AppError::from)
             .map_err(LoginFailure::Application)?;
@@ -177,11 +177,11 @@ pub async fn verify_2fa_login(
     temp_token: &str,
     code: &str,
 ) -> Result<LoginOutcome, AppError> {
-    let user_id = auth_state_repo::consume_2fa_temp_token(&installed.database, temp_token)
+    let user_id = auth_state::consume_2fa_temp_token(&installed.database, temp_token)
         .await?
         .ok_or(AppError::Unauthorized)?;
 
-    let (enabled, secret_opt) = auth_repo::get_totp_info(&installed.database, &user_id).await?;
+    let (enabled, secret_opt) = auth_store::get_totp_info(&installed.database, &user_id).await?;
     let Some(secret) = secret_opt else {
         return Err(AppError::Unauthorized);
     };
@@ -189,13 +189,13 @@ pub async fn verify_2fa_login(
         return Err(AppError::Validation("Invalid 2FA verification code".into()));
     }
 
-    let credential = auth_repo::user_by_id(&installed.database, &user_id)
+    let credential = auth_store::user_by_id(&installed.database, &user_id)
         .await?
         .filter(|u| u.active)
         .ok_or(AppError::Unauthorized)?;
 
     let (session_token, csrf_token) =
-        auth_state_repo::create_session(&installed.database, &credential.id).await?;
+        auth_state::create_session(&installed.database, &credential.id).await?;
     let user = load_user(installed, credential).await?;
     Ok(LoginOutcome {
         session_token,
@@ -208,7 +208,7 @@ pub async fn setup_2fa(
     installed: &InstalledState,
     user: &AuthenticatedUser,
 ) -> Result<TwoFactorSetup, AppError> {
-    let credential = auth_repo::user_by_id(&installed.database, &user.id)
+    let credential = auth_store::user_by_id(&installed.database, &user.id)
         .await?
         .ok_or(AppError::NotFound)?;
     if credential.totp_enabled {
@@ -227,7 +227,7 @@ pub async fn enable_2fa(
     password: &str,
     pepper: &[u8],
 ) -> Result<(), AppError> {
-    let credential = auth_repo::user_by_id(&installed.database, &user.id)
+    let credential = auth_store::user_by_id(&installed.database, &user.id)
         .await?
         .ok_or(AppError::NotFound)?;
     if credential.totp_enabled {
@@ -242,8 +242,8 @@ pub async fn enable_2fa(
         return Err(AppError::Validation("Invalid 2FA verification code".into()));
     }
 
-    auth_repo::enable_totp(&installed.database, &user.id, secret).await?;
-    crate::database::app_repo::audit(
+    auth_store::enable_totp(&installed.database, &user.id, secret).await?;
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "user.2fa_enabled",
@@ -262,7 +262,7 @@ pub async fn disable_2fa(
     password: &str,
     pepper: &[u8],
 ) -> Result<(), AppError> {
-    let credential = auth_repo::user_by_id(&installed.database, &user.id)
+    let credential = auth_store::user_by_id(&installed.database, &user.id)
         .await?
         .ok_or(AppError::NotFound)?;
 
@@ -270,7 +270,7 @@ pub async fn disable_2fa(
         return Err(AppError::Validation("Invalid account password".into()));
     }
 
-    let (enabled, secret_opt) = auth_repo::get_totp_info(&installed.database, &user.id).await?;
+    let (enabled, secret_opt) = auth_store::get_totp_info(&installed.database, &user.id).await?;
     let Some(secret) = secret_opt else {
         return Err(AppError::Validation("2FA is not enabled".into()));
     };
@@ -282,9 +282,9 @@ pub async fn disable_2fa(
         return Err(AppError::Validation("Invalid 2FA verification code".into()));
     }
 
-    auth_repo::disable_totp(&installed.database, &user.id).await?;
-    auth_state_repo::clear_totp_replay(&installed.database, &user.id).await?;
-    crate::database::app_repo::audit(
+    auth_store::disable_totp(&installed.database, &user.id).await?;
+    auth_state::clear_totp_replay(&installed.database, &user.id).await?;
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "user.2fa_disabled",
@@ -329,7 +329,7 @@ pub async fn logout(
     request: &impl AuthRequest,
 ) -> Result<(), AppError> {
     if let Some(token) = request.session_token() {
-        auth_state_repo::revoke_session(&installed.database, &auth::token_hash(&token)).await?;
+        auth_state::revoke_session(&installed.database, &auth::token_hash(&token)).await?;
     }
     Ok(())
 }
@@ -371,10 +371,10 @@ async fn authenticate_session(
     request: &impl AuthRequest,
 ) -> Result<(AuthenticatedUser, String), AppError> {
     let token = request.session_token().ok_or(AppError::Unauthorized)?;
-    let session = auth_state_repo::session(&installed.database, &auth::token_hash(&token))
+    let session = auth_state::session(&installed.database, &auth::token_hash(&token))
         .await?
         .ok_or(AppError::Unauthorized)?;
-    let credential = auth_repo::user_by_id(&installed.database, &session.user_id)
+    let credential = auth_store::user_by_id(&installed.database, &session.user_id)
         .await?
         .filter(|user| user.active)
         .ok_or(AppError::Unauthorized)?;
@@ -386,10 +386,10 @@ async fn authenticate_session(
 
 async fn load_user(
     installed: &InstalledState,
-    credential: auth_repo::UserCredential,
+    credential: auth_store::UserCredential,
 ) -> Result<AuthenticatedUser, AppError> {
-    let grants = auth_repo::grants_for_user(&installed.database, &credential.id).await?;
-    let roles = auth_repo::role_names_for_user(&installed.database, &credential.id).await?;
+    let grants = auth_store::grants_for_user(&installed.database, &credential.id).await?;
+    let roles = auth_store::role_names_for_user(&installed.database, &credential.id).await?;
     Ok(AuthenticatedUser {
         id: credential.id,
         email: credential.email,
@@ -449,5 +449,5 @@ async fn verify_totp_once(
     let Some(step) = crate::totp::verify_totp_step(secret, code) else {
         return Ok(false);
     };
-    Ok(auth_state_repo::consume_totp_step(&installed.database, user_id, step).await?)
+    Ok(auth_state::consume_totp_step(&installed.database, user_id, step).await?)
 }
