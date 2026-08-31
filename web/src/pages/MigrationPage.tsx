@@ -5,7 +5,6 @@ import {
   DatabaseZap,
   Download,
   FileUp,
-  HardDrive,
   RefreshCw,
   ShieldCheck,
   Upload,
@@ -45,9 +44,7 @@ type ImportResult = { run: ImportRun; alreadyImported: boolean };
 
 export function MigrationPage() {
   const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState<"d1" | "app" | "server">("d1");
-
-  // D1 State
+  const [activeTab, setActiveTab] = useState<"d1" | "app">("d1");
   const [applications, setApplications] = useState<Application[]>([]);
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [applicationId, setApplicationId] = useState("");
@@ -59,19 +56,10 @@ export function MigrationPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ImportResult | null>(null);
-
-  // Single App Export/Import State
   const [selectedExportAppId, setSelectedExportAppId] = useState("");
   const [appImportFile, setAppImportFile] = useState<unknown | null>(null);
   const [appImportFileName, setAppImportFileName] = useState("");
   const [appImportSuccess, setAppImportSuccess] = useState("");
-
-  // Full Server Backup State
-  const [exportingServer, setExportingServer] = useState(false);
-  const [restoringServer, setRestoringServer] = useState(false);
-  const [serverBackupFile, setServerBackupFile] = useState<unknown | null>(null);
-  const [serverBackupFileName, setServerBackupFileName] = useState("");
-  const [serverRestoreSuccess, setServerRestoreSuccess] = useState("");
 
   useEffect(() => {
     void Promise.all([
@@ -124,7 +112,7 @@ export function MigrationPage() {
         await api<Preview>("/api/v1/admin/migrations/d1/preview", {
           method: "POST",
           body: JSON.stringify({ sql }),
-        })
+        }),
       );
     } catch (cause) {
       showError(cause);
@@ -153,39 +141,39 @@ export function MigrationPage() {
 
   const handleExportSingleApp = async () => {
     if (!selectedExportAppId) return;
-    const targetApp = applications.find((a) => a.id === selectedExportAppId);
+    const targetApp = applications.find((application) => application.id === selectedExportAppId);
     if (!targetApp) return;
     try {
       const data = await api<unknown>(`/api/v1/admin/applications/${targetApp.id}/export`);
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${targetApp.slug}-export.sonde.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${targetApp.slug}-export.sonde.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
       URL.revokeObjectURL(url);
     } catch (cause) {
       showError(cause);
     }
   };
 
-  const handleAppImportFile = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleAppImportFile = (event: ChangeEvent<HTMLInputElement>) => {
     setError("");
     setAppImportSuccess("");
-    const file = e.target.files?.[0];
+    const file = event.target.files?.[0];
     if (!file) return;
     setAppImportFileName(file.name);
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = (loadEvent) => {
       try {
-        const text = evt.target?.result as string;
+        const text = loadEvent.target?.result as string;
         const parsed = JSON.parse(text);
         if (!parsed.application) throw new Error("Invalid Sonde application package");
         setAppImportFile(parsed);
-      } catch (err) {
-        showError(err);
+      } catch (cause) {
+        showError(cause);
         setAppImportFile(null);
       }
     };
@@ -204,8 +192,7 @@ export function MigrationPage() {
       setAppImportSuccess(t("apps.importSuccess"));
       setAppImportFile(null);
       setAppImportFileName("");
-      const updatedApps = await api<Application[]>("/api/v1/admin/applications");
-      setApplications(updatedApps);
+      setApplications(await api<Application[]>("/api/v1/admin/applications"));
     } catch (cause) {
       showError(cause);
     } finally {
@@ -213,75 +200,8 @@ export function MigrationPage() {
     }
   };
 
-  const handleExportFullServer = async () => {
-    setExportingServer(true);
-    setError("");
-    try {
-      const data = await api<unknown>("/api/v1/admin/system/backup");
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const dateStr = new Date().toISOString().slice(0, 10);
-      a.download = `sonde-full-server-backup-${dateStr}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (cause) {
-      showError(cause);
-    } finally {
-      setExportingServer(false);
-    }
-  };
-
-  const handleServerBackupFile = (e: ChangeEvent<HTMLInputElement>) => {
-    setError("");
-    setServerRestoreSuccess("");
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setServerBackupFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const text = evt.target?.result as string;
-        const parsed = JSON.parse(text);
-        if (parsed.backupType !== "sonde_full_backup") {
-          throw new Error("File is not a valid Sonde full server backup archive.");
-        }
-        setServerBackupFile(parsed);
-      } catch (err) {
-        showError(err);
-        setServerBackupFile(null);
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleExecuteServerRestore = async () => {
-    if (!serverBackupFile) return;
-    if (!window.confirm("Restore this full server backup archive?")) return;
-    setRestoringServer(true);
-    setError("");
-    try {
-      await api("/api/v1/admin/system/restore", {
-        method: "POST",
-        body: JSON.stringify(serverBackupFile),
-      });
-      setServerRestoreSuccess(t("settings.restoreSuccess"));
-      setServerBackupFile(null);
-      setServerBackupFileName("");
-    } catch (cause) {
-      showError(cause);
-    } finally {
-      setRestoringServer(false);
-    }
-  };
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const appPreviewData = (appImportFile as any)?.application;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const serverPreviewData = serverBackupFile as any;
 
   return (
     <div className="page enter-page">
@@ -327,24 +247,6 @@ export function MigrationPage() {
           <span className="relative z-10 flex items-center gap-2">
             <Database size={14} />
             <span>{t("migration.tabApp")}</span>
-          </span>
-        </button>
-
-        <button
-          type="button"
-          className={`segmented-control-item flex items-center gap-2 ${activeTab === "server" ? "active" : ""}`}
-          onClick={() => setActiveTab("server")}
-        >
-          {activeTab === "server" ? (
-            <motion.div
-              layoutId="migration-tab-pill"
-              transition={{ type: "spring", stiffness: 450, damping: 32 }}
-              className="segmented-control-pill"
-            />
-          ) : null}
-          <span className="relative z-10 flex items-center gap-2">
-            <HardDrive size={14} />
-            <span>{t("migration.tabServer")}</span>
           </span>
         </button>
       </div>
@@ -397,10 +299,7 @@ export function MigrationPage() {
                 />
               </div>
             </div>
-            <button
-              className="primary-button"
-              disabled={!sql || busy || !environmentId}
-            >
+            <button className="primary-button" disabled={!sql || busy || !environmentId}>
               {busy ? t("common.loading") : t("migration.preview")}
             </button>
           </form>
@@ -416,31 +315,17 @@ export function MigrationPage() {
             {preview ? (
               <>
                 <dl className="migration-stats">
-                  <div>
-                    <dt>{t("migration.rows")}</dt>
-                    <dd>{preview.rows.toLocaleString()}</dd>
-                  </div>
-                  <div>
-                    <dt>{t("migration.valid")}</dt>
-                    <dd>{preview.valid.toLocaleString()}</dd>
-                  </div>
-                  <div>
-                    <dt>{t("migration.duplicates")}</dt>
-                    <dd>{preview.duplicates.toLocaleString()}</dd>
-                  </div>
-                  <div>
-                    <dt>{t("migration.rejected")}</dt>
-                    <dd>{preview.rejected.toLocaleString()}</dd>
-                  </div>
+                  <div><dt>{t("migration.rows")}</dt><dd>{preview.rows.toLocaleString()}</dd></div>
+                  <div><dt>{t("migration.valid")}</dt><dd>{preview.valid.toLocaleString()}</dd></div>
+                  <div><dt>{t("migration.duplicates")}</dt><dd>{preview.duplicates.toLocaleString()}</dd></div>
+                  <div><dt>{t("migration.rejected")}</dt><dd>{preview.rejected.toLocaleString()}</dd></div>
                 </dl>
                 <div className="two-columns">
                   <div>
                     <strong>{t("apps.statsAppVersions")}</strong>
                     <ul>
-                      {Object.entries(preview.appVersions).map(([v, count]) => (
-                        <li key={v}>
-                          <code>{v}</code> <span>{count.toLocaleString()}</span>
-                        </li>
+                      {Object.entries(preview.appVersions).map(([version, count]) => (
+                        <li key={version}><code>{version}</code> <span>{count.toLocaleString()}</span></li>
                       ))}
                     </ul>
                   </div>
@@ -448,9 +333,7 @@ export function MigrationPage() {
                     <strong>{t("apps.statsOS")}</strong>
                     <ul>
                       {Object.entries(preview.operatingSystems).map(([os, count]) => (
-                        <li key={os}>
-                          <code>{os}</code> <span>{count.toLocaleString()}</span>
-                        </li>
+                        <li key={os}><code>{os}</code> <span>{count.toLocaleString()}</span></li>
                       ))}
                     </ul>
                   </div>
@@ -489,7 +372,7 @@ export function MigrationPage() {
               <Download aria-hidden="true" className="text-signal" />
               <div>
                 <h2>{t("apps.exportApp")}</h2>
-                <p>Export a single application bundle (.sonde.json) including all environments, API keys, and signals.</p>
+                <p>Export a single application package including environments, API keys, and telemetry.</p>
               </div>
             </div>
             <div className="field">
@@ -521,11 +404,7 @@ export function MigrationPage() {
               </div>
             </div>
             <label className="file-drop">
-              <input
-                type="file"
-                accept=".json,.sonde.json"
-                onChange={handleAppImportFile}
-              />
+              <input type="file" accept=".json,.sonde.json" onChange={handleAppImportFile} />
               <Upload aria-hidden="true" />
               <strong>{appImportFileName || t("apps.importSelectFile")}</strong>
             </label>
@@ -559,83 +438,6 @@ export function MigrationPage() {
             >
               {busy ? <RefreshCw size={15} className="animate-spin" /> : <Upload size={15} />}
               {busy ? t("common.loading") : t("apps.importApp")}
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {activeTab === "server" ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "20px" }}>
-          <div className="migration-panel">
-            <div className="panel-heading">
-              <HardDrive aria-hidden="true" className="text-signal" />
-              <div>
-                <h2>{t("settings.exportBackup")}</h2>
-                <p>{t("settings.backupDesc")}</p>
-              </div>
-            </div>
-            <button
-              type="button"
-              className="primary-button"
-              disabled={exportingServer}
-              onClick={handleExportFullServer}
-            >
-              {exportingServer ? <RefreshCw size={15} className="animate-spin" /> : <Download size={15} />}
-              {exportingServer ? t("common.loading") : t("settings.exportBackup")}
-            </button>
-          </div>
-
-          <div className="migration-panel">
-            <div className="panel-heading">
-              <Upload aria-hidden="true" className="text-amber" />
-              <div>
-                <h2>{t("settings.restoreBackup")}</h2>
-                <p>{t("settings.restoreDesc")}</p>
-              </div>
-            </div>
-            <label className="file-drop">
-              <input
-                type="file"
-                accept=".json"
-                onChange={handleServerBackupFile}
-              />
-              <Upload aria-hidden="true" />
-              <strong>{serverBackupFileName || t("settings.selectBackupFile")}</strong>
-            </label>
-
-            {serverRestoreSuccess ? (
-              <div className="migration-success" style={{ padding: "12px" }}>
-                <CheckCircle2 size={20} className="text-signal" />
-                <span>{serverRestoreSuccess}</span>
-              </div>
-            ) : null}
-
-            {serverPreviewData ? (
-              <div style={{ background: "var(--input-bg)", padding: "12px", borderRadius: "6px", fontSize: "0.78rem" }}>
-                <div className="flex justify-between">
-                  <span className="text-muted">Exported Date:</span>
-                  <span>{new Date(serverPreviewData.exportedAt).toLocaleDateString()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted">Applications:</span>
-                  <strong>{serverPreviewData.applications?.length ?? 0}</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted">Users:</span>
-                  <strong>{serverPreviewData.users?.length ?? 0}</strong>
-                </div>
-              </div>
-            ) : null}
-
-            <button
-              type="button"
-              className="secondary-button"
-              style={{ color: "var(--amber)", borderColor: "var(--amber)" }}
-              disabled={!serverBackupFile || restoringServer}
-              onClick={handleExecuteServerRestore}
-            >
-              {restoringServer ? <RefreshCw size={15} className="animate-spin" /> : <Upload size={15} />}
-              {restoringServer ? t("common.loading") : t("settings.restoreBackup")}
             </button>
           </div>
         </div>
