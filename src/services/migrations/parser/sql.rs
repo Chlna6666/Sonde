@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use crate::error::AppError;
 
-use super::LegacyEventRow;
+use super::D1EventRow;
 
-pub(super) fn parse_statements(sql: &str) -> Result<(Vec<LegacyEventRow>, usize), AppError> {
+pub(super) fn parse_statements(sql: &str) -> Result<(Vec<D1EventRow>, usize), AppError> {
     let mut rows = Vec::new();
     let mut rejected = 0;
     for raw_statement in split_statements(sql)? {
@@ -77,7 +77,7 @@ fn split_statements(sql: &str) -> Result<Vec<String>, AppError> {
     Ok(statements)
 }
 
-fn parse_insert(statement: &str) -> Result<(Vec<LegacyEventRow>, usize), AppError> {
+fn parse_insert(statement: &str) -> Result<(Vec<D1EventRow>, usize), AppError> {
     let open = statement.find('(').ok_or_else(invalid_insert)?;
     let close = statement[open..]
         .find(')')
@@ -156,10 +156,10 @@ fn sql_value(token: &str) -> Option<String> {
     (!value.eq_ignore_ascii_case("null")).then(|| value.to_owned())
 }
 
-fn row_from_fields(fields: &HashMap<&str, &Option<String>>) -> Option<LegacyEventRow> {
+fn row_from_fields(fields: &HashMap<&str, &Option<String>>) -> Option<D1EventRow> {
     let required = |name: &str| fields.get(name).and_then(|value| value.as_deref());
     let optional = |name: &str| fields.get(name).and_then(|value| (*value).clone());
-    Some(LegacyEventRow {
+    Some(D1EventRow {
         ts: required("ts")?.parse().ok()?,
         day: required("day")?.to_owned(),
         user_hash: required("user_hash")?.to_owned(),
