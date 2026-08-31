@@ -1,5 +1,5 @@
 use crate::{
-    database::device_query_repo,
+    database::device_query,
     error::AppError,
     services::{
         applications,
@@ -31,7 +31,7 @@ pub async fn list(
     let (last_seen_from, last_seen_to) = status_window(query.status, active_since, recent_since);
     let (risk_min, risk_max) = risk_window(query.risk, query.min_risk);
 
-    let filter = device_query_repo::DeviceProfileFilter {
+    let filter = device_query::DeviceProfileFilter {
         application_id: &query.application_id,
         environment_id: query.environment_id.as_deref(),
         last_seen_from,
@@ -42,8 +42,8 @@ pub async fn list(
         page: query.page.max(1),
         page_size: query.page_size.clamp(1, 200),
     };
-    let page = device_query_repo::list_profiles(&installed.database, &filter).await?;
-    let summary = device_query_repo::security_summary(
+    let page = device_query::list_profiles(&installed.database, &filter).await?;
+    let summary = device_query::security_summary(
         &installed.database,
         &query.application_id,
         query.environment_id.as_deref(),
@@ -110,7 +110,7 @@ fn risk_window(
 }
 
 fn map_device(
-    record: device_query_repo::DeviceProfileRecord,
+    record: device_query::DeviceProfileRecord,
     active_since: i64,
     recent_since: i64,
 ) -> DeviceSummary {
