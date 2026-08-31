@@ -1,12 +1,15 @@
 #![allow(clippy::unwrap_used)]
 
-use sea_orm::{ConnectionTrait, sea_query::{Alias, Expr, ExprTrait, Query}};
-use sonde::database::{self, alert_delivery_repo, alert_repo, app_repo};
+use sea_orm::{
+    ConnectionTrait,
+    sea_query::{Alias, Expr, ExprTrait, Query},
+};
+use sonde::database::{self, alert_delivery, alerts as alert_store, applications};
 
 async fn setup() -> (sea_orm::DatabaseConnection, String, String, String) {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
-    let (application_id, _) = app_repo::create_application(&database, "Fence", "fence", None)
+    let (application_id, _) = applications::create_application(&database, "Fence", "fence", None)
         .await
         .unwrap();
     let query = serde_json::json!({
@@ -17,9 +20,9 @@ async fn setup() -> (sea_orm::DatabaseConnection, String, String, String) {
         "consecutiveHits": 1,
         "filters": []
     });
-    let rule_id = alert_repo::create_rule(
+    let rule_id = alert_store::create_rule(
         &database,
-        alert_repo::NewRule {
+        alert_store::NewRule {
             application_id: &application_id,
             name: "fenced rule",
             source_kind: "event_count",
@@ -30,7 +33,7 @@ async fn setup() -> (sea_orm::DatabaseConnection, String, String, String) {
     )
     .await
     .unwrap();
-    let channel_id = alert_repo::create_channel(
+    let channel_id = alert_store::create_channel(
         &database,
         "fenced channel",
         "unsupported-test-channel",
@@ -53,10 +56,10 @@ async fn stale_evaluator_cannot_reactivate_disabled_rule() {
         "consecutiveHits": 1,
         "filters": []
     });
-    alert_repo::update_rule(
+    alert_store::update_rule(
         &database,
         &rule_id,
-        alert_repo::UpdateRule {
+        alert_store::UpdateRule {
             name: "fenced rule",
             enabled: false,
             source_kind: "event_count",
@@ -68,7 +71,7 @@ async fn stale_evaluator_cannot_reactivate_disabled_rule() {
     .await
     .unwrap();
 
-    let queued = alert_delivery_repo::persist_transition(
+    let queued = alert_delivery::persist_transition(
         &database,
         &rule_id,
         "firing",
@@ -80,7 +83,7 @@ async fn stale_evaluator_cannot_reactivate_disabled_rule() {
     .unwrap();
     assert_eq!(queued, 0);
     assert_eq!(delivery_count(&database).await, 0);
-    let rule = alert_repo::get_rule(&database, &rule_id)
+    let rule = alert_store::get_rule(&database, &rule_id)
         .await
         .unwrap()
         .unwrap();
@@ -91,7 +94,7 @@ async fn stale_evaluator_cannot_reactivate_disabled_rule() {
 #[tokio::test]
 async fn enqueue_transaction_filters_channels_disabled_after_evaluator_snapshot() {
     let (database, _, rule_id, channel_id) = setup().await;
-    alert_repo::update_channel(
+    alert_store::update_channel(
         &database,
         &channel_id,
         "fenced channel",
@@ -102,7 +105,7 @@ async fn enqueue_transaction_filters_channels_disabled_after_evaluator_snapshot(
     .await
     .unwrap();
 
-    let queued = alert_delivery_repo::persist_transition(
+    let queued = alert_delivery::persist_transition(
         &database,
         &rule_id,
         "firing",
@@ -115,7 +118,7 @@ async fn enqueue_transaction_filters_channels_disabled_after_evaluator_snapshot(
     assert_eq!(queued, 0);
     assert_eq!(delivery_count(&database).await, 0);
     assert_eq!(
-        alert_repo::get_rule(&database, &rule_id)
+        alert_store::get_rule(&database, &rule_id)
             .await
             .unwrap()
             .unwrap()
@@ -128,7 +131,7 @@ async fn enqueue_transaction_filters_channels_disabled_after_evaluator_snapshot(
 async fn terminal_delivery_state_drops_retry_payload() {
     let (database, _, rule_id, channel_id) = setup().await;
     assert_eq!(
-        alert_delivery_repo::persist_transition(
+        alert_delivery::persist_transition(
             &database,
             &rule_id,
             "firing",
@@ -157,7 +160,7 @@ async fn terminal_delivery_state_drops_retry_payload() {
         .unwrap()
         .is_some());
 
-    assert!(alert_delivery_repo::mark_failed(&database, &id, 0, true, "test")
+    assert!(alert_delivery::mark_failed(&database, &id, 0, true, "test")
         .await
         .unwrap());
     let payload = database
