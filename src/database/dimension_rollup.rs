@@ -18,7 +18,7 @@ pub const DIMENSION_LAUNCHER_VERSION: &str = "launcher_version";
 pub const DIMENSION_OS: &str = "os";
 
 const GLOBAL_ENVIRONMENT: &str = "*";
-const DIMENSION_BACKFILL_KEY: &str = "telemetry_dimension_rollup_backfill_v1";
+const DIMENSION_BACKFILL_KEY: &str = "telemetry_dimension_rollup_backfill";
 const MAX_DIRTY_SCOPE_DAYS: usize = 32;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -563,7 +563,7 @@ fn dimension_id(
     value: &str,
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"sonde:dimension-rollup:v1\0");
+    hasher.update(b"sonde:dimension-rollup\0");
     for part in [application_id, environment_id, day, dimension, value] {
         hasher.update(part.as_bytes());
         hasher.update(b"\0");

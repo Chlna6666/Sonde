@@ -13,7 +13,7 @@ use super::{
 };
 
 const GLOBAL_ENVIRONMENT: &str = "*";
-const USER_ROLLUP_BACKFILL_KEY: &str = "telemetry_user_rollup_backfill_v1";
+const USER_ROLLUP_BACKFILL_KEY: &str = "telemetry_user_rollup_backfill";
 const FINGERPRINT_BYTES: usize = 16;
 const FINGERPRINTS_PER_CHUNK: usize = 2_048;
 const USER_SET_INSERT_CHUNK: usize = 100;
@@ -635,7 +635,7 @@ async fn set_system_state(
 
 fn user_set_id(application_id: &str, environment_id: &str, day: &str, chunk_index: i32) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"sonde:user-rollup:v2\0");
+    hasher.update(b"sonde:user-rollup\0");
     hasher.update(application_id.as_bytes());
     hasher.update(b"\0");
     hasher.update(environment_id.as_bytes());

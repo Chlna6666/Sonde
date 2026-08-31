@@ -15,12 +15,12 @@ use sonde::{
 use tokio::io::AsyncWriteExt;
 
 const DERIVED_STATE_KEYS: &[&str] = &[
-    "telemetry_rollup_backfill_v1",
-    "telemetry_dimension_rollup_backfill_v1",
-    "telemetry_user_rollup_backfill_v1",
-    "telemetry_log_error_rollup_backfill_v2",
-    "telemetry_first_seen_backfill_v1",
-    "telemetry_first_seen_backfill_cursor_v1",
+    "telemetry_rollup_backfill",
+    "telemetry_dimension_rollup_backfill",
+    "telemetry_user_rollup_backfill",
+    "telemetry_log_error_rollup_backfill",
+    "telemetry_first_seen_backfill",
+    "telemetry_first_seen_backfill_cursor",
 ];
 
 #[tokio::test]

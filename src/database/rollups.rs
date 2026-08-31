@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use super::telemetry::TelemetryScope;
 
 const GLOBAL_ENVIRONMENT: &str = "*";
-const ROLLUP_BACKFILL_KEY: &str = "telemetry_rollup_backfill_v1";
+const ROLLUP_BACKFILL_KEY: &str = "telemetry_rollup_backfill";
 const DIRTY_INSERT_CHUNK: usize = 100;
 
 pub const DIRTY_SOURCE_EVENT: i64 = 1;
@@ -51,8 +51,8 @@ pub struct DailyRollupPoint {
     pub errors: u64,
 }
 
-/// Conservative compatibility entrypoint used by lifecycle code. Ingestion should call
-/// `mark_dirty_timestamps_for_source` so unrelated data sources do not invalidate event/user caches.
+/// Marks all currently supported telemetry-derived projections dirty for the supplied timestamps.
+/// Ingestion should prefer `mark_dirty_timestamps_for_source` when only specific sources changed.
 pub async fn mark_dirty_timestamps<I>(
     database: &impl ConnectionTrait,
     scope: &TelemetryScope,
@@ -706,7 +706,7 @@ fn rollup_id(application_id: &str, environment_id: &str, day: &str) -> String {
 
 fn scoped_id(kind: &str, application_id: &str, environment_id: &str, day: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"sonde:daily-rollup:v1\0");
+    hasher.update(b"sonde:daily-rollup\0");
     hasher.update(kind.as_bytes());
     hasher.update(b"\0");
     hasher.update(application_id.as_bytes());
