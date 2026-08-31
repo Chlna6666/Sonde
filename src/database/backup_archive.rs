@@ -1,3 +1,5 @@
+use super::backup_models as backup_repo;
+
 #[path = "backup_archive_format.rs"]
 mod format;
 

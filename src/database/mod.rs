@@ -34,42 +34,6 @@ pub mod trends;
 pub mod user_rollup;
 pub mod version_dimension;
 
-// Transitional aliases for the atomic rename. All call sites are migrated in the following commit
-// and these aliases are then removed; they are not part of Sonde's supported API surface.
-#[doc(hidden)] pub use alert_delivery as alert_delivery_repo;
-#[doc(hidden)] pub use alerts as alert_repo;
-#[doc(hidden)] pub use applications as app_repo;
-#[doc(hidden)] pub use application_delete as application_delete_repo;
-#[doc(hidden)] pub use auth as auth_repo;
-#[doc(hidden)] pub use auth_state as auth_state_repo;
-#[doc(hidden)] pub use backup_archive as backup_archive_repo;
-#[doc(hidden)] pub use backup_models as backup_repo;
-#[doc(hidden)] pub use backup_restore as backup_archive_restore_repo;
-#[doc(hidden)] pub use backup_validation as backup_archive_validation_repo;
-#[doc(hidden)] pub use application_backup as legacy_backup_repo;
-#[doc(hidden)] pub use device_query as device_query_repo;
-#[doc(hidden)] pub use device_risk as device_risk_repo;
-#[doc(hidden)] pub use device_state as device_state_repo;
-#[doc(hidden)] pub use dimension_restore as dimension_restore_repo;
-#[doc(hidden)] pub use dimension_rollup as dimension_rollup_repo;
-#[doc(hidden)] pub use error_query as error_query_repo;
-#[doc(hidden)] pub use errors as error_repo;
-#[doc(hidden)] pub use explorer as explorer_repo;
-#[doc(hidden)] pub use first_seen as first_seen_repo;
-#[doc(hidden)] pub use imports as import_repo;
-#[doc(hidden)] pub use ingest_auth as ingest_auth_repo;
-#[doc(hidden)] pub use ingest_bootstrap as ingest_bootstrap_repo;
-#[doc(hidden)] pub use ingest_nonce as ingest_nonce_repo;
-#[doc(hidden)] pub use job_lease as job_lease_repo;
-#[doc(hidden)] pub use log_error_rollup as log_error_rollup_repo;
-#[doc(hidden)] pub use rollups as rollup_repo;
-#[doc(hidden)] pub use stats as stats_repo;
-#[doc(hidden)] pub use telemetry_count as telemetry_count_repo;
-#[doc(hidden)] pub use telemetry as telemetry_repo;
-#[doc(hidden)] pub use trends as trend_repo;
-#[doc(hidden)] pub use user_rollup as user_rollup_repo;
-#[doc(hidden)] pub use version_dimension as version_dimension_repo;
-
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbErr};
 use sea_orm_migration::MigratorTrait;
 use std::time::Duration;
