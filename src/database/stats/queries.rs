@@ -156,36 +156,36 @@ pub async fn overview(
     let since_30d = now - 30 * 86_400_000;
 
     let applications = count(database, "applications", None).await?;
-    let events_24h = super::telemetry_count_repo::count_hybrid(
+    let events_24h = crate::database::telemetry_count::count_hybrid(
         database,
-        super::telemetry_count_repo::RollupCountKind::Events,
+        crate::database::telemetry_count::RollupCountKind::Events,
         None,
         None,
         Some(since_24h),
         None,
     )
     .await?;
-    let metrics_24h = super::telemetry_count_repo::count_hybrid(
+    let metrics_24h = crate::database::telemetry_count::count_hybrid(
         database,
-        super::telemetry_count_repo::RollupCountKind::Metrics,
+        crate::database::telemetry_count::RollupCountKind::Metrics,
         None,
         None,
         Some(since_24h),
         None,
     )
     .await?;
-    let logs_24h = super::telemetry_count_repo::count_hybrid(
+    let logs_24h = crate::database::telemetry_count::count_hybrid(
         database,
-        super::telemetry_count_repo::RollupCountKind::Logs,
+        crate::database::telemetry_count::RollupCountKind::Logs,
         None,
         None,
         Some(since_24h),
         None,
     )
     .await?;
-    let errors_24h = super::telemetry_count_repo::count_hybrid(
+    let errors_24h = crate::database::telemetry_count::count_hybrid(
         database,
-        super::telemetry_count_repo::RollupCountKind::ErrorLogs,
+        crate::database::telemetry_count::RollupCountKind::ErrorLogs,
         None,
         None,
         Some(since_24h),
@@ -232,7 +232,7 @@ pub async fn overview(
     let growth = compute_growth(database, None, None, since_ts, prev_since_ts, prev_until_ts).await?;
 
     let trend = if let Some(points) =
-        super::trend_repo::global_daily_hybrid(database, days, since_ts).await?
+        crate::database::trends::global_daily_hybrid(database, days, since_ts).await?
     {
         points
             .into_iter()
@@ -274,9 +274,9 @@ pub async fn overview(
         trend
     };
 
-    let total_events = super::telemetry_count_repo::count_hybrid(
+    let total_events = crate::database::telemetry_count::count_hybrid(
         database,
-        super::telemetry_count_repo::RollupCountKind::Events,
+        crate::database::telemetry_count::RollupCountKind::Events,
         None,
         None,
         since_ts,
@@ -287,26 +287,26 @@ pub async fn overview(
     let version_timeline = compute_version_timeline(database, None, None, since_ts, &bucket_expr).await?;
     let version_series = compute_version_series(database, None, None, since_ts, &bucket_expr).await?;
 
-    let os_dimension = super::dimension_rollup_repo::event_dimension_timeline_hybrid(
+    let os_dimension = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
         database,
         None,
         None,
         since_ts,
-        super::dimension_rollup_repo::DIMENSION_OS,
+        crate::database::dimension_rollup::DIMENSION_OS,
     )
     .await?;
     let (os_families, operating_systems, build_distribution) = if let Some(points) = os_dimension {
         (
             distribution_items(
-                super::dimension_rollup_repo::aggregate_os_families(&points),
+                crate::database::dimension_rollup::aggregate_os_families(&points),
                 usize::MAX,
             ),
             distribution_items(
-                super::dimension_rollup_repo::aggregate_dimension(&points),
+                crate::database::dimension_rollup::aggregate_dimension(&points),
                 50,
             ),
             distribution_items(
-                super::dimension_rollup_repo::aggregate_os_builds(&points),
+                crate::database::dimension_rollup::aggregate_os_builds(&points),
                 100,
             ),
         )
@@ -369,7 +369,7 @@ async fn distinct_users(
     app_id: Option<&str>,
     env_id: Option<&str>,
 ) -> Result<u64, DbErr> {
-    super::user_rollup_repo::unique_users_hybrid(database, app_id, env_id, Some(since), None).await
+    crate::database::user_rollup::unique_users_hybrid(database, app_id, env_id, Some(since), None).await
 }
 
 async fn count_distinct_users(
@@ -378,7 +378,7 @@ async fn count_distinct_users(
     env_id: Option<&str>,
     since: Option<i64>,
 ) -> Result<u64, DbErr> {
-    super::user_rollup_repo::unique_users_hybrid(database, app_id, env_id, since, None).await
+    crate::database::user_rollup::unique_users_hybrid(database, app_id, env_id, since, None).await
 }
 
 pub async fn application_stats(
@@ -422,9 +422,9 @@ pub async fn application_stats(
         None => (None, None, None),
     };
 
-    let total_events = super::telemetry_count_repo::count_hybrid(
+    let total_events = crate::database::telemetry_count::count_hybrid(
         database,
-        super::telemetry_count_repo::RollupCountKind::Events,
+        crate::database::telemetry_count::RollupCountKind::Events,
         Some(application_id),
         environment_id,
         since_ts,
@@ -438,9 +438,9 @@ pub async fn application_stats(
     let wau = distinct_users(database, since_7d, Some(application_id), environment_id).await?;
     let mau = distinct_users(database, since_30d, Some(application_id), environment_id).await?;
 
-    let total_errors = super::telemetry_count_repo::count_hybrid(
+    let total_errors = crate::database::telemetry_count::count_hybrid(
         database,
-        super::telemetry_count_repo::RollupCountKind::ErrorLogs,
+        crate::database::telemetry_count::RollupCountKind::ErrorLogs,
         Some(application_id),
         environment_id,
         since_ts,
@@ -458,7 +458,7 @@ pub async fn application_stats(
     )
     .await?;
 
-    let trend = if let Some(points) = super::trend_repo::application_daily_hybrid(
+    let trend = if let Some(points) = crate::database::trends::application_daily_hybrid(
         database,
         application_id,
         environment_id,
@@ -541,17 +541,17 @@ pub async fn application_stats(
     )
     .await?;
 
-    let app_version_dimension = super::dimension_rollup_repo::event_dimension_timeline_hybrid(
+    let app_version_dimension = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
         database,
         Some(application_id),
         environment_id,
         since_ts,
-        super::dimension_rollup_repo::DIMENSION_APP_VERSION,
+        crate::database::dimension_rollup::DIMENSION_APP_VERSION,
     )
     .await?;
     let app_versions = if let Some(points) = app_version_dimension {
         distribution_items(
-            super::dimension_rollup_repo::aggregate_dimension(&points),
+            crate::database::dimension_rollup::aggregate_dimension(&points),
             50,
         )
     } else {
@@ -567,17 +567,17 @@ pub async fn application_stats(
     };
 
     let launcher_version_dimension =
-        super::dimension_rollup_repo::event_dimension_timeline_hybrid(
+        crate::database::dimension_rollup::event_dimension_timeline_hybrid(
             database,
             Some(application_id),
             environment_id,
             since_ts,
-            super::dimension_rollup_repo::DIMENSION_LAUNCHER_VERSION,
+            crate::database::dimension_rollup::DIMENSION_LAUNCHER_VERSION,
         )
         .await?;
     let launcher_versions = if let Some(points) = launcher_version_dimension {
         distribution_items(
-            super::dimension_rollup_repo::aggregate_dimension(&points),
+            crate::database::dimension_rollup::aggregate_dimension(&points),
             50,
         )
     } else {
@@ -592,26 +592,26 @@ pub async fn application_stats(
         .await?
     };
 
-    let os_dimension = super::dimension_rollup_repo::event_dimension_timeline_hybrid(
+    let os_dimension = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
         database,
         Some(application_id),
         environment_id,
         since_ts,
-        super::dimension_rollup_repo::DIMENSION_OS,
+        crate::database::dimension_rollup::DIMENSION_OS,
     )
     .await?;
     let (os_families, operating_systems, build_distribution) = if let Some(points) = os_dimension {
         (
             distribution_items(
-                super::dimension_rollup_repo::aggregate_os_families(&points),
+                crate::database::dimension_rollup::aggregate_os_families(&points),
                 usize::MAX,
             ),
             distribution_items(
-                super::dimension_rollup_repo::aggregate_dimension(&points),
+                crate::database::dimension_rollup::aggregate_dimension(&points),
                 50,
             ),
             distribution_items(
-                super::dimension_rollup_repo::aggregate_os_builds(&points),
+                crate::database::dimension_rollup::aggregate_os_builds(&points),
                 100,
             ),
         )
@@ -680,18 +680,18 @@ async fn compute_growth(
     if let (Some(since), Some(prev_since), Some(prev_until)) =
         (since_ts, prev_since_ts, prev_until_ts)
     {
-        let curr_events = super::telemetry_count_repo::count_hybrid(
+        let curr_events = crate::database::telemetry_count::count_hybrid(
             database,
-            super::telemetry_count_repo::RollupCountKind::Events,
+            crate::database::telemetry_count::RollupCountKind::Events,
             application_id,
             environment_id,
             Some(since),
             None,
         )
         .await?;
-        let prev_events = super::telemetry_count_repo::count_hybrid(
+        let prev_events = crate::database::telemetry_count::count_hybrid(
             database,
-            super::telemetry_count_repo::RollupCountKind::Events,
+            crate::database::telemetry_count::RollupCountKind::Events,
             application_id,
             environment_id,
             Some(prev_since),
@@ -699,7 +699,7 @@ async fn compute_growth(
         )
         .await?;
 
-        let curr_users = super::user_rollup_repo::unique_users_hybrid(
+        let curr_users = crate::database::user_rollup::unique_users_hybrid(
             database,
             application_id,
             environment_id,
@@ -707,7 +707,7 @@ async fn compute_growth(
             None,
         )
         .await?;
-        let prev_users = super::user_rollup_repo::unique_users_hybrid(
+        let prev_users = crate::database::user_rollup::unique_users_hybrid(
             database,
             application_id,
             environment_id,
@@ -730,7 +730,7 @@ async fn compute_growth(
             None
         };
 
-        let new_users = super::first_seen_repo::count_new_users_hybrid(
+        let new_users = crate::database::first_seen::count_new_users_hybrid(
             database,
             application_id,
             environment_id,
@@ -767,7 +767,7 @@ async fn compute_user_growth(
 ) -> Result<Vec<UserGrowthPoint>, DbErr> {
     if days != Some(1) {
         let monthly = matches!(days, Some(365) | None);
-        if let Some(points) = super::user_rollup_repo::user_growth_hybrid(
+        if let Some(points) = crate::database::user_rollup::user_growth_hybrid(
             database,
             application_id,
             environment_id,
@@ -887,17 +887,17 @@ async fn compute_version_timeline(
     since_ts: Option<i64>,
     bucket_expr: &str,
 ) -> Result<Vec<VersionTimelinePoint>, DbErr> {
-    if super::version_dimension_repo::supports_daily_projection(bucket_expr) {
-        if let Some(points) = super::dimension_rollup_repo::event_dimension_timeline_hybrid(
+    if crate::database::version_dimension::supports_daily_projection(bucket_expr) {
+        if let Some(points) = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
             database,
             application_id,
             environment_id,
             since_ts,
-            super::dimension_rollup_repo::DIMENSION_APP_VERSION,
+            crate::database::dimension_rollup::DIMENSION_APP_VERSION,
         )
         .await?
         {
-            return Ok(super::version_dimension_repo::timeline(&points, bucket_expr)
+            return Ok(crate::database::version_dimension::timeline(&points, bucket_expr)
                 .into_iter()
                 .map(|bucket| {
                     let versions = bucket
@@ -1003,17 +1003,17 @@ async fn compute_version_series(
     since_ts: Option<i64>,
     bucket_expr: &str,
 ) -> Result<Vec<VersionSeries>, DbErr> {
-    if super::version_dimension_repo::supports_daily_projection(bucket_expr) {
-        if let Some(points) = super::dimension_rollup_repo::event_dimension_timeline_hybrid(
+    if crate::database::version_dimension::supports_daily_projection(bucket_expr) {
+        if let Some(points) = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
             database,
             application_id,
             environment_id,
             since_ts,
-            super::dimension_rollup_repo::DIMENSION_APP_VERSION,
+            crate::database::dimension_rollup::DIMENSION_APP_VERSION,
         )
         .await?
         {
-            return Ok(super::version_dimension_repo::top_series(&points, bucket_expr)
+            return Ok(crate::database::version_dimension::top_series(&points, bucket_expr)
                 .into_iter()
                 .map(|series| VersionSeries {
                     version: series.version,
@@ -1305,7 +1305,7 @@ async fn distribution(
 }
 
 fn distribution_items(
-    counts: Vec<super::dimension_rollup_repo::DimensionCount>,
+    counts: Vec<crate::database::dimension_rollup::DimensionCount>,
     limit: usize,
 ) -> Vec<DistributionItem> {
     let total = counts
