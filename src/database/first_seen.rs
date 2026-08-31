@@ -9,11 +9,11 @@ use uuid::Uuid;
 
 use super::{
     query::insert_batch_ignore_conflicts,
-    rollup_repo::{self, DirtyDay},
+    rollups::{self, DirtyDay},
 };
 
-const BACKFILL_STATE_KEY: &str = "telemetry_first_seen_backfill_v1";
-const BACKFILL_CURSOR_KEY: &str = "telemetry_first_seen_backfill_cursor_v1";
+const BACKFILL_STATE_KEY: &str = "telemetry_first_seen_backfill";
+const BACKFILL_CURSOR_KEY: &str = "telemetry_first_seen_backfill_cursor";
 const GLOBAL_SCOPE: &str = "global";
 const APP_SCOPE: &str = "app";
 const ENV_SCOPE: &str = "env";
@@ -90,7 +90,7 @@ pub async fn run_backfill_batch(
                 .order_by(Alias::new("day"), Order::Asc)
                 .order_by(Alias::new("application_id"), Order::Asc)
                 .order_by(Alias::new("environment_id"), Order::Asc)
-                .limit(limit.max(1))
+                .limit(std::cmp::max(limit, 1))
                 .to_owned();
             let days = database
                 .query_all(&query)
@@ -289,7 +289,7 @@ async fn seed_backfill_days_batch(
         .order_by(Alias::new("day"), Order::Asc)
         .order_by(Alias::new("application_id"), Order::Asc)
         .order_by(Alias::new("environment_id"), Order::Asc)
-        .limit(limit.max(1));
+        .limit(std::cmp::max(limit, 1));
     if let Some(cursor) = &cursor {
         query.cond_where(
             Condition::any()
@@ -646,10 +646,10 @@ async fn count_indexed_new_users(
         query.and_where(Expr::col(Alias::new("first_seen_at")).lt(until));
     }
     let row = database.query_one(&query).await?;
-    Ok(row
+    let total = row
         .and_then(|value| value.try_get::<i64>("", "total").ok())
-        .unwrap_or(0)
-        .max(0) as u64)
+        .unwrap_or(0);
+    Ok(std::cmp::max(total, 0) as u64)
 }
 
 async fn raw_new_users(
@@ -688,10 +688,10 @@ async fn raw_new_users(
         query.and_where(Expr::col(Alias::new("first_seen_at")).lt(until));
     }
     let row = database.query_one(&query).await?;
-    Ok(row
+    let total = row
         .and_then(|value| value.try_get::<i64>("", "total").ok())
-        .unwrap_or(0)
-        .max(0) as u64)
+        .unwrap_or(0);
+    Ok(std::cmp::max(total, 0) as u64)
 }
 
 async fn relevant_dirty_exists(
@@ -704,9 +704,7 @@ async fn relevant_dirty_exists(
     query
         .column(Alias::new("id"))
         .from(Alias::new("telemetry_dirty_days"))
-        .and_where(rollup_repo::dirty_source_condition(
-            rollup_repo::DIRTY_SOURCE_EVENT,
-        ))
+        .and_where(rollups::dirty_source_condition(rollups::DIRTY_SOURCE_EVENT))
         .limit(1);
     if let Some(application_id) = application_id {
         query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
@@ -874,7 +872,7 @@ fn first_seen_id(
     anonymous_id: &str,
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"sonde:first-seen:v2\0");
+    hasher.update(b"sonde:first-seen\0");
     hasher.update(epoch.as_bytes());
     hasher.update(b"\0");
     hasher.update(scope_kind.as_bytes());
@@ -889,7 +887,7 @@ fn first_seen_id(
 
 fn backfill_day_id(epoch: &str, application_id: &str, environment_id: &str, day: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"sonde:first-seen:v2\0backfill\0");
+    hasher.update(b"sonde:first-seen\0backfill\0");
     hasher.update(epoch.as_bytes());
     hasher.update(b"\0");
     hasher.update(application_id.as_bytes());
