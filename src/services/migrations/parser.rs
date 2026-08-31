@@ -10,7 +10,7 @@ mod sql;
 use sql::parse_statements;
 
 #[derive(Clone, Debug)]
-pub(super) struct LegacyEventRow {
+pub(super) struct D1EventRow {
     pub ts: i64,
     pub day: String,
     pub user_hash: String,
@@ -38,7 +38,7 @@ pub(crate) struct D1Preview {
 #[derive(Debug)]
 pub(crate) struct ParsedD1Export {
     pub preview: D1Preview,
-    pub(super) rows: Vec<LegacyEventRow>,
+    pub(super) rows: Vec<D1EventRow>,
 }
 
 pub(crate) fn parse_d1_export(sql: &str) -> Result<ParsedD1Export, AppError> {
@@ -76,7 +76,7 @@ struct PreviewSummary {
     operating_systems: BTreeMap<String, usize>,
 }
 
-fn summarize(rows: Vec<LegacyEventRow>) -> (Vec<LegacyEventRow>, PreviewSummary) {
+fn summarize(rows: Vec<D1EventRow>) -> (Vec<D1EventRow>, PreviewSummary) {
     let mut seen = HashSet::new();
     let mut unique_rows = Vec::with_capacity(rows.len());
     let mut summary = PreviewSummary {
@@ -136,6 +136,6 @@ mod tests {
 
     #[test]
     fn rejects_non_whitelisted_statement() {
-        assert!(parse_d1_export("DROP TABLE users;").is_err());
+        assert!(parse_d1_export("CREATE TABLE unexpected (id INTEGER);").is_err());
     }
 }
