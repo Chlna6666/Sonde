@@ -1,15 +1,16 @@
 use sea_orm_migration::prelude::*;
 
-pub(super) struct MetricsV2LegacyHistogramRepair;
+pub(super) struct MetricHistogramRepair;
 
-impl MigrationName for MetricsV2LegacyHistogramRepair {
+impl MigrationName for MetricHistogramRepair {
     fn name(&self) -> &str {
+        // Migration names are immutable schema-history identifiers, not Rust API names.
         "m20260829_000020_metrics_v2_legacy_histogram_repair"
     }
 }
 
 #[async_trait::async_trait]
-impl MigrationTrait for MetricsV2LegacyHistogramRepair {
+impl MigrationTrait for MetricHistogramRepair {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         if !manager
             .has_column("metric_points", "histogram_bucket_counts")
@@ -18,9 +19,10 @@ impl MigrationTrait for MetricsV2LegacyHistogramRepair {
             return Ok(());
         }
 
-        // Metrics v2 initially allowed no-boundary histograms to persist `bucket_counts=[]` for any
-        // population size. Explicit histograms always have bounds.len()+1 buckets, so each affected
-        // row needs one +Inf bucket whose count equals the complete population.
+        // An earlier development schema allowed no-boundary histograms to persist
+        // `bucket_counts=[]` for any population size. Explicit histograms always have
+        // bounds.len()+1 buckets, so each affected row needs one +Inf bucket whose count equals the
+        // complete population.
         let select = Query::select()
             .columns([Alias::new("id"), Alias::new("histogram_count")])
             .from(Alias::new("metric_points"))
@@ -35,7 +37,7 @@ impl MigrationTrait for MetricsV2LegacyHistogramRepair {
             let count: i64 = row.try_get("", "histogram_count")?;
             if count < 0 {
                 return Err(DbErr::Custom(
-                    "negative histogram count found during metrics v2 repair".into(),
+                    "negative histogram count found during histogram repair".into(),
                 ));
             }
             let update = Query::update()

@@ -1,15 +1,16 @@
 use sea_orm_migration::prelude::*;
 
-pub(super) struct MetricsV2;
+pub(super) struct MetricHistograms;
 
-impl MigrationName for MetricsV2 {
+impl MigrationName for MetricHistograms {
     fn name(&self) -> &str {
+        // Migration names are immutable schema-history identifiers, not Rust API names.
         "m20260829_000019_metrics_v2"
     }
 }
 
 #[async_trait::async_trait]
-impl MigrationTrait for MetricsV2 {
+impl MigrationTrait for MetricHistograms {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         add_column_if_missing(
             manager,

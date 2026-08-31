@@ -14,8 +14,8 @@ mod ingest_bootstrap_limits;
 mod ingest_nonce_replay;
 mod job_leases;
 mod log_error_rollups;
-mod metrics_v2;
-mod metrics_v2_legacy_histogram;
+mod metric_histogram_repair;
+mod metric_histograms;
 mod rollup_generation;
 mod tables;
 mod user_rollup_chunks;
@@ -35,8 +35,8 @@ use ingest_bootstrap_limits::IngestBootstrapLimits;
 use ingest_nonce_replay::IngestNonceReplay;
 use job_leases::JobLeases;
 use log_error_rollups::LogErrorRollups;
-use metrics_v2::MetricsV2;
-use metrics_v2_legacy_histogram::MetricsV2LegacyHistogramRepair;
+use metric_histogram_repair::MetricHistogramRepair;
+use metric_histograms::MetricHistograms;
 use rollup_generation::RollupGeneration;
 use tables::{
     create_alert_tables, create_application_tables, create_identity_tables, create_import_tables,
@@ -69,8 +69,8 @@ impl MigratorTrait for Migrator {
             Box::new(FirstSeenEpoch),
             Box::new(DirtySourceMask),
             Box::new(LogErrorRollups),
-            Box::new(MetricsV2),
-            Box::new(MetricsV2LegacyHistogramRepair),
+            Box::new(MetricHistograms),
+            Box::new(MetricHistogramRepair),
             Box::new(AlertDeliveryQueue),
             Box::new(DeviceProfiles),
             Box::new(IngestNonceReplay),
