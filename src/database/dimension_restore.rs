@@ -3,9 +3,7 @@ use sea_orm::{
     sea_query::{Alias, Query},
 };
 
-use super::{
-    dimension_rollup_repo, first_seen_repo, log_error_rollup_repo, rollup_repo, user_rollup_repo,
-};
+use super::{dimension_rollup, first_seen, log_error_rollup, rollups, user_rollup};
 
 /// Telemetry rollups and first-seen indexes are derived state, not authoritative backup data.
 ///
@@ -13,11 +11,11 @@ use super::{
 /// fall back to raw telemetry. Historical source days are then marked dirty again and background
 /// workers rebuild every derived structure from the restored authoritative rows.
 pub async fn reset_after_full_restore(database: &DatabaseConnection) -> Result<usize, DbErr> {
-    rollup_repo::invalidate_rollup_backfill(database).await?;
-    dimension_rollup_repo::invalidate_dimension_backfill(database).await?;
-    user_rollup_repo::invalidate_user_backfill(database).await?;
-    log_error_rollup_repo::invalidate_backfill(database).await?;
-    first_seen_repo::invalidate(database).await?;
+    rollups::invalidate_rollup_backfill(database).await?;
+    dimension_rollup::invalidate_dimension_backfill(database).await?;
+    user_rollup::invalidate_user_backfill(database).await?;
+    log_error_rollup::invalidate_backfill(database).await?;
+    first_seen::invalidate(database).await?;
 
     // Base rollups are intentionally rebuilt too. A backup snapshot may contain raw rows written
     // after the latest worker fold, while dirty markers themselves are ephemeral and not archived.
@@ -32,13 +30,12 @@ pub async fn reset_after_full_restore(database: &DatabaseConnection) -> Result<u
         database.execute(&clear).await?;
     }
 
-    let base_days = rollup_repo::seed_historical_dirty_days_once(database).await?;
-    let dimension_days =
-        dimension_rollup_repo::seed_historical_dimension_dirty_days_once(database).await?;
-    let user_days = user_rollup_repo::seed_historical_user_dirty_days_once(database).await?;
-    let log_error_days = log_error_rollup_repo::seed_historical_dirty_days_once(database).await?;
-    Ok(base_days
-        .max(dimension_days)
-        .max(user_days)
-        .max(log_error_days))
+    let base_days = rollups::seed_historical_dirty_days_once(database).await?;
+    let dimension_days = dimension_rollup::seed_historical_dimension_dirty_days_once(database).await?;
+    let user_days = user_rollup::seed_historical_user_dirty_days_once(database).await?;
+    let log_error_days = log_error_rollup::seed_historical_dirty_days_once(database).await?;
+    Ok([base_days, dimension_days, user_days, log_error_days]
+        .into_iter()
+        .max()
+        .unwrap_or(0))
 }
