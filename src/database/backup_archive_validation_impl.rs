@@ -6,9 +6,9 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
 };
 
-use super::{
-    backup_v2_repo::{self, BackupMetricPointV2, BackupV2Error, BackupV2Record},
-    backup_v2_restore_repo,
+use crate::database::{
+    backup_archive::{self, BackupMetricPointV2, BackupV2Error, BackupV2Record},
+    backup_restore,
 };
 
 const MAX_HISTOGRAM_BOUNDS: usize = 256;
@@ -20,13 +20,13 @@ pub async fn restore_full_system_exact_validated(
     path: &Path,
 ) -> Result<u64, BackupV2Error> {
     validate_backup_file_semantics(path).await?;
-    backup_v2_restore_repo::restore_full_system_exact(database, path).await
+    backup_restore::restore_full_system_exact(database, path).await
 }
 
 pub async fn validate_backup_file_semantics(path: &Path) -> Result<(), BackupV2Error> {
     // The first pass proves record framing, manifest compatibility, record count and archive digest.
     // Only after the complete file is known to be structurally valid do we inspect record semantics.
-    backup_v2_repo::validate_backup_file(path).await?;
+    backup_archive::validate_backup_file(path).await?;
 
     let file = File::open(path).await?;
     let mut reader = BufReader::new(file);
@@ -39,10 +39,10 @@ pub async fn validate_backup_file_semantics(path: &Path) -> Result<(), BackupV2E
         if read == 0 {
             break;
         }
-        if line.len() > backup_v2_repo::MAX_RECORD_BYTES {
+        if line.len() > backup_archive::MAX_RECORD_BYTES {
             return Err(BackupV2Error::Invalid(format!(
                 "record exceeds {} bytes",
-                backup_v2_repo::MAX_RECORD_BYTES
+                backup_archive::MAX_RECORD_BYTES
             )));
         }
         let record: BackupV2Record = serde_json::from_slice(record_payload(&line)?)?;
