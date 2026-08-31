@@ -20,7 +20,6 @@ use crate::database::backup_models::{
 };
 
 pub const FORMAT_VERSION: &str = "2.1";
-const LEGACY_FORMAT_VERSION: &str = "2.0";
 pub const BACKUP_TYPE: &str = "sonde_full_backup_ndjson";
 pub const CONTENT_TYPE: &str = "application/x-ndjson";
 pub const FILE_EXTENSION: &str = "sonde.ndjson";
@@ -339,7 +338,7 @@ pub async fn validate_backup_file(path: &Path) -> Result<BackupManifest, BackupE
 }
 
 fn validate_manifest(manifest: &BackupManifest) -> Result<(), BackupError> {
-    if !matches!(manifest.format_version.as_str(), FORMAT_VERSION | LEGACY_FORMAT_VERSION) {
+    if manifest.format_version != FORMAT_VERSION {
         return Err(BackupError::Invalid(format!(
             "unsupported format version {}",
             manifest.format_version
