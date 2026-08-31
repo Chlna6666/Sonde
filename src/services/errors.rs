@@ -1,5 +1,5 @@
 use crate::{
-    database::error_query_repo,
+    database::error_query,
     error::AppError,
     services::authentication::AuthenticatedUser,
     state::InstalledState,
@@ -15,9 +15,9 @@ pub async fn groups(
     filter: &ErrorGroupFilter,
 ) -> Result<ErrorGroupPage, AppError> {
     user.require("telemetry.read", Some(&filter.application_id))?;
-    let record = error_query_repo::groups(
+    let record = error_query::groups(
         &installed.database,
-        &error_query_repo::ErrorGroupFilter {
+        &error_query::ErrorGroupFilter {
             application_id: filter.application_id.clone(),
             environment_id: filter.environment_id.clone(),
             severity: filter.severity.clone(),
@@ -36,7 +36,7 @@ pub async fn group(
     user: &AuthenticatedUser,
     group_id: &str,
 ) -> Result<ErrorGroupRecord, AppError> {
-    let group = error_query_repo::group(&installed.database, group_id)
+    let group = error_query::group(&installed.database, group_id)
         .await?
         .ok_or(AppError::NotFound)?;
     user.require("telemetry.read", Some(&group.application_id))?;
@@ -52,11 +52,11 @@ pub async fn occurrences(
     from: Option<i64>,
     to: Option<i64>,
 ) -> Result<ErrorOccurrencePage, AppError> {
-    let group = error_query_repo::group(&installed.database, group_id)
+    let group = error_query::group(&installed.database, group_id)
         .await?
         .ok_or(AppError::NotFound)?;
     user.require("telemetry.read", Some(&group.application_id))?;
-    let record = error_query_repo::occurrences(
+    let record = error_query::occurrences(
         &installed.database,
         group_id,
         page,
@@ -68,7 +68,7 @@ pub async fn occurrences(
     Ok(map_occurrence_page(record))
 }
 
-fn map_group_page(record: error_query_repo::ErrorGroupPage) -> ErrorGroupPage {
+fn map_group_page(record: error_query::ErrorGroupPage) -> ErrorGroupPage {
     ErrorGroupPage {
         items: record.items.into_iter().map(map_group).collect(),
         page: record.page,
@@ -77,7 +77,7 @@ fn map_group_page(record: error_query_repo::ErrorGroupPage) -> ErrorGroupPage {
     }
 }
 
-fn map_group(record: error_query_repo::ErrorGroupRecord) -> ErrorGroupRecord {
+fn map_group(record: error_query::ErrorGroupRecord) -> ErrorGroupRecord {
     ErrorGroupRecord {
         id: record.id,
         application_id: record.application_id,
@@ -95,7 +95,7 @@ fn map_group(record: error_query_repo::ErrorGroupRecord) -> ErrorGroupRecord {
     }
 }
 
-fn map_occurrence_page(record: error_query_repo::ErrorOccurrencePage) -> ErrorOccurrencePage {
+fn map_occurrence_page(record: error_query::ErrorOccurrencePage) -> ErrorOccurrencePage {
     ErrorOccurrencePage {
         items: record.items.into_iter().map(map_occurrence).collect(),
         page: record.page,
@@ -104,7 +104,7 @@ fn map_occurrence_page(record: error_query_repo::ErrorOccurrencePage) -> ErrorOc
     }
 }
 
-fn map_occurrence(record: error_query_repo::ErrorOccurrenceRecord) -> ErrorOccurrenceRecord {
+fn map_occurrence(record: error_query::ErrorOccurrenceRecord) -> ErrorOccurrenceRecord {
     ErrorOccurrenceRecord {
         id: record.id,
         group_id: record.group_id,
