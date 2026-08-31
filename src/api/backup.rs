@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
 use crate::{
-    database::{backup_archive_repo, legacy_backup_repo},
+    database::{application_backup, backup_archive},
     error::AppError,
     services::{authentication, backup},
     state::AppState,
@@ -38,18 +38,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     )
     .route(
         "/api/v1/admin/system/backup",
-        web::get().to(export_legacy_system_backup),
-    )
-    .route(
-        "/api/v1/admin/system/restore",
-        web::post().to(restore_legacy_system_backup),
-    )
-    .route(
-        "/api/v1/admin/system/backup/archive",
         web::get().to(export_system_backup),
     )
     .route(
-        "/api/v1/admin/system/restore/archive",
+        "/api/v1/admin/system/restore",
         web::post().to(restore_system_backup),
     )
     .route(
@@ -131,7 +123,7 @@ async fn export_application(
 async fn import_application(
     state: web::Data<Arc<AppState>>,
     req: HttpRequest,
-    body: web::Json<legacy_backup_repo::SingleAppExport>,
+    body: web::Json<application_backup::SingleAppExport>,
 ) -> Result<impl Responder, AppError> {
     let installed = state.installed().await?;
     let user = authentication::authenticate_mutation(&installed, &req).await?;
@@ -139,36 +131,6 @@ async fn import_application(
     Ok(HttpResponse::Created().json(serde_json::json!({
         "ok": true,
         "applicationId": new_app_id
-    })))
-}
-
-async fn export_legacy_system_backup(
-    state: web::Data<Arc<AppState>>,
-    req: HttpRequest,
-) -> Result<impl Responder, AppError> {
-    let installed = state.installed().await?;
-    let user = authentication::authenticate(&installed, &req).await?;
-    let backup_data = backup::export_full_system(&installed, &user).await?;
-    let date = chrono::Utc::now().format("%Y-%m-%d");
-    Ok(HttpResponse::Ok()
-        .insert_header(("cache-control", "no-store"))
-        .insert_header((
-            "content-disposition",
-            format!("attachment; filename=\"sonde-full-backup-{date}.json\""),
-        ))
-        .json(backup_data))
-}
-
-async fn restore_legacy_system_backup(
-    state: web::Data<Arc<AppState>>,
-    req: HttpRequest,
-    body: web::Json<legacy_backup_repo::FullSystemBackup>,
-) -> Result<impl Responder, AppError> {
-    let installed = state.installed().await?;
-    let user = authentication::authenticate_mutation(&installed, &req).await?;
-    backup::restore_full_system(&installed, &user, body.into_inner()).await?;
-    Ok(HttpResponse::Ok().json(serde_json::json!({
-        "ok": true
     })))
 }
 
@@ -188,13 +150,13 @@ async fn export_system_backup(
     let date = chrono::Utc::now().format("%Y-%m-%d");
 
     Ok(HttpResponse::Ok()
-        .insert_header(("content-type", backup_archive_repo::CONTENT_TYPE))
+        .insert_header(("content-type", backup_archive::CONTENT_TYPE))
         .insert_header(("cache-control", "no-store"))
         .insert_header((
             "content-disposition",
             format!(
                 "attachment; filename=\"sonde-full-backup-{date}.{}\"",
-                backup_archive_repo::FILE_EXTENSION
+                backup_archive::FILE_EXTENSION
             ),
         ))
         .streaming(body))
@@ -226,7 +188,7 @@ async fn restore_system_backup(
                 current_record_bytes = 0;
             } else {
                 current_record_bytes = current_record_bytes.saturating_add(1);
-                if current_record_bytes > backup_archive_repo::MAX_RECORD_BYTES {
+                if current_record_bytes > backup_archive::MAX_RECORD_BYTES {
                     return Err(AppError::PayloadTooLarge);
                 }
             }
@@ -250,6 +212,6 @@ async fn restore_system_backup(
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "ok": true,
         "restoredRecords": restored,
-        "formatVersion": backup_archive_repo::FORMAT_VERSION,
+        "formatVersion": backup_archive::FORMAT_VERSION,
     })))
 }
