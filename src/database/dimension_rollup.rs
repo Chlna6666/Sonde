@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 
 use super::{
     query::insert_batch,
-    rollup_repo::{self, DirtyDay},
-    telemetry_repo::TelemetryScope,
+    rollups::{self, DirtyDay},
+    telemetry::TelemetryScope,
 };
 
 pub const DIMENSION_APP_VERSION: &str = "app_version";
@@ -67,10 +67,10 @@ pub async fn seed_historical_dimension_dirty_days_once(
             application_id,
             environment_id,
         };
-        rollup_repo::mark_dirty_timestamps_for_source(
+        rollups::mark_dirty_timestamps_for_source(
             database,
             &scope,
-            rollup_repo::DIRTY_SOURCE_EVENT,
+            rollups::DIRTY_SOURCE_EVENT,
             timestamps,
         )
         .await?;
@@ -251,9 +251,7 @@ pub async fn event_dimension_timeline_hybrid(
         .columns(["application_id", "day"].map(Alias::new))
         .from(Alias::new("telemetry_dirty_days"))
         .and_where(Expr::col(Alias::new("environment_id")).eq(rollup_environment))
-        .and_where(rollup_repo::dirty_source_condition(
-            rollup_repo::DIRTY_SOURCE_EVENT,
-        ));
+        .and_where(rollups::dirty_source_condition(rollups::DIRTY_SOURCE_EVENT));
     if let Some(application_id) = application_id {
         dirty_query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
     }
@@ -600,7 +598,7 @@ fn day_bounds(day: &str) -> Result<(i64, i64), DbErr> {
 }
 
 fn positive_u64(value: i64) -> u64 {
-    value.max(0) as u64
+    std::cmp::max(value, 0) as u64
 }
 
 fn saturating_i64(value: u64) -> i64 {
