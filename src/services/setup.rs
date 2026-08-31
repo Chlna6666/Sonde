@@ -4,7 +4,7 @@ use crate::{
     auth,
     config::InstallationConfig,
     database,
-    database::auth_repo,
+    database::auth as auth_store,
     error::AppError,
     security::AuthSecurity,
     state::{AppState, InstalledState},
@@ -47,7 +47,7 @@ pub async fn complete(state: &AppState, input: SetupInput<'_>) -> Result<(), App
         tokio::task::spawn_blocking(move || auth::hash_password(&password, &pepper))
             .await
             .map_err(|error| AppError::internal("hash setup password", error))??;
-    auth_repo::create_super_admin(
+    auth_store::create_super_admin(
         &database,
         input.email,
         input.username,
