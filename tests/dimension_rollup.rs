@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use sonde::{
-    database::{self, dimension_rollup_repo, rollup_repo, telemetry_repo},
+    database::{self, dimension_rollup, rollups, telemetry},
     domain::telemetry::{Attributes, EventInput},
 };
 
@@ -30,7 +30,7 @@ async fn recompute_environment_day(
     application_id: &str,
     environment_id: &str,
 ) {
-    let dirty = rollup_repo::list_dirty_days(database, 32, i64::MAX)
+    let dirty = rollups::list_dirty_days(database, 32, i64::MAX)
         .await
         .unwrap()
         .into_iter()
@@ -39,11 +39,11 @@ async fn recompute_environment_day(
         })
         .unwrap();
     assert!(
-        dimension_rollup_repo::recompute_claimed_day_dimensions(database, &dirty)
+        dimension_rollup::recompute_claimed_day_dimensions(database, &dirty)
             .await
             .unwrap()
     );
-    assert!(rollup_repo::recompute_claimed_day(database, dirty)
+    assert!(rollups::recompute_claimed_day(database, dirty)
         .await
         .unwrap());
 }
@@ -52,7 +52,7 @@ async fn recompute_environment_day(
 async fn dimension_rollup_uses_clean_rollups_dirty_raw_and_exact_boundary() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
-    let scope = telemetry_repo::TelemetryScope {
+    let scope = telemetry::TelemetryScope {
         application_id: "app-a".into(),
         environment_id: "prod".into(),
     };
@@ -63,7 +63,7 @@ async fn dimension_rollup_uses_clean_rollups_dirty_raw_and_exact_boundary() {
         .and_utc()
         .timestamp_millis();
 
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &scope,
         &[
@@ -94,46 +94,46 @@ async fn dimension_rollup_uses_clean_rollups_dirty_raw_and_exact_boundary() {
     .unwrap();
 
     assert_eq!(
-        dimension_rollup_repo::seed_historical_dimension_dirty_days_once(&database)
+        dimension_rollup::seed_historical_dimension_dirty_days_once(&database)
             .await
             .unwrap(),
         1
     );
     recompute_environment_day(&database, "app-a", "prod").await;
 
-    let clean = dimension_rollup_repo::event_dimension_timeline_hybrid(
+    let clean = dimension_rollup::event_dimension_timeline_hybrid(
         &database,
         Some("app-a"),
         Some("prod"),
         Some(start),
-        dimension_rollup_repo::DIMENSION_APP_VERSION,
+        dimension_rollup::DIMENSION_APP_VERSION,
     )
     .await
     .unwrap()
     .unwrap();
-    let clean_counts = dimension_rollup_repo::aggregate_dimension(&clean);
+    let clean_counts = dimension_rollup::aggregate_dimension(&clean);
     assert_eq!(clean_counts[0].value, "2.0.0");
     assert_eq!(clean_counts[0].count, 2);
     assert_eq!(clean_counts[1].value, "1.0.0");
     assert_eq!(clean_counts[1].count, 1);
 
-    let os = dimension_rollup_repo::event_dimension_timeline_hybrid(
+    let os = dimension_rollup::event_dimension_timeline_hybrid(
         &database,
         Some("app-a"),
         Some("prod"),
         Some(start),
-        dimension_rollup_repo::DIMENSION_OS,
+        dimension_rollup::DIMENSION_OS,
     )
     .await
     .unwrap()
     .unwrap();
-    let families = dimension_rollup_repo::aggregate_os_families(&os);
+    let families = dimension_rollup::aggregate_os_families(&os);
     assert_eq!(families[0].value, "Linux");
     assert_eq!(families[0].count, 2);
     assert_eq!(families[1].value, "Windows");
     assert_eq!(families[1].count, 1);
 
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &scope,
         &[event(
@@ -147,35 +147,35 @@ async fn dimension_rollup_uses_clean_rollups_dirty_raw_and_exact_boundary() {
     .await
     .unwrap();
 
-    let dirty = dimension_rollup_repo::event_dimension_timeline_hybrid(
+    let dirty = dimension_rollup::event_dimension_timeline_hybrid(
         &database,
         Some("app-a"),
         Some("prod"),
         Some(start),
-        dimension_rollup_repo::DIMENSION_APP_VERSION,
+        dimension_rollup::DIMENSION_APP_VERSION,
     )
     .await
     .unwrap()
     .unwrap();
     assert_eq!(
-        dimension_rollup_repo::aggregate_dimension(&dirty)
+        dimension_rollup::aggregate_dimension(&dirty)
             .iter()
             .map(|item| item.count)
             .sum::<u64>(),
         4
     );
 
-    let partial = dimension_rollup_repo::event_dimension_timeline_hybrid(
+    let partial = dimension_rollup::event_dimension_timeline_hybrid(
         &database,
         Some("app-a"),
         Some("prod"),
         Some(start + 12 * 3_600_000),
-        dimension_rollup_repo::DIMENSION_APP_VERSION,
+        dimension_rollup::DIMENSION_APP_VERSION,
     )
     .await
     .unwrap()
     .unwrap();
-    let partial_counts = dimension_rollup_repo::aggregate_dimension(&partial);
+    let partial_counts = dimension_rollup::aggregate_dimension(&partial);
     assert_eq!(partial_counts.iter().map(|item| item.count).sum::<u64>(), 3);
     assert!(!partial_counts.iter().any(|item| item.value == "1.0.0"));
     assert_eq!(
