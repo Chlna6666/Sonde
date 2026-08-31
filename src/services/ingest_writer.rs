@@ -4,7 +4,7 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, DbErr};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 
 use crate::{
-    database::telemetry_repo::{self, TelemetryScope},
+    database::telemetry::{self, TelemetryScope},
     domain::telemetry::{ErrorInput, EventInput, LogInput, MetricInput},
     error::AppError,
 };
@@ -56,7 +56,7 @@ impl IngestWriter {
             event_rx,
             write_gate.clone(),
             |database, scope, items| async move {
-                telemetry_repo::insert_events(&database, &scope, &items)
+                telemetry::insert_events(&database, &scope, &items)
                     .await
                     .map(|_| ())
             },
@@ -68,7 +68,7 @@ impl IngestWriter {
             metric_rx,
             write_gate.clone(),
             |database, scope, items| async move {
-                telemetry_repo::insert_metrics(&database, &scope, &items)
+                telemetry::insert_metrics(&database, &scope, &items)
                     .await
                     .map(|_| ())
             },
@@ -80,7 +80,7 @@ impl IngestWriter {
             log_rx,
             write_gate.clone(),
             |database, scope, items| async move {
-                telemetry_repo::insert_logs(&database, &scope, &items)
+                telemetry::insert_logs(&database, &scope, &items)
                     .await
                     .map(|_| ())
             },
@@ -92,7 +92,7 @@ impl IngestWriter {
             error_rx,
             write_gate,
             |database, scope, items| async move {
-                telemetry_repo::insert_errors(&database, &scope, &items)
+                telemetry::insert_errors(&database, &scope, &items)
                     .await
                     .map(|_| ())
             },
