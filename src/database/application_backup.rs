@@ -8,11 +8,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{
-    app_repo,
-    backup_repo::{self, BackupAlertRule, BackupApiKey, BackupApplication, BackupAuditLog,
+    applications,
+    backup_models::{
+        self, BackupAlertRule, BackupApiKey, BackupApplication, BackupAuditLog,
         BackupDailyAggregate, BackupEnvironment, BackupEvent, BackupLog, BackupNotificationChannel,
         BackupRole, BackupRoleBinding, BackupUser, ExportedApiKey, ExportedApplication,
-        ExportedEnvironment, ExportedEvent, ExportedLog},
+        ExportedEnvironment, ExportedEvent, ExportedLog,
+    },
     query::{insert_batch, insert_batch_ignore_conflicts},
 };
 
@@ -112,11 +114,12 @@ pub async fn export_single_application(
     database: &DatabaseConnection,
     application_id: &str,
 ) -> Result<Option<SingleAppExport>, DbErr> {
-    let Some(base) = backup_repo::export_single_application(database, application_id).await? else {
+    let Some(base) = backup_models::export_single_application(database, application_id).await?
+    else {
         return Ok(None);
     };
     let metrics = export_application_metrics(database, application_id).await?;
-    let backup_repo::SingleAppExport {
+    let backup_models::SingleAppExport {
         export_type,
         exported_at,
         application,
@@ -146,7 +149,11 @@ pub async fn import_single_application(
     owner_user_id: Option<&str>,
     payload: SingleAppExport,
 ) -> Result<String, DbErr> {
-    validate_format(&payload.format_version, &payload.export_type, APPLICATION_EXPORT_TYPE)?;
+    validate_format(
+        &payload.format_version,
+        &payload.export_type,
+        APPLICATION_EXPORT_TYPE,
+    )?;
 
     let environment_slugs = payload
         .environments
@@ -154,14 +161,14 @@ pub async fn import_single_application(
         .map(|environment| (environment.id.clone(), environment.slug.clone()))
         .collect::<HashMap<_, _>>();
     let metrics = payload.telemetry.metric_points;
-    let legacy = backup_repo::SingleAppExport {
+    let legacy = backup_models::SingleAppExport {
         format_version: LEGACY_FORMAT_VERSION.into(),
         export_type: payload.export_type,
         exported_at: payload.exported_at,
         application: payload.application,
         environments: payload.environments,
         api_keys: payload.api_keys,
-        telemetry: backup_repo::ExportedTelemetry {
+        telemetry: backup_models::ExportedTelemetry {
             events: payload.telemetry.events,
             metric_points: Vec::new(),
             logs: payload.telemetry.logs,
@@ -169,12 +176,12 @@ pub async fn import_single_application(
     };
 
     let new_application_id =
-        backup_repo::import_single_application(database, owner_user_id, legacy).await?;
+        backup_models::import_single_application(database, owner_user_id, legacy).await?;
     if metrics.is_empty() {
         return Ok(new_application_id);
     }
 
-    let imported_environments = app_repo::list_environments(database, &new_application_id).await?;
+    let imported_environments = applications::list_environments(database, &new_application_id).await?;
     let by_slug = imported_environments
         .iter()
         .map(|environment| (environment.slug.as_str(), environment.id.as_str()))
@@ -201,9 +208,9 @@ pub async fn import_single_application(
 }
 
 pub async fn export_full_system(database: &DatabaseConnection) -> Result<FullSystemBackup, DbErr> {
-    let base = backup_repo::export_full_system(database).await?;
+    let base = backup_models::export_full_system(database).await?;
     let metrics = export_system_metrics(database).await?;
-    let backup_repo::FullSystemBackup {
+    let backup_models::FullSystemBackup {
         backup_type,
         exported_at,
         server_version,
@@ -247,9 +254,13 @@ pub async fn restore_full_system(
     database: &DatabaseConnection,
     payload: FullSystemBackup,
 ) -> Result<(), DbErr> {
-    validate_format(&payload.format_version, &payload.backup_type, SYSTEM_BACKUP_TYPE)?;
+    validate_format(
+        &payload.format_version,
+        &payload.backup_type,
+        SYSTEM_BACKUP_TYPE,
+    )?;
     let metrics = payload.metric_points;
-    let legacy = backup_repo::FullSystemBackup {
+    let legacy = backup_models::FullSystemBackup {
         format_version: LEGACY_FORMAT_VERSION.into(),
         backup_type: payload.backup_type,
         exported_at: payload.exported_at,
@@ -268,7 +279,7 @@ pub async fn restore_full_system(
         logs: payload.logs,
         daily_aggregates: payload.daily_aggregates,
     };
-    backup_repo::restore_full_system(database, legacy).await?;
+    backup_models::restore_full_system(database, legacy).await?;
 
     if metrics.is_empty() {
         return Ok(());
@@ -294,7 +305,11 @@ async fn export_application_metrics(
     application_id: &str,
 ) -> Result<Vec<ExportedMetricPoint>, DbErr> {
     let query = Query::select()
-        .columns(application_metric_select_columns().iter().map(|column| Alias::new(*column)))
+        .columns(
+            application_metric_select_columns()
+                .iter()
+                .map(|column| Alias::new(*column)),
+        )
         .from(Alias::new("metric_points"))
         .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
         .order_by(Alias::new("timestamp"), Order::Asc)
@@ -397,8 +412,9 @@ fn application_metric_row(
         metric.value,
         metric.unit,
         metric.timestamp,
-        serde_json::to_string(&metric.attributes)
-            .map_err(|error| DbErr::Custom(format!("metric attributes serialization failed: {error}")))?,
+        serde_json::to_string(&metric.attributes).map_err(|error| {
+            DbErr::Custom(format!("metric attributes serialization failed: {error}"))
+        })?,
         metric.received_at,
         metric.histogram,
     )
@@ -500,7 +516,9 @@ fn validate_histogram(histogram: &HistogramBackup) -> Result<(), DbErr> {
         .windows(2)
         .any(|window| window[0] >= window[1])
     {
-        return Err(DbErr::Custom("histogram bounds must be strictly increasing".into()));
+        return Err(DbErr::Custom(
+            "histogram bounds must be strictly increasing".into(),
+        ));
     }
     if histogram.bucket_counts.len() != histogram.explicit_bounds.len().saturating_add(1) {
         return Err(DbErr::Custom(
@@ -517,7 +535,11 @@ fn validate_histogram(histogram: &HistogramBackup) -> Result<(), DbErr> {
             "histogram bucket counts must sum to histogram count".into(),
         ));
     }
-    if histogram.min.zip(histogram.max).is_some_and(|(min, max)| min > max) {
+    if histogram
+        .min
+        .zip(histogram.max)
+        .is_some_and(|(min, max)| min > max)
+    {
         return Err(DbErr::Custom("histogram min must not exceed max".into()));
     }
     Ok(())
@@ -525,10 +547,14 @@ fn validate_histogram(histogram: &HistogramBackup) -> Result<(), DbErr> {
 
 fn validate_format(version: &str, actual_type: &str, expected_type: &str) -> Result<(), DbErr> {
     if !matches!(version, FORMAT_VERSION | LEGACY_FORMAT_VERSION) {
-        return Err(DbErr::Custom(format!("unsupported backup format version {version}")));
+        return Err(DbErr::Custom(format!(
+            "unsupported backup format version {version}"
+        )));
     }
     if actual_type != expected_type {
-        return Err(DbErr::Custom(format!("unexpected backup type {actual_type}")));
+        return Err(DbErr::Custom(format!(
+            "unexpected backup type {actual_type}"
+        )));
     }
     Ok(())
 }
