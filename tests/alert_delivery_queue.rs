@@ -6,8 +6,8 @@ use sea_orm::{
 };
 use sonde::{
     database::{
-        self, alert_delivery_repo, alert_repo, app_repo, application_delete_repo, query::insert,
-        telemetry_repo,
+        self, alert_delivery, alerts as alert_store, application_delete, applications, query::insert,
+        telemetry,
     },
     domain::{
         alert::{AlertExpression, AlertSource, Comparison},
@@ -30,9 +30,9 @@ fn event_count_expression() -> AlertExpression {
 async fn create_rule(database: &DatabaseConnection, application_id: &str, name: &str) -> String {
     let expression = event_count_expression();
     let query = serde_json::to_value(&expression).unwrap();
-    alert_repo::create_rule(
+    alert_store::create_rule(
         database,
-        alert_repo::NewRule {
+        alert_store::NewRule {
             application_id,
             name,
             source_kind: "event_count",
@@ -50,13 +50,13 @@ async fn evaluator_persists_delivery_and_worker_retries_without_process_state() 
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
     let (application_id, environment_id) =
-        app_repo::create_application(&database, "Alerts", "alerts", None)
+        applications::create_application(&database, "Alerts", "alerts", None)
             .await
             .unwrap();
 
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
-        &telemetry_repo::TelemetryScope {
+        &telemetry::TelemetryScope {
             application_id: application_id.clone(),
             environment_id,
         },
@@ -76,7 +76,7 @@ async fn evaluator_persists_delivery_and_worker_retries_without_process_state() 
     .unwrap();
 
     let rule_id = create_rule(&database, &application_id, "startup spike").await;
-    let channel_id = alert_repo::create_channel(
+    let channel_id = alert_store::create_channel(
         &database,
         "intentionally unsupported",
         "unsupported-test-channel",
@@ -87,7 +87,7 @@ async fn evaluator_persists_delivery_and_worker_retries_without_process_state() 
     .unwrap();
 
     assert_eq!(alerts::evaluate_all_rules(&database).await.unwrap(), 1);
-    let rule = alert_repo::get_rule(&database, &rule_id)
+    let rule = alert_store::get_rule(&database, &rule_id)
         .await
         .unwrap()
         .unwrap();
@@ -105,7 +105,9 @@ async fn evaluator_persists_delivery_and_worker_retries_without_process_state() 
     let delivery = only_delivery(&database).await;
     assert_eq!(delivery.1, "pending");
     assert_eq!(delivery.2, 1);
-    assert!(delivery.3.is_some_and(|next| next > chrono::Utc::now().timestamp_millis()));
+    assert!(delivery
+        .3
+        .is_some_and(|next| next > chrono::Utc::now().timestamp_millis()));
 
     force_due(&database, &delivery.0).await;
     assert_eq!(alerts::process_due_deliveries(&database, 4).await.unwrap(), 1);
@@ -119,18 +121,21 @@ async fn evaluator_persists_delivery_and_worker_retries_without_process_state() 
     assert_eq!(delivery.1, "failed");
     assert_eq!(delivery.2, 3);
     assert!(delivery.3.is_none());
-    assert!(delivery.5.as_deref().is_some_and(|error| error.contains("Unsupported")));
+    assert!(delivery
+        .5
+        .as_deref()
+        .is_some_and(|error| error.contains("Unsupported")));
 }
 
 #[tokio::test]
 async fn restored_legacy_pending_delivery_without_schedule_or_payload_is_reclaimed() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
-    let (application_id, _) = app_repo::create_application(&database, "Legacy", "legacy", None)
+    let (application_id, _) = applications::create_application(&database, "Legacy", "legacy", None)
         .await
         .unwrap();
     let rule_id = create_rule(&database, &application_id, "legacy pending").await;
-    let channel_id = alert_repo::create_channel(
+    let channel_id = alert_store::create_channel(
         &database,
         "legacy channel",
         "unsupported-test-channel",
@@ -169,9 +174,7 @@ async fn restored_legacy_pending_delivery_without_schedule_or_payload_is_reclaim
     .await
     .unwrap();
 
-    let due = alert_delivery_repo::list_due(&database, 1, 4)
-        .await
-        .unwrap();
+    let due = alert_delivery::list_due(&database, 1, 4).await.unwrap();
     assert_eq!(due.len(), 1);
     assert!(due[0].payload_json.is_empty());
 
@@ -200,11 +203,11 @@ async fn restored_legacy_pending_delivery_without_schedule_or_payload_is_reclaim
 async fn disabling_rule_or_channel_cancels_pending_deliveries() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
-    let (application_id, _) = app_repo::create_application(&database, "Cancel", "cancel", None)
+    let (application_id, _) = applications::create_application(&database, "Cancel", "cancel", None)
         .await
         .unwrap();
     let rule_id = create_rule(&database, &application_id, "cancel rule").await;
-    let channel_id = alert_repo::create_channel(
+    let channel_id = alert_store::create_channel(
         &database,
         "cancel channel",
         "unsupported-test-channel",
@@ -214,7 +217,7 @@ async fn disabling_rule_or_channel_cancels_pending_deliveries() {
     .await
     .unwrap();
     let payload = serde_json::json!({"status":"firing","message":"test"});
-    alert_delivery_repo::persist_transition(
+    alert_delivery::persist_transition(
         &database,
         &rule_id,
         "firing",
@@ -227,10 +230,10 @@ async fn disabling_rule_or_channel_cancels_pending_deliveries() {
 
     let expression = event_count_expression();
     let query = serde_json::to_value(&expression).unwrap();
-    alert_repo::update_rule(
+    alert_store::update_rule(
         &database,
         &rule_id,
-        alert_repo::UpdateRule {
+        alert_store::UpdateRule {
             name: "cancel rule",
             enabled: false,
             source_kind: "event_count",
@@ -245,18 +248,21 @@ async fn disabling_rule_or_channel_cancels_pending_deliveries() {
     assert_eq!(first.1, "cancelled");
     assert_eq!(first.2, 0);
     assert!(first.3.is_none());
-    assert!(first.5.as_deref().is_some_and(|error| error.contains("disabled")));
-    assert!(alert_delivery_repo::list_due(&database, i64::MAX, 4)
+    assert!(first
+        .5
+        .as_deref()
+        .is_some_and(|error| error.contains("disabled")));
+    assert!(alert_delivery::list_due(&database, i64::MAX, 4)
         .await
         .unwrap()
         .is_empty());
 
     // Re-enable the rule and enqueue another row, then disable the channel. Only the new pending row
     // is cancelled; the earlier cancellation remains immutable delivery history.
-    alert_repo::update_rule(
+    alert_store::update_rule(
         &database,
         &rule_id,
-        alert_repo::UpdateRule {
+        alert_store::UpdateRule {
             name: "cancel rule",
             enabled: true,
             source_kind: "event_count",
@@ -267,7 +273,7 @@ async fn disabling_rule_or_channel_cancels_pending_deliveries() {
     )
     .await
     .unwrap();
-    alert_delivery_repo::persist_transition(
+    alert_delivery::persist_transition(
         &database,
         &rule_id,
         "firing",
@@ -277,7 +283,7 @@ async fn disabling_rule_or_channel_cancels_pending_deliveries() {
     )
     .await
     .unwrap();
-    alert_repo::update_channel(
+    alert_store::update_channel(
         &database,
         &channel_id,
         "cancel channel",
@@ -290,7 +296,7 @@ async fn disabling_rule_or_channel_cancels_pending_deliveries() {
 
     let statuses = delivery_statuses(&database).await;
     assert_eq!(statuses, vec!["cancelled", "cancelled"]);
-    assert!(alert_delivery_repo::list_due(&database, i64::MAX, 4)
+    assert!(alert_delivery::list_due(&database, i64::MAX, 4)
         .await
         .unwrap()
         .is_empty());
@@ -300,11 +306,11 @@ async fn disabling_rule_or_channel_cancels_pending_deliveries() {
 async fn deleting_application_removes_its_pending_delivery_queue() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
-    let (application_id, _) = app_repo::create_application(&database, "Delete", "delete", None)
+    let (application_id, _) = applications::create_application(&database, "Delete", "delete", None)
         .await
         .unwrap();
     let rule_id = create_rule(&database, &application_id, "delete rule").await;
-    let channel_id = alert_repo::create_channel(
+    let channel_id = alert_store::create_channel(
         &database,
         "delete channel",
         "unsupported-test-channel",
@@ -313,7 +319,7 @@ async fn deleting_application_removes_its_pending_delivery_queue() {
     )
     .await
     .unwrap();
-    alert_delivery_repo::persist_transition(
+    alert_delivery::persist_transition(
         &database,
         &rule_id,
         "firing",
@@ -325,7 +331,7 @@ async fn deleting_application_removes_its_pending_delivery_queue() {
     .unwrap();
 
     assert_eq!(delivery_count(&database).await, 1);
-    application_delete_repo::delete_application_exact(&database, &application_id)
+    application_delete::delete_application_exact(&database, &application_id)
         .await
         .unwrap();
     assert_eq!(delivery_count(&database).await, 0);
@@ -333,7 +339,14 @@ async fn deleting_application_removes_its_pending_delivery_queue() {
 
 async fn only_delivery(
     database: &DatabaseConnection,
-) -> (String, String, i32, Option<i64>, Option<String>, Option<String>) {
+) -> (
+    String,
+    String,
+    i32,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+) {
     let row = database
         .query_one(
             &Query::select()
@@ -386,7 +399,10 @@ async fn delivery_count(database: &DatabaseConnection) -> i64 {
     database
         .query_one(
             &Query::select()
-                .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("total"))
+                .expr_as(
+                    Func::count(Expr::col(Alias::new("id"))),
+                    Alias::new("total"),
+                )
                 .from(Alias::new("alert_deliveries"))
                 .to_owned(),
         )
