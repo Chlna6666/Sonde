@@ -3,33 +3,28 @@ use std::path::Path;
 use futures_util::Stream;
 
 use crate::{
-    database::{
-        app_repo, backup_archive_repo, backup_archive_validation_repo, dimension_restore_repo,
-        legacy_backup_repo,
-    },
+    database::{application_backup, applications, backup_archive, backup_validation, dimension_restore},
     error::AppError,
     services::{applications::ensure_app_access, authentication::AuthenticatedUser},
     state::InstalledState,
 };
 
-const LEGACY_JSON_FORMAT_VERSION: &str = "1.0";
 const APPLICATION_EXPORT_TYPE: &str = "sonde_application";
-const SYSTEM_BACKUP_TYPE: &str = "sonde_full_backup";
 const MAX_HISTOGRAM_BOUNDS: usize = 256;
 
 pub async fn export_application(
     installed: &InstalledState,
     user: &AuthenticatedUser,
     application_id: &str,
-) -> Result<legacy_backup_repo::SingleAppExport, AppError> {
+) -> Result<application_backup::SingleAppExport, AppError> {
     ensure_app_access(&installed.database, user, application_id, false).await?;
     let Some(export_data) =
-        legacy_backup_repo::export_single_application(&installed.database, application_id).await?
+        application_backup::export_single_application(&installed.database, application_id).await?
     else {
         return Err(AppError::NotFound);
     };
 
-    app_repo::audit(
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "application.exported",
@@ -44,23 +39,19 @@ pub async fn export_application(
 pub async fn import_application(
     installed: &InstalledState,
     user: &AuthenticatedUser,
-    payload: legacy_backup_repo::SingleAppExport,
+    payload: application_backup::SingleAppExport,
 ) -> Result<String, AppError> {
     user.require("apps.manage", None)?;
-    validate_backup_header(
-        &payload.format_version,
-        &payload.export_type,
-        APPLICATION_EXPORT_TYPE,
-    )?;
+    validate_application_backup_header(&payload.format_version, &payload.export_type)?;
     validate_application_backup_metrics(&payload)?;
-    let new_app_id = legacy_backup_repo::import_single_application(
+    let new_app_id = application_backup::import_single_application(
         &installed.database,
         Some(&user.id),
         payload,
     )
     .await?;
 
-    app_repo::audit(
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "application.imported",
@@ -72,64 +63,16 @@ pub async fn import_application(
     Ok(new_app_id)
 }
 
-pub async fn export_full_system(
-    installed: &InstalledState,
-    user: &AuthenticatedUser,
-) -> Result<legacy_backup_repo::FullSystemBackup, AppError> {
-    require_system_backup_access(user)?;
-
-    let backup_data = legacy_backup_repo::export_full_system(&installed.database).await?;
-
-    app_repo::audit(
-        &installed.database,
-        Some(&user.id),
-        "system.backup_exported",
-        "system",
-        None,
-    )
-    .await?;
-
-    Ok(backup_data)
-}
-
-pub async fn restore_full_system(
-    installed: &InstalledState,
-    user: &AuthenticatedUser,
-    payload: legacy_backup_repo::FullSystemBackup,
-) -> Result<(), AppError> {
-    require_system_backup_access(user)?;
-    validate_backup_header(
-        &payload.format_version,
-        &payload.backup_type,
-        SYSTEM_BACKUP_TYPE,
-    )?;
-    validate_system_backup_metrics(&payload)?;
-
-    legacy_backup_repo::restore_full_system(&installed.database, payload).await?;
-    dimension_restore_repo::reset_after_full_restore(&installed.database).await?;
-
-    app_repo::audit(
-        &installed.database,
-        Some(&user.id),
-        "system.backup_restored",
-        "system",
-        None,
-    )
-    .await?;
-
-    Ok(())
-}
-
 pub async fn export_system_backup(
     installed: &InstalledState,
     user: &AuthenticatedUser,
 ) -> Result<
-    impl Stream<Item = Result<Vec<u8>, backup_archive_repo::BackupError>> + use<>,
+    impl Stream<Item = Result<Vec<u8>, backup_archive::BackupError>> + use<>,
     AppError,
 > {
     require_system_backup_access(user)?;
 
-    app_repo::audit(
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "system.backup_export_requested",
@@ -138,7 +81,7 @@ pub async fn export_system_backup(
     )
     .await?;
 
-    Ok(backup_archive_repo::export_full_system_stream(
+    Ok(backup_archive::export_full_system_stream(
         installed.database.clone(),
     ))
 }
@@ -150,21 +93,19 @@ pub async fn restore_system_backup(
 ) -> Result<u64, AppError> {
     require_system_backup_access(user)?;
 
-    let restored = backup_archive_validation_repo::restore_full_system_exact_validated(
+    let restored = backup_validation::restore_full_system_exact_validated(
         &installed.database,
         path,
     )
     .await
     .map_err(map_backup_error)?;
 
-    // Telemetry rollups are derived cache state and are intentionally rebuilt from restored raw
-    // telemetry. Readiness is invalidated atomically by exact restore, so concurrent readers use
-    // authoritative raw data until the normal dirty-day workers have rebuilt all projections.
-    dimension_restore_repo::reset_after_full_restore(&installed.database).await?;
+    // Rollups are derived cache state. Readers fall back to authoritative raw telemetry until the
+    // normal dirty-day workers rebuild every projection after an exact restore.
+    dimension_restore::reset_after_full_restore(&installed.database).await?;
 
-    // Full restore intentionally clears auth_sessions and may replace the account that initiated the
-    // request. Record the successful operation as a system actor instead of persisting a dangling id.
-    app_repo::audit(
+    // Exact restore clears sessions and may replace the initiating account, so audit as system.
+    applications::audit(
         &installed.database,
         None,
         "system.backup_restored",
@@ -176,40 +117,24 @@ pub async fn restore_system_backup(
     Ok(restored)
 }
 
-fn validate_backup_header(
-    version: &str,
-    actual_type: &str,
-    expected_type: &str,
-) -> Result<(), AppError> {
-    if !matches!(
-        version,
-        legacy_backup_repo::FORMAT_VERSION | LEGACY_JSON_FORMAT_VERSION
-    ) {
+fn validate_application_backup_header(version: &str, export_type: &str) -> Result<(), AppError> {
+    if version != application_backup::FORMAT_VERSION {
         return Err(AppError::Validation(format!(
-            "unsupported backup format version {version}"
+            "unsupported application backup format version {version}"
         )));
     }
-    if actual_type != expected_type {
+    if export_type != APPLICATION_EXPORT_TYPE {
         return Err(AppError::Validation(format!(
-            "unexpected backup type {actual_type}"
+            "unexpected application backup type {export_type}"
         )));
     }
     Ok(())
 }
 
 fn validate_application_backup_metrics(
-    payload: &legacy_backup_repo::SingleAppExport,
+    payload: &application_backup::SingleAppExport,
 ) -> Result<(), AppError> {
     for metric in &payload.telemetry.metric_points {
-        validate_metric_backup(&metric.metric_type, metric.value, metric.histogram.as_ref())?;
-    }
-    Ok(())
-}
-
-fn validate_system_backup_metrics(
-    payload: &legacy_backup_repo::FullSystemBackup,
-) -> Result<(), AppError> {
-    for metric in &payload.metric_points {
         validate_metric_backup(&metric.metric_type, metric.value, metric.histogram.as_ref())?;
     }
     Ok(())
@@ -218,7 +143,7 @@ fn validate_system_backup_metrics(
 fn validate_metric_backup(
     metric_type: &str,
     value: f64,
-    histogram: Option<&legacy_backup_repo::HistogramBackup>,
+    histogram: Option<&application_backup::HistogramBackup>,
 ) -> Result<(), AppError> {
     if !value.is_finite() {
         return Err(AppError::Validation("metric value must be finite".into()));
@@ -232,11 +157,10 @@ fn validate_metric_backup(
             }
         }
         "histogram" => {
-            // Legacy 1.0 histogram rows only had a scalar observation and remain valid without the
-            // population object. New 1.1 rows are validated below.
-            if let Some(histogram) = histogram {
-                validate_histogram_backup(histogram)?;
-            }
+            let histogram = histogram.ok_or_else(|| {
+                AppError::Validation("histogram metric is missing population data".into())
+            })?;
+            validate_histogram_backup(histogram)?;
         }
         _ => {
             return Err(AppError::Validation(format!(
@@ -248,7 +172,7 @@ fn validate_metric_backup(
 }
 
 fn validate_histogram_backup(
-    histogram: &legacy_backup_repo::HistogramBackup,
+    histogram: &application_backup::HistogramBackup,
 ) -> Result<(), AppError> {
     if histogram.count > i64::MAX as u64 {
         return Err(AppError::Validation(
@@ -335,14 +259,14 @@ fn require_system_backup_access(user: &AuthenticatedUser) -> Result<(), AppError
     }
 }
 
-fn map_backup_error(error: backup_archive_repo::BackupError) -> AppError {
+fn map_backup_error(error: backup_archive::BackupError) -> AppError {
     match error {
-        backup_archive_repo::BackupError::Database(error) => AppError::from(error),
-        backup_archive_repo::BackupError::Invalid(message) => AppError::Validation(message),
-        backup_archive_repo::BackupError::Json(error) => {
+        backup_archive::BackupError::Database(error) => AppError::from(error),
+        backup_archive::BackupError::Invalid(message) => AppError::Validation(message),
+        backup_archive::BackupError::Json(error) => {
             AppError::Validation(format!("invalid backup JSON: {error}"))
         }
-        backup_archive_repo::BackupError::Io(error) => {
+        backup_archive::BackupError::Io(error) => {
             AppError::internal("restore backup file", error)
         }
     }
