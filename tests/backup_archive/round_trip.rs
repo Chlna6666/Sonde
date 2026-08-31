@@ -7,8 +7,8 @@ use sea_orm::{
 };
 use sonde::{
     database::{
-        self, app_repo, auth_repo, backup_archive_repo, backup_archive_restore_repo,
-        dimension_restore_repo, query::insert, telemetry_count_repo, telemetry_repo,
+        self, applications, auth, backup_archive, backup_restore, dimension_restore, query::insert,
+        telemetry, telemetry_count,
     },
     domain::telemetry::{Attributes, HistogramInput, MetricInput, MetricType},
 };
@@ -28,7 +28,7 @@ async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth
 ) -> Result<(), Box<dyn Error>> {
     let source = database::connect("sqlite::memory:").await?;
     database::migrate(&source).await?;
-    auth_repo::create_super_admin(
+    auth::create_super_admin(
         &source,
         "source@example.test",
         "source-admin",
@@ -36,12 +36,12 @@ async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth
         "en",
     )
     .await?;
-    let source_user = auth_repo::user_by_email(&source, "source@example.test")
+    let source_user = auth::user_by_email(&source, "source@example.test")
         .await?
         .ok_or_else(|| io::Error::other("source user missing"))?;
-    auth_repo::enable_totp(&source, &source_user.id, "SOURCE-TOTP-SEED").await?;
+    auth::enable_totp(&source, &source_user.id, "SOURCE-TOTP-SEED").await?;
 
-    let (source_app_id, source_env_id) = app_repo::create_application(
+    let (source_app_id, source_env_id) = applications::create_application(
         &source,
         "Source App",
         "source-app",
@@ -89,9 +89,9 @@ async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth
 
     // Deliberately leave the metric dirty instead of running the daily worker. The archive does not
     // persist dirty markers, so restore must rebuild base rollup work from authoritative telemetry.
-    telemetry_repo::insert_metrics(
+    telemetry::insert_metrics(
         &source,
-        &telemetry_repo::TelemetryScope {
+        &telemetry::TelemetryScope {
             application_id: source_app_id.clone(),
             environment_id: source_env_id.clone(),
         },
@@ -116,13 +116,13 @@ async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth
 
     let archive = tempfile::NamedTempFile::new()?;
     write_backup(&source, &archive).await?;
-    let manifest = backup_archive_repo::validate_backup_file(archive.path()).await?;
-    assert_eq!(manifest.format_version, backup_archive_repo::FORMAT_VERSION);
+    let manifest = backup_archive::validate_backup_file(archive.path()).await?;
+    assert_eq!(manifest.format_version, backup_archive::FORMAT_VERSION);
     assert!(!manifest.totp_secrets_included);
 
     let target = database::connect("sqlite::memory:").await?;
     database::migrate(&target).await?;
-    auth_repo::create_super_admin(
+    auth::create_super_admin(
         &target,
         "target@example.test",
         "target-admin",
@@ -130,10 +130,10 @@ async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth
         "en",
     )
     .await?;
-    let target_user = auth_repo::user_by_email(&target, "target@example.test")
+    let target_user = auth::user_by_email(&target, "target@example.test")
         .await?
         .ok_or_else(|| io::Error::other("target bootstrap user missing"))?;
-    let (stale_app_id, stale_env_id) = app_repo::create_application(
+    let (stale_app_id, stale_env_id) = applications::create_application(
         &target,
         "Stale Target App",
         "stale-target-app",
@@ -169,20 +169,19 @@ async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth
         assert!(system_state_value(&target, key).await?.is_some());
     }
 
-    let restored =
-        backup_archive_restore_repo::restore_full_system_exact(&target, archive.path()).await?;
+    let restored = backup_restore::restore_full_system_exact(&target, archive.path()).await?;
     assert!(restored > 0);
 
-    let applications = app_repo::list_applications(&target, None, true).await?;
+    let applications = applications::list_applications(&target, None, true).await?;
     assert_eq!(applications.len(), 1);
     assert_eq!(applications[0].slug, "source-app");
-    assert!(auth_repo::user_by_email(&target, "target@example.test")
+    assert!(auth::user_by_email(&target, "target@example.test")
         .await?
         .is_none());
-    let restored_user = auth_repo::user_by_email(&target, "source@example.test")
+    let restored_user = auth::user_by_email(&target, "source@example.test")
         .await?
         .ok_or_else(|| io::Error::other("restored user missing"))?;
-    let (totp_enabled, totp_secret) = auth_repo::get_totp_info(&target, &restored_user.id).await?;
+    let (totp_enabled, totp_secret) = auth::get_totp_info(&target, &restored_user.id).await?;
     assert!(!totp_enabled);
     assert!(totp_secret.is_none());
     assert_eq!(count_rows(&target, "auth_sessions").await?, 0);
@@ -235,11 +234,11 @@ async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth
 
     // Production restore immediately performs this reset. Base rollups must be regenerated from raw
     // rows because the source metric was intentionally exported while still dirty.
-    dimension_restore_repo::reset_after_full_restore(&target).await?;
+    dimension_restore::reset_after_full_restore(&target).await?;
     assert_eq!(
-        telemetry_count_repo::count_hybrid(
+        telemetry_count::count_hybrid(
             &target,
-            telemetry_count_repo::RollupCountKind::Metrics,
+            telemetry_count::RollupCountKind::Metrics,
             Some(&source_app_id),
             Some(&source_env_id),
             None,
@@ -252,8 +251,8 @@ async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth
 }
 
 #[test]
-fn legacy_archive_metric_record_without_histogram_fields_remains_readable() {
-    let record: backup_archive_repo::BackupRecord = serde_json::from_value(serde_json::json!({
+fn metric_record_without_histogram_fields_remains_readable() {
+    let record: backup_archive::BackupRecord = serde_json::from_value(serde_json::json!({
         "type": "metric_point",
         "data": {
             "id": "metric-1",
@@ -268,8 +267,8 @@ fn legacy_archive_metric_record_without_histogram_fields_remains_readable() {
             "receivedAt": 1
         }
     }))
-    .expect("legacy metric record should deserialize");
-    let backup_archive_repo::BackupRecord::MetricPoint(metric) = record else {
+    .expect("metric record should deserialize");
+    let backup_archive::BackupRecord::MetricPoint(metric) = record else {
         panic!("expected metric point");
     };
     assert_eq!(metric.value, 42.0);
@@ -282,7 +281,7 @@ fn legacy_archive_metric_record_without_histogram_fields_remains_readable() {
 async fn corrupted_backup_is_rejected_before_target_is_modified() -> Result<(), Box<dyn Error>> {
     let source = database::connect("sqlite::memory:").await?;
     database::migrate(&source).await?;
-    auth_repo::create_super_admin(
+    auth::create_super_admin(
         &source,
         "source@example.test",
         "source-admin",
@@ -290,10 +289,10 @@ async fn corrupted_backup_is_rejected_before_target_is_modified() -> Result<(), 
         "en",
     )
     .await?;
-    let source_user = auth_repo::user_by_email(&source, "source@example.test")
+    let source_user = auth::user_by_email(&source, "source@example.test")
         .await?
         .ok_or_else(|| io::Error::other("source user missing"))?;
-    let _ = app_repo::create_application(
+    let _ = applications::create_application(
         &source,
         "Source App",
         "source-app",
@@ -313,7 +312,7 @@ async fn corrupted_backup_is_rejected_before_target_is_modified() -> Result<(), 
 
     let target = database::connect("sqlite::memory:").await?;
     database::migrate(&target).await?;
-    auth_repo::create_super_admin(
+    auth::create_super_admin(
         &target,
         "target@example.test",
         "target-admin",
@@ -321,10 +320,10 @@ async fn corrupted_backup_is_rejected_before_target_is_modified() -> Result<(), 
         "en",
     )
     .await?;
-    let target_user = auth_repo::user_by_email(&target, "target@example.test")
+    let target_user = auth::user_by_email(&target, "target@example.test")
         .await?
         .ok_or_else(|| io::Error::other("target user missing"))?;
-    let _ = app_repo::create_application(
+    let _ = applications::create_application(
         &target,
         "Keep Me",
         "keep-me",
@@ -332,14 +331,13 @@ async fn corrupted_backup_is_rejected_before_target_is_modified() -> Result<(), 
     )
     .await?;
 
-    let result =
-        backup_archive_restore_repo::restore_full_system_exact(&target, corrupt.path()).await;
+    let result = backup_restore::restore_full_system_exact(&target, corrupt.path()).await;
     assert!(result.is_err());
 
-    let applications = app_repo::list_applications(&target, None, true).await?;
+    let applications = applications::list_applications(&target, None, true).await?;
     assert_eq!(applications.len(), 1);
     assert_eq!(applications[0].slug, "keep-me");
-    assert!(auth_repo::user_by_email(&target, "target@example.test")
+    assert!(auth::user_by_email(&target, "target@example.test")
         .await?
         .is_some());
     Ok(())
@@ -456,7 +454,7 @@ async fn write_backup(
 ) -> Result<(), Box<dyn Error>> {
     let file = archive.reopen()?;
     let mut file = tokio::fs::File::from_std(file);
-    let stream = backup_archive_repo::export_full_system_stream(database.clone());
+    let stream = backup_archive::export_full_system_stream(database.clone());
     pin_mut!(stream);
     while let Some(chunk) = stream.next().await {
         file.write_all(&chunk?).await?;
