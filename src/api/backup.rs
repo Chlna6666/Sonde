@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
 use crate::{
-    database::{backup_v2_repo, legacy_backup_repo},
+    database::{backup_archive_repo, legacy_backup_repo},
     error::AppError,
     services::{authentication, backup},
     state::AppState,
@@ -188,13 +188,13 @@ async fn export_system_backup(
     let date = chrono::Utc::now().format("%Y-%m-%d");
 
     Ok(HttpResponse::Ok()
-        .insert_header(("content-type", backup_v2_repo::CONTENT_TYPE))
+        .insert_header(("content-type", backup_archive_repo::CONTENT_TYPE))
         .insert_header(("cache-control", "no-store"))
         .insert_header((
             "content-disposition",
             format!(
                 "attachment; filename=\"sonde-full-backup-{date}.{}\"",
-                backup_v2_repo::FILE_EXTENSION
+                backup_archive_repo::FILE_EXTENSION
             ),
         ))
         .streaming(body))
@@ -226,7 +226,7 @@ async fn restore_system_backup(
                 current_record_bytes = 0;
             } else {
                 current_record_bytes = current_record_bytes.saturating_add(1);
-                if current_record_bytes > backup_v2_repo::MAX_RECORD_BYTES {
+                if current_record_bytes > backup_archive_repo::MAX_RECORD_BYTES {
                     return Err(AppError::PayloadTooLarge);
                 }
             }
@@ -250,6 +250,6 @@ async fn restore_system_backup(
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "ok": true,
         "restoredRecords": restored,
-        "formatVersion": backup_v2_repo::FORMAT_VERSION,
+        "formatVersion": backup_archive_repo::FORMAT_VERSION,
     })))
 }

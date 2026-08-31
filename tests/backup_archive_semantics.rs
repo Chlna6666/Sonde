@@ -5,10 +5,10 @@ use std::error::Error;
 use sha2::{Digest, Sha256};
 use sonde::database::{
     self, app_repo,
-    backup_v2_repo::{
-        self, BackupMetricPointV2, BackupV2End, BackupV2Manifest, BackupV2Record,
+    backup_archive_repo::{
+        self, BackupEnd, BackupManifest, BackupMetricPoint, BackupRecord,
     },
-    backup_v2_validation_repo,
+    backup_archive_validation_repo,
 };
 
 #[tokio::test]
@@ -16,12 +16,12 @@ async fn semantic_histogram_failure_does_not_modify_restore_target() -> Result<(
     let archive = tempfile::NamedTempFile::new()?;
     write_archive(archive.path(), vec![invalid_histogram_record()]).await?;
 
-    // The regular v2 validator only verifies framing/manifest/count/digest, so this proves the file
-    // reaches the new semantic layer rather than failing because the test archive itself is corrupt.
-    let manifest = backup_v2_repo::validate_backup_file(archive.path()).await?;
-    assert_eq!(manifest.format_version, backup_v2_repo::FORMAT_VERSION);
+    // Envelope validation only verifies framing/manifest/count/digest. This proves the file reaches
+    // the semantic layer rather than failing because the test archive itself is structurally corrupt.
+    let manifest = backup_archive_repo::validate_backup_file(archive.path()).await?;
+    assert_eq!(manifest.format_version, backup_archive_repo::FORMAT_VERSION);
     assert!(
-        backup_v2_validation_repo::validate_backup_file_semantics(archive.path())
+        backup_archive_validation_repo::validate_backup_file_semantics(archive.path())
             .await
             .is_err()
     );
@@ -31,7 +31,7 @@ async fn semantic_histogram_failure_does_not_modify_restore_target() -> Result<(
     let (application_id, _) =
         app_repo::create_application(&target, "Keep Me", "keep-me", None).await?;
 
-    let result = backup_v2_validation_repo::restore_full_system_exact_validated(
+    let result = backup_archive_validation_repo::restore_full_system_exact_validated(
         &target,
         archive.path(),
     )
@@ -54,17 +54,17 @@ async fn duplicate_record_ids_are_rejected_even_with_valid_digest() -> Result<()
     )
     .await?;
 
-    assert!(backup_v2_repo::validate_backup_file(archive.path()).await.is_ok());
+    assert!(backup_archive_repo::validate_backup_file(archive.path()).await.is_ok());
     assert!(
-        backup_v2_validation_repo::validate_backup_file_semantics(archive.path())
+        backup_archive_validation_repo::validate_backup_file_semantics(archive.path())
             .await
             .is_err()
     );
     Ok(())
 }
 
-fn invalid_histogram_record() -> BackupV2Record {
-    BackupV2Record::MetricPoint(BackupMetricPointV2 {
+fn invalid_histogram_record() -> BackupRecord {
+    BackupRecord::MetricPoint(BackupMetricPoint {
         id: "metric-1".into(),
         application_id: "app-1".into(),
         environment_id: "prod".into(),
@@ -86,8 +86,8 @@ fn invalid_histogram_record() -> BackupV2Record {
     })
 }
 
-fn scalar_metric_record(id: &str) -> BackupV2Record {
-    BackupV2Record::MetricPoint(BackupMetricPointV2 {
+fn scalar_metric_record(id: &str) -> BackupRecord {
+    BackupRecord::MetricPoint(BackupMetricPoint {
         id: id.into(),
         application_id: "app-1".into(),
         environment_id: "prod".into(),
@@ -109,11 +109,11 @@ fn scalar_metric_record(id: &str) -> BackupV2Record {
 
 async fn write_archive(
     path: &std::path::Path,
-    records: Vec<BackupV2Record>,
+    records: Vec<BackupRecord>,
 ) -> Result<(), Box<dyn Error>> {
-    let manifest = BackupV2Record::Manifest(BackupV2Manifest {
-        format_version: backup_v2_repo::FORMAT_VERSION.into(),
-        backup_type: backup_v2_repo::BACKUP_TYPE.into(),
+    let manifest = BackupRecord::Manifest(BackupManifest {
+        format_version: backup_archive_repo::FORMAT_VERSION.into(),
+        backup_type: backup_archive_repo::BACKUP_TYPE.into(),
         exported_at: 1_777_680_000_000,
         server_version: "test".into(),
         contains_secrets: false,
@@ -133,7 +133,7 @@ async fn write_archive(
         bytes.extend_from_slice(&record_line);
     }
 
-    let end = BackupV2Record::End(BackupV2End {
+    let end = BackupRecord::End(BackupEnd {
         records: record_count,
         sha256: hex::encode(digest.finalize()),
     });
@@ -142,7 +142,7 @@ async fn write_archive(
     Ok(())
 }
 
-fn line(record: &BackupV2Record) -> Result<Vec<u8>, serde_json::Error> {
+fn line(record: &BackupRecord) -> Result<Vec<u8>, serde_json::Error> {
     let mut bytes = serde_json::to_vec(record)?;
     bytes.push(b'\n');
     Ok(bytes)

@@ -147,7 +147,7 @@ pub async fn list_due(
         )
         .order_by(Alias::new("next_attempt_at"), Order::Asc)
         .order_by(Alias::new("created_at"), Order::Asc)
-        .limit(limit.max(1))
+        .limit(std::cmp::max(limit, 1))
         .to_owned();
 
     database
@@ -163,9 +163,9 @@ pub async fn list_due(
                 rule_id: row.try_get("", "rule_id")?,
                 channel_id: row.try_get("", "channel_id")?,
                 attempts,
-                // Backup v2.1 predates persisted queue payloads. Restored pending history rows can
-                // therefore contain NULL here; map those to an invalid empty payload so the sender
-                // marks them failed instead of leaving an immortal pending row.
+                // Backup format 2.1 predates persisted queue payloads. Restored pending history rows
+                // can therefore contain NULL here; map those to an invalid empty payload so the
+                // sender marks them failed instead of leaving an immortal pending row.
                 payload_json: row
                     .try_get::<Option<String>>("", "payload_json")?
                     .unwrap_or_default(),
@@ -240,11 +240,11 @@ pub async fn prune_terminal_before(
     max_rows: u64,
 ) -> Result<u64, DbErr> {
     let mut deleted = 0_u64;
-    let max_rows = max_rows.max(1);
+    let max_rows = std::cmp::max(max_rows, 1);
 
     while deleted < max_rows {
         let remaining = max_rows.saturating_sub(deleted);
-        let batch_limit = remaining.min(HISTORY_DELETE_BATCH);
+        let batch_limit = std::cmp::min(remaining, HISTORY_DELETE_BATCH);
         let select = Query::select()
             .column(Alias::new("id"))
             .from(Alias::new("alert_deliveries"))

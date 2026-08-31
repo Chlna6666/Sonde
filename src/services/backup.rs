@@ -4,7 +4,7 @@ use futures_util::Stream;
 
 use crate::{
     database::{
-        app_repo, backup_v2_repo, backup_v2_validation_repo, dimension_restore_repo,
+        app_repo, backup_archive_repo, backup_archive_validation_repo, dimension_restore_repo,
         legacy_backup_repo,
     },
     error::AppError,
@@ -124,7 +124,7 @@ pub async fn export_system_backup(
     installed: &InstalledState,
     user: &AuthenticatedUser,
 ) -> Result<
-    impl Stream<Item = Result<Vec<u8>, backup_v2_repo::BackupV2Error>> + use<>,
+    impl Stream<Item = Result<Vec<u8>, backup_archive_repo::BackupError>> + use<>,
     AppError,
 > {
     require_system_backup_access(user)?;
@@ -138,7 +138,7 @@ pub async fn export_system_backup(
     )
     .await?;
 
-    Ok(backup_v2_repo::export_full_system_stream(
+    Ok(backup_archive_repo::export_full_system_stream(
         installed.database.clone(),
     ))
 }
@@ -150,7 +150,7 @@ pub async fn restore_system_backup(
 ) -> Result<u64, AppError> {
     require_system_backup_access(user)?;
 
-    let restored = backup_v2_validation_repo::restore_full_system_exact_validated(
+    let restored = backup_archive_validation_repo::restore_full_system_exact_validated(
         &installed.database,
         path,
     )
@@ -335,14 +335,14 @@ fn require_system_backup_access(user: &AuthenticatedUser) -> Result<(), AppError
     }
 }
 
-fn map_backup_error(error: backup_v2_repo::BackupV2Error) -> AppError {
+fn map_backup_error(error: backup_archive_repo::BackupError) -> AppError {
     match error {
-        backup_v2_repo::BackupV2Error::Database(error) => AppError::from(error),
-        backup_v2_repo::BackupV2Error::Invalid(message) => AppError::Validation(message),
-        backup_v2_repo::BackupV2Error::Json(error) => {
+        backup_archive_repo::BackupError::Database(error) => AppError::from(error),
+        backup_archive_repo::BackupError::Invalid(message) => AppError::Validation(message),
+        backup_archive_repo::BackupError::Json(error) => {
             AppError::Validation(format!("invalid backup JSON: {error}"))
         }
-        backup_v2_repo::BackupV2Error::Io(error) => {
+        backup_archive_repo::BackupError::Io(error) => {
             AppError::internal("restore backup file", error)
         }
     }

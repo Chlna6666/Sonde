@@ -7,7 +7,7 @@ use sea_orm::{
 };
 use sonde::{
     database::{
-        self, app_repo, auth_repo, backup_v2_repo, backup_v2_restore_repo,
+        self, app_repo, auth_repo, backup_archive_repo, backup_archive_restore_repo,
         dimension_restore_repo, query::insert, telemetry_count_repo, telemetry_repo,
     },
     domain::telemetry::{Attributes, HistogramInput, MetricInput, MetricType},
@@ -24,7 +24,7 @@ const DERIVED_STATE_KEYS: &[&str] = &[
 ];
 
 #[tokio::test]
-async fn full_backup_v2_round_trip_replaces_state_and_resets_ephemeral_auth(
+async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth(
 ) -> Result<(), Box<dyn Error>> {
     let source = database::connect("sqlite::memory:").await?;
     database::migrate(&source).await?;
@@ -87,8 +87,8 @@ async fn full_backup_v2_round_trip_replaces_state_and_resets_ephemeral_auth(
     )
     .await?;
 
-    // Deliberately leave the metric dirty instead of running the daily worker. V2 does not archive
-    // dirty markers, so restore must rebuild base rollup work from authoritative raw telemetry.
+    // Deliberately leave the metric dirty instead of running the daily worker. The archive does not
+    // persist dirty markers, so restore must rebuild base rollup work from authoritative telemetry.
     telemetry_repo::insert_metrics(
         &source,
         &telemetry_repo::TelemetryScope {
@@ -116,8 +116,8 @@ async fn full_backup_v2_round_trip_replaces_state_and_resets_ephemeral_auth(
 
     let archive = tempfile::NamedTempFile::new()?;
     write_backup(&source, &archive).await?;
-    let manifest = backup_v2_repo::validate_backup_file(archive.path()).await?;
-    assert_eq!(manifest.format_version, backup_v2_repo::FORMAT_VERSION);
+    let manifest = backup_archive_repo::validate_backup_file(archive.path()).await?;
+    assert_eq!(manifest.format_version, backup_archive_repo::FORMAT_VERSION);
     assert!(!manifest.totp_secrets_included);
 
     let target = database::connect("sqlite::memory:").await?;
@@ -170,7 +170,7 @@ async fn full_backup_v2_round_trip_replaces_state_and_resets_ephemeral_auth(
     }
 
     let restored =
-        backup_v2_restore_repo::restore_full_system_exact(&target, archive.path()).await?;
+        backup_archive_restore_repo::restore_full_system_exact(&target, archive.path()).await?;
     assert!(restored > 0);
 
     let applications = app_repo::list_applications(&target, None, true).await?;
@@ -252,8 +252,8 @@ async fn full_backup_v2_round_trip_replaces_state_and_resets_ephemeral_auth(
 }
 
 #[test]
-fn old_v2_metric_record_without_histogram_fields_remains_readable() {
-    let record: backup_v2_repo::BackupV2Record = serde_json::from_value(serde_json::json!({
+fn legacy_archive_metric_record_without_histogram_fields_remains_readable() {
+    let record: backup_archive_repo::BackupRecord = serde_json::from_value(serde_json::json!({
         "type": "metric_point",
         "data": {
             "id": "metric-1",
@@ -268,8 +268,8 @@ fn old_v2_metric_record_without_histogram_fields_remains_readable() {
             "receivedAt": 1
         }
     }))
-    .unwrap();
-    let backup_v2_repo::BackupV2Record::MetricPoint(metric) = record else {
+    .expect("legacy metric record should deserialize");
+    let backup_archive_repo::BackupRecord::MetricPoint(metric) = record else {
         panic!("expected metric point");
     };
     assert_eq!(metric.value, 42.0);
@@ -332,7 +332,8 @@ async fn corrupted_backup_is_rejected_before_target_is_modified() -> Result<(), 
     )
     .await?;
 
-    let result = backup_v2_restore_repo::restore_full_system_exact(&target, corrupt.path()).await;
+    let result =
+        backup_archive_restore_repo::restore_full_system_exact(&target, corrupt.path()).await;
     assert!(result.is_err());
 
     let applications = app_repo::list_applications(&target, None, true).await?;
@@ -455,7 +456,7 @@ async fn write_backup(
 ) -> Result<(), Box<dyn Error>> {
     let file = archive.reopen()?;
     let mut file = tokio::fs::File::from_std(file);
-    let stream = backup_v2_repo::export_full_system_stream(database.clone());
+    let stream = backup_archive_repo::export_full_system_stream(database.clone());
     pin_mut!(stream);
     while let Some(chunk) = stream.next().await {
         file.write_all(&chunk?).await?;
@@ -477,7 +478,6 @@ async fn count_rows(
         .query_one(&query)
         .await?
         .and_then(|row| row.try_get::<i64>("", "total").ok())
-        .unwrap_or(0)
-        .max(0) as u64;
-    Ok(count)
+        .unwrap_or(0);
+    Ok(u64::try_from(count).unwrap_or(0))
 }
