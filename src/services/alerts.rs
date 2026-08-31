@@ -9,17 +9,15 @@ use tracing::{info, warn};
 use url::{Host, Url};
 
 use crate::{
-    database::{
-        alert_delivery_repo,
-        alert_repo::{
-            self, AlertDeliveryRecord, AlertRuleRecord, NewRule, NotificationChannelRecord,
-            UpdateRule,
-        },
-    },
+    database::{alert_delivery, applications},
     domain::alert::{AlertExpression, AlertSource},
     error::AppError,
     services::authentication::AuthenticatedUser,
     state::InstalledState,
+};
+use crate::database::alerts::{
+    self as alert_store, AlertDeliveryRecord, AlertRuleRecord, NewRule, NotificationChannelRecord,
+    UpdateRule,
 };
 
 const DELIVERY_MAX_ATTEMPTS: i32 = 3;
@@ -33,7 +31,7 @@ pub async fn list(
     application_id: Option<&str>,
 ) -> Result<Vec<AlertRuleRecord>, AppError> {
     user.require("alerts.read", application_id)?;
-    Ok(alert_repo::list_rules(&installed.database, application_id).await?)
+    Ok(alert_store::list_rules(&installed.database, application_id).await?)
 }
 
 pub async fn create(
@@ -53,7 +51,7 @@ pub async fn create(
     }
     let query = serde_json::to_value(expression)
         .map_err(|error| AppError::internal("serialize alert expression", error))?;
-    let id = alert_repo::create_rule(
+    let id = alert_store::create_rule(
         &installed.database,
         NewRule {
             application_id,
@@ -66,7 +64,7 @@ pub async fn create(
     )
     .await?;
 
-    crate::database::app_repo::audit(
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "alert_rule.created",
@@ -87,7 +85,7 @@ pub async fn update(
     cooldown_seconds: i32,
     enabled: bool,
 ) -> Result<(), AppError> {
-    let rule = alert_repo::get_rule(&installed.database, id)
+    let rule = alert_store::get_rule(&installed.database, id)
         .await?
         .ok_or(AppError::NotFound)?;
     user.require("alerts.manage", Some(&rule.application_id))?;
@@ -100,7 +98,7 @@ pub async fn update(
     }
     let query = serde_json::to_value(expression)
         .map_err(|error| AppError::internal("serialize alert expression", error))?;
-    alert_repo::update_rule(
+    alert_store::update_rule(
         &installed.database,
         id,
         UpdateRule {
@@ -114,7 +112,7 @@ pub async fn update(
     )
     .await?;
 
-    crate::database::app_repo::audit(
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "alert_rule.updated",
@@ -131,17 +129,17 @@ pub async fn delete(
     user: &AuthenticatedUser,
     id: &str,
 ) -> Result<(), AppError> {
-    let rule = alert_repo::get_rule(&installed.database, id)
+    let rule = alert_store::get_rule(&installed.database, id)
         .await?
         .ok_or(AppError::NotFound)?;
     user.require("alerts.manage", Some(&rule.application_id))?;
 
-    let deleted = alert_repo::delete_rule(&installed.database, id).await?;
+    let deleted = alert_store::delete_rule(&installed.database, id).await?;
     if !deleted {
         return Err(AppError::NotFound);
     }
 
-    crate::database::app_repo::audit(
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "alert_rule.deleted",
@@ -158,7 +156,7 @@ pub async fn list_channels(
     user: &AuthenticatedUser,
 ) -> Result<Vec<NotificationChannelRecord>, AppError> {
     user.require("alerts.read", None)?;
-    let mut channels = alert_repo::list_channels(&installed.database).await?;
+    let mut channels = alert_store::list_channels(&installed.database).await?;
     for channel in &mut channels {
         redact_channel_config(&mut channel.config);
     }
@@ -180,9 +178,9 @@ pub async fn create_channel(
         ));
     }
     validate_channel_config(kind, config).map_err(AppError::Validation)?;
-    let id = alert_repo::create_channel(&installed.database, name, kind, config, enabled).await?;
+    let id = alert_store::create_channel(&installed.database, name, kind, config, enabled).await?;
 
-    crate::database::app_repo::audit(
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "notification_channel.created",
@@ -210,9 +208,9 @@ pub async fn update_channel(
         ));
     }
     validate_channel_config(kind, config).map_err(AppError::Validation)?;
-    alert_repo::update_channel(&installed.database, id, name, kind, config, enabled).await?;
+    alert_store::update_channel(&installed.database, id, name, kind, config, enabled).await?;
 
-    crate::database::app_repo::audit(
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "notification_channel.updated",
@@ -230,12 +228,12 @@ pub async fn delete_channel(
     id: &str,
 ) -> Result<(), AppError> {
     user.require("alerts.manage", None)?;
-    let deleted = alert_repo::delete_channel(&installed.database, id).await?;
+    let deleted = alert_store::delete_channel(&installed.database, id).await?;
     if !deleted {
         return Err(AppError::NotFound);
     }
 
-    crate::database::app_repo::audit(
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "notification_channel.deleted",
@@ -253,7 +251,7 @@ pub async fn test_channel(
     id: &str,
 ) -> Result<(), AppError> {
     user.require("alerts.manage", None)?;
-    let channel = alert_repo::get_channel(&installed.database, id)
+    let channel = alert_store::get_channel(&installed.database, id)
         .await?
         .ok_or(AppError::NotFound)?;
 
@@ -279,12 +277,12 @@ pub async fn list_deliveries(
 ) -> Result<Vec<AlertDeliveryRecord>, AppError> {
     user.require("alerts.read", None)?;
     let limit = limit.unwrap_or(50).clamp(1, 200);
-    Ok(alert_repo::list_deliveries(&installed.database, limit).await?)
+    Ok(alert_store::list_deliveries(&installed.database, limit).await?)
 }
 
 pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, DbErr> {
-    let rules = alert_repo::list_rules(database, None).await?;
-    let active_channel_ids = alert_repo::list_channels(database)
+    let rules = alert_store::list_rules(database, None).await?;
+    let active_channel_ids = alert_store::list_channels(database)
         .await?
         .into_iter()
         .filter(|channel| channel.enabled)
@@ -335,7 +333,7 @@ pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, 
                 let next_hits = pending_hits.saturating_add(1);
                 if next_hits < expression.consecutive_hits {
                     let pending_state = format!("pending:{next_hits}");
-                    alert_repo::update_rule_state(database, &rule.id, &pending_state, now).await?;
+                    alert_store::update_rule_state(database, &rule.id, &pending_state, now).await?;
                     continue;
                 }
             }
@@ -361,7 +359,7 @@ pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, 
                     "timestamp": chrono::Utc::now().to_rfc3339(),
                     "message": format!("Alert rule '{}' is FIRING. Current value: {:.2} (Threshold: {:.2})", rule.name, current_value, expression.threshold)
                 });
-                alert_delivery_repo::persist_transition(
+                alert_delivery::persist_transition(
                     database,
                     &rule.id,
                     "firing",
@@ -385,7 +383,7 @@ pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, 
                 "timestamp": chrono::Utc::now().to_rfc3339(),
                 "message": format!("Alert rule '{}' has RECOVERED and is now healthy.", rule.name)
             });
-            alert_delivery_repo::persist_transition(
+            alert_delivery::persist_transition(
                 database,
                 &rule.id,
                 "healthy",
@@ -395,7 +393,7 @@ pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, 
             )
             .await?;
         } else if pending_hits > 0 {
-            alert_repo::update_rule_state(database, &rule.id, "healthy", now).await?;
+            alert_store::update_rule_state(database, &rule.id, "healthy", now).await?;
         }
     }
 
@@ -406,7 +404,7 @@ pub async fn process_due_deliveries(
     database: &DatabaseConnection,
     limit: u64,
 ) -> Result<usize, DbErr> {
-    let deliveries = alert_delivery_repo::list_due(
+    let deliveries = alert_delivery::list_due(
         database,
         chrono::Utc::now().timestamp_millis(),
         limit,
@@ -421,7 +419,7 @@ pub async fn process_due_deliveries(
                 let message = truncate_delivery_error(&format!(
                     "invalid persisted alert payload: {error}"
                 ));
-                if alert_delivery_repo::mark_failed(
+                if alert_delivery::mark_failed(
                     database,
                     &delivery.id,
                     delivery.attempts,
@@ -436,8 +434,8 @@ pub async fn process_due_deliveries(
             }
         };
 
-        let Some(channel) = alert_repo::get_channel(database, &delivery.channel_id).await? else {
-            if alert_delivery_repo::mark_failed(
+        let Some(channel) = alert_store::get_channel(database, &delivery.channel_id).await? else {
+            if alert_delivery::mark_failed(
                 database,
                 &delivery.id,
                 delivery.attempts,
@@ -451,7 +449,7 @@ pub async fn process_due_deliveries(
             continue;
         };
         if !channel.enabled {
-            if alert_delivery_repo::mark_failed(
+            if alert_delivery::mark_failed(
                 database,
                 &delivery.id,
                 delivery.attempts,
@@ -467,7 +465,7 @@ pub async fn process_due_deliveries(
 
         match dispatch_to_channel(&channel, &payload).await {
             Ok(()) => {
-                if alert_delivery_repo::mark_delivered(
+                if alert_delivery::mark_delivered(
                     database,
                     &delivery.id,
                     delivery.attempts,
@@ -483,7 +481,7 @@ pub async fn process_due_deliveries(
                 let message = truncate_delivery_error(&error);
                 let attempt_number = delivery.attempts.saturating_add(1);
                 let updated = if attempt_number >= DELIVERY_MAX_ATTEMPTS {
-                    alert_delivery_repo::mark_failed(
+                    alert_delivery::mark_failed(
                         database,
                         &delivery.id,
                         delivery.attempts,
@@ -497,7 +495,7 @@ pub async fn process_due_deliveries(
                     } else {
                         DELIVERY_SECOND_RETRY_MILLIS
                     };
-                    alert_delivery_repo::reschedule(
+                    alert_delivery::reschedule(
                         database,
                         &delivery.id,
                         delivery.attempts,
@@ -813,8 +811,9 @@ async fn dispatch_to_channel(
             let chat_id = channel
                 .config
                 .get("chatId")
+                .and_then(|value| !value.as_str().unwrap_or_default().trim().is_empty())
+                .and_then(|_| channel.config.get("chatId"))
                 .and_then(|value| value.as_str())
-                .filter(|value| !value.trim().is_empty())
                 .ok_or("Missing 'chatId' in channel config")?;
             let url = format!("https://api.telegram.org/bot{bot_token}/sendMessage");
             let body = serde_json::json!({
