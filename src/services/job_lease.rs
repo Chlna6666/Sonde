@@ -2,7 +2,7 @@ use std::{future::Future, time::Duration};
 
 use sea_orm::{DatabaseConnection, DbErr};
 
-use crate::database::job_lease_repo;
+use crate::database::job_lease;
 
 pub async fn run_with_lease<T, F, Fut>(
     database: &DatabaseConnection,
@@ -16,7 +16,7 @@ where
     Fut: Future<Output = Result<T, DbErr>>,
 {
     let ttl_millis = i64::try_from(ttl.as_millis()).unwrap_or(i64::MAX);
-    if !job_lease_repo::try_acquire_or_renew(database, lease_name, holder_id, ttl_millis).await? {
+    if !job_lease::try_acquire_or_renew(database, lease_name, holder_id, ttl_millis).await? {
         return Ok(None);
     }
 
@@ -33,7 +33,7 @@ where
         tokio::select! {
             result = &mut operation => return result.map(Some),
             _ = heartbeat.tick() => {
-                if !job_lease_repo::try_acquire_or_renew(
+                if !job_lease::try_acquire_or_renew(
                     database,
                     lease_name,
                     holder_id,
