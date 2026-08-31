@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use sonde::{
-    database::{self, rollup_repo, telemetry_repo, trend_repo, user_rollup_repo},
+    database::{self, rollups, telemetry, trends, user_rollup},
     domain::telemetry::{Attributes, EventInput},
 };
 
@@ -20,25 +20,25 @@ fn event(timestamp: i64, key: &str, user: &str) -> EventInput {
 }
 
 async fn build_user_and_daily_rollups(database: &sea_orm::DatabaseConnection) {
-    rollup_repo::seed_historical_dirty_days_once(database)
+    rollups::seed_historical_dirty_days_once(database)
         .await
         .unwrap();
-    user_rollup_repo::seed_historical_user_dirty_days_once(database)
+    user_rollup::seed_historical_user_dirty_days_once(database)
         .await
         .unwrap();
 
     loop {
-        let dirty = rollup_repo::list_dirty_days(database, 128, i64::MAX)
+        let dirty = rollups::list_dirty_days(database, 128, i64::MAX)
             .await
             .unwrap();
         if dirty.is_empty() {
             break;
         }
         for item in dirty {
-            assert!(user_rollup_repo::recompute_claimed_day_user_set(database, &item)
+            assert!(user_rollup::recompute_claimed_day_user_set(database, &item)
                 .await
                 .unwrap());
-            assert!(rollup_repo::recompute_claimed_day(database, item)
+            assert!(rollups::recompute_claimed_day(database, item)
                 .await
                 .unwrap());
         }
@@ -49,11 +49,11 @@ async fn build_user_and_daily_rollups(database: &sea_orm::DatabaseConnection) {
 async fn global_daily_users_are_deduplicated_across_applications() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
-    let app_a = telemetry_repo::TelemetryScope {
+    let app_a = telemetry::TelemetryScope {
         application_id: "app-a".into(),
         environment_id: "prod".into(),
     };
-    let app_b = telemetry_repo::TelemetryScope {
+    let app_b = telemetry::TelemetryScope {
         application_id: "app-b".into(),
         environment_id: "prod".into(),
     };
@@ -64,14 +64,14 @@ async fn global_daily_users_are_deduplicated_across_applications() {
         .and_utc()
         .timestamp_millis();
 
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &app_a,
         &[event(day + 1_000, "a-shared", "shared-user")],
     )
     .await
     .unwrap();
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &app_b,
         &[event(day + 2_000, "b-shared", "shared-user")],
@@ -80,7 +80,7 @@ async fn global_daily_users_are_deduplicated_across_applications() {
     .unwrap();
     build_user_and_daily_rollups(&database).await;
 
-    let points = trend_repo::global_daily_hybrid(&database, Some(30), Some(day))
+    let points = trends::global_daily_hybrid(&database, Some(30), Some(day))
         .await
         .unwrap()
         .unwrap();
@@ -94,11 +94,11 @@ async fn global_daily_users_are_deduplicated_across_applications() {
 async fn monthly_trend_unions_users_across_days_and_preserves_partial_start() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
-    let app_a = telemetry_repo::TelemetryScope {
+    let app_a = telemetry::TelemetryScope {
         application_id: "app-a".into(),
         environment_id: "prod".into(),
     };
-    let app_b = telemetry_repo::TelemetryScope {
+    let app_b = telemetry::TelemetryScope {
         application_id: "app-b".into(),
         environment_id: "prod".into(),
     };
@@ -115,7 +115,7 @@ async fn monthly_trend_unions_users_across_days_and_preserves_partial_start() {
         .and_utc()
         .timestamp_millis();
 
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &app_a,
         &[
@@ -126,7 +126,7 @@ async fn monthly_trend_unions_users_across_days_and_preserves_partial_start() {
     )
     .await
     .unwrap();
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &app_b,
         &[event(august + 2_000, "b-aug", "shared-user")],
@@ -135,7 +135,7 @@ async fn monthly_trend_unions_users_across_days_and_preserves_partial_start() {
     .unwrap();
     build_user_and_daily_rollups(&database).await;
 
-    let global = trend_repo::global_daily_hybrid(&database, Some(365), Some(august))
+    let global = trends::global_daily_hybrid(&database, Some(365), Some(august))
         .await
         .unwrap()
         .unwrap();
@@ -143,7 +143,7 @@ async fn monthly_trend_unions_users_across_days_and_preserves_partial_start() {
     assert_eq!((global[0].day.as_str(), global[0].events, global[0].users), ("2026-08", 2, 1));
     assert_eq!((global[1].day.as_str(), global[1].events, global[1].users), ("2026-09", 2, 2));
 
-    let application = trend_repo::application_daily_hybrid(
+    let application = trends::application_daily_hybrid(
         &database,
         "app-a",
         None,
@@ -160,7 +160,7 @@ async fn monthly_trend_unions_users_across_days_and_preserves_partial_start() {
     // Starting between the two August events excludes app-a's first event but keeps app-b's event.
     // The monthly projection must replace that partial day from raw data rather than use the whole
     // cached day, while September remains rollup-backed.
-    let partial = trend_repo::global_daily_hybrid(&database, Some(365), Some(august + 1_500))
+    let partial = trends::global_daily_hybrid(&database, Some(365), Some(august + 1_500))
         .await
         .unwrap()
         .unwrap();
