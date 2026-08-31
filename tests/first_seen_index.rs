@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use sonde::{
-    database::{self, first_seen_repo, rollup_repo, telemetry_repo},
+    database::{self, first_seen, rollups, telemetry},
     domain::telemetry::{Attributes, EventInput},
 };
 
@@ -21,14 +21,12 @@ fn event(timestamp: i64, key: &str, user: &str) -> EventInput {
 
 async fn backfill_all(database: &sea_orm::DatabaseConnection) {
     loop {
-        let processed = first_seen_repo::run_backfill_batch(database, 32)
-            .await
-            .unwrap();
+        let processed = first_seen::run_backfill_batch(database, 32).await.unwrap();
         if processed == 0 {
             break;
         }
     }
-    assert!(first_seen_repo::backfill_complete(database).await.unwrap());
+    assert!(first_seen::backfill_complete(database).await.unwrap());
 }
 
 async fn refresh_and_clear_dirty(
@@ -36,7 +34,7 @@ async fn refresh_and_clear_dirty(
     application_id: &str,
     environment_id: &str,
 ) {
-    let dirty = rollup_repo::list_dirty_days(database, 64, i64::MAX)
+    let dirty = rollups::list_dirty_days(database, 64, i64::MAX)
         .await
         .unwrap()
         .into_iter()
@@ -44,10 +42,10 @@ async fn refresh_and_clear_dirty(
             item.application_id == application_id && item.environment_id == environment_id
         })
         .unwrap();
-    assert!(first_seen_repo::refresh_dirty_day(database, &dirty)
+    assert!(first_seen::refresh_dirty_day(database, &dirty)
         .await
         .unwrap());
-    assert!(rollup_repo::recompute_claimed_day(database, dirty)
+    assert!(rollups::recompute_claimed_day(database, dirty)
         .await
         .unwrap());
 }
@@ -56,15 +54,15 @@ async fn refresh_and_clear_dirty(
 async fn first_seen_index_preserves_scope_and_dirty_fallback_semantics() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
-    let prod = telemetry_repo::TelemetryScope {
+    let prod = telemetry::TelemetryScope {
         application_id: "app-a".into(),
         environment_id: "prod".into(),
     };
-    let beta = telemetry_repo::TelemetryScope {
+    let beta = telemetry::TelemetryScope {
         application_id: "app-a".into(),
         environment_id: "beta".into(),
     };
-    let other = telemetry_repo::TelemetryScope {
+    let other = telemetry::TelemetryScope {
         application_id: "app-b".into(),
         environment_id: "prod".into(),
     };
@@ -75,7 +73,7 @@ async fn first_seen_index_preserves_scope_and_dirty_fallback_semantics() {
         .and_utc()
         .timestamp_millis();
 
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &prod,
         &[
@@ -85,14 +83,14 @@ async fn first_seen_index_preserves_scope_and_dirty_fallback_semantics() {
     )
     .await
     .unwrap();
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &beta,
         &[event(start + 3_000, "a-3", "user-a")],
     )
     .await
     .unwrap();
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &other,
         &[event(start + 4_000, "b-1", "user-a")],
@@ -103,7 +101,7 @@ async fn first_seen_index_preserves_scope_and_dirty_fallback_semantics() {
     backfill_all(&database).await;
 
     assert_eq!(
-        first_seen_repo::count_new_users_hybrid(
+        first_seen::count_new_users_hybrid(
             &database,
             Some("app-a"),
             Some("prod"),
@@ -115,19 +113,13 @@ async fn first_seen_index_preserves_scope_and_dirty_fallback_semantics() {
         2
     );
     assert_eq!(
-        first_seen_repo::count_new_users_hybrid(
-            &database,
-            Some("app-a"),
-            None,
-            start,
-            None,
-        )
-        .await
-        .unwrap(),
+        first_seen::count_new_users_hybrid(&database, Some("app-a"), None, start, None)
+            .await
+            .unwrap(),
         2
     );
     assert_eq!(
-        first_seen_repo::count_new_users_hybrid(&database, None, None, start, None)
+        first_seen::count_new_users_hybrid(&database, None, None, start, None)
             .await
             .unwrap(),
         2
@@ -135,7 +127,7 @@ async fn first_seen_index_preserves_scope_and_dirty_fallback_semantics() {
 
     // A new event makes the scope dirty. The index is intentionally stale until the worker runs,
     // but the hybrid query must still return the authoritative raw result immediately.
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &prod,
         &[event(start + 5_000, "a-4", "user-c")],
@@ -143,7 +135,7 @@ async fn first_seen_index_preserves_scope_and_dirty_fallback_semantics() {
     .await
     .unwrap();
     assert_eq!(
-        first_seen_repo::count_new_users_hybrid(
+        first_seen::count_new_users_hybrid(
             &database,
             Some("app-a"),
             Some("prod"),
@@ -156,7 +148,7 @@ async fn first_seen_index_preserves_scope_and_dirty_fallback_semantics() {
     );
     refresh_and_clear_dirty(&database, "app-a", "prod").await;
     assert_eq!(
-        first_seen_repo::count_new_users_hybrid(
+        first_seen::count_new_users_hybrid(
             &database,
             Some("app-a"),
             Some("prod"),
@@ -173,7 +165,7 @@ async fn first_seen_index_preserves_scope_and_dirty_fallback_semantics() {
 async fn first_seen_index_moves_earlier_for_out_of_order_events() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
-    let scope = telemetry_repo::TelemetryScope {
+    let scope = telemetry::TelemetryScope {
         application_id: "app-order".into(),
         environment_id: "prod".into(),
     };
@@ -184,7 +176,7 @@ async fn first_seen_index_moves_earlier_for_out_of_order_events() {
         .and_utc()
         .timestamp_millis();
 
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &scope,
         &[event(start + 10_000, "late", "user-a")],
@@ -193,7 +185,7 @@ async fn first_seen_index_moves_earlier_for_out_of_order_events() {
     .unwrap();
     backfill_all(&database).await;
     assert_eq!(
-        first_seen_repo::count_new_users_hybrid(
+        first_seen::count_new_users_hybrid(
             &database,
             Some("app-order"),
             Some("prod"),
@@ -205,7 +197,7 @@ async fn first_seen_index_moves_earlier_for_out_of_order_events() {
         1
     );
 
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &scope,
         &[event(start + 1_000, "older-arrival", "user-a")],
@@ -215,7 +207,7 @@ async fn first_seen_index_moves_earlier_for_out_of_order_events() {
     refresh_and_clear_dirty(&database, "app-order", "prod").await;
 
     assert_eq!(
-        first_seen_repo::count_new_users_hybrid(
+        first_seen::count_new_users_hybrid(
             &database,
             Some("app-order"),
             Some("prod"),
@@ -232,7 +224,7 @@ async fn first_seen_index_moves_earlier_for_out_of_order_events() {
 async fn invalidated_first_seen_falls_back_to_raw_until_new_epoch_completes() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
-    let scope = telemetry_repo::TelemetryScope {
+    let scope = telemetry::TelemetryScope {
         application_id: "app-rebuild".into(),
         environment_id: "prod".into(),
     };
@@ -243,7 +235,7 @@ async fn invalidated_first_seen_falls_back_to_raw_until_new_epoch_completes() {
         .and_utc()
         .timestamp_millis();
 
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &scope,
         &[
@@ -255,11 +247,11 @@ async fn invalidated_first_seen_falls_back_to_raw_until_new_epoch_completes() {
     .unwrap();
     backfill_all(&database).await;
 
-    first_seen_repo::invalidate(&database).await.unwrap();
-    assert!(!first_seen_repo::backfill_complete(&database).await.unwrap());
+    first_seen::invalidate(&database).await.unwrap();
+    assert!(!first_seen::backfill_complete(&database).await.unwrap());
 
     // While no complete epoch exists, the query must remain authoritative via the raw fallback.
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &scope,
         &[event(start + 3_000, "during-rebuild", "user-c")],
@@ -267,7 +259,7 @@ async fn invalidated_first_seen_falls_back_to_raw_until_new_epoch_completes() {
     .await
     .unwrap();
     assert_eq!(
-        first_seen_repo::count_new_users_hybrid(
+        first_seen::count_new_users_hybrid(
             &database,
             Some("app-rebuild"),
             Some("prod"),
@@ -281,7 +273,7 @@ async fn invalidated_first_seen_falls_back_to_raw_until_new_epoch_completes() {
 
     backfill_all(&database).await;
     assert_eq!(
-        first_seen_repo::count_new_users_hybrid(
+        first_seen::count_new_users_hybrid(
             &database,
             Some("app-rebuild"),
             Some("prod"),
