@@ -4,7 +4,7 @@ use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use sonde::{
     config::InstallationConfig,
-    database::{self, ingest_nonce_repo},
+    database::{self, ingest_nonce},
     error::AppError,
     security::AuthSecurity,
     services::telemetry::{self, IngestRequestContext},
@@ -29,23 +29,17 @@ async fn nonce_replay_is_rejected_across_independent_database_connections(
 
     let now = chrono::Utc::now().timestamp_millis();
     let expires_at = now + 120_000;
-    assert!(
-        ingest_nonce_repo::record_once(&replica_a, "token-a", "nonce-a", expires_at).await?
-    );
-    assert!(
-        !ingest_nonce_repo::record_once(&replica_b, "token-a", "nonce-a", expires_at).await?
-    );
-    assert!(
-        ingest_nonce_repo::record_once(&replica_b, "token-a", "nonce-b", expires_at).await?
-    );
+    assert!(ingest_nonce::record_once(&replica_a, "token-a", "nonce-a", expires_at).await?);
+    assert!(!ingest_nonce::record_once(&replica_b, "token-a", "nonce-a", expires_at).await?);
+    assert!(ingest_nonce::record_once(&replica_b, "token-a", "nonce-b", expires_at).await?);
 
-    assert_eq!(ingest_nonce_repo::cleanup_expired(&replica_a, now).await?, 0);
+    assert_eq!(ingest_nonce::cleanup_expired(&replica_a, now).await?, 0);
     assert_eq!(
-        ingest_nonce_repo::cleanup_expired(&replica_a, expires_at).await?,
+        ingest_nonce::cleanup_expired(&replica_a, expires_at).await?,
         2
     );
     assert!(
-        ingest_nonce_repo::record_once(
+        ingest_nonce::record_once(
             &replica_b,
             "token-a",
             "nonce-a",
