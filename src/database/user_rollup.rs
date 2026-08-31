@@ -8,8 +8,8 @@ use sea_orm::{
 use sha2::{Digest, Sha256};
 
 use super::{
-    rollup_repo::{self, DirtyDay},
-    telemetry_repo::TelemetryScope,
+    rollups::{self, DirtyDay},
+    telemetry::TelemetryScope,
 };
 
 const GLOBAL_ENVIRONMENT: &str = "*";
@@ -74,10 +74,10 @@ pub async fn seed_historical_user_dirty_days_once(
             application_id,
             environment_id,
         };
-        rollup_repo::mark_dirty_timestamps_for_source(
+        rollups::mark_dirty_timestamps_for_source(
             database,
             &scope,
-            rollup_repo::DIRTY_SOURCE_EVENT,
+            rollups::DIRTY_SOURCE_EVENT,
             timestamps,
         )
         .await?;
@@ -224,14 +224,8 @@ pub async fn user_growth_hybrid(
     since: Option<i64>,
     monthly: bool,
 ) -> Result<Option<Vec<UserGrowthBucket>>, DbErr> {
-    let Some(daily_sets) = load_daily_user_sets_hybrid(
-        database,
-        application_id,
-        environment_id,
-        since,
-        None,
-    )
-    .await?
+    let Some(daily_sets) =
+        load_daily_user_sets_hybrid(database, application_id, environment_id, since, None).await?
     else {
         return Ok(None);
     };
@@ -247,7 +241,10 @@ pub async fn user_growth_hybrid(
         } else {
             daily.day
         };
-        grouped.entry(bucket).or_default().push(daily.fingerprints);
+        grouped
+            .entry(bucket)
+            .or_default()
+            .push(daily.fingerprints);
     }
 
     let mut cumulative = Vec::<Fingerprint>::new();
@@ -319,10 +316,14 @@ async fn load_daily_user_sets_hybrid(
         let fingerprints = decode_fingerprints(&blob)?;
         let declared = positive_u64(row.try_get::<i64>("", "user_count").unwrap_or(0));
         if declared != fingerprints.len() as u64 {
-            return Err(DbErr::Custom("daily user-set fingerprint count mismatch".into()));
+            return Err(DbErr::Custom(
+                "daily user-set fingerprint count mismatch".into(),
+            ));
         }
         if fingerprints.len() > FINGERPRINTS_PER_CHUNK {
-            return Err(DbErr::Custom("daily user-set chunk exceeds configured size".into()));
+            return Err(DbErr::Custom(
+                "daily user-set chunk exceeds configured size".into(),
+            ));
         }
         sets.push(ScopedUserSet {
             application_id: row.try_get("", "application_id")?,
@@ -336,9 +337,7 @@ async fn load_daily_user_sets_hybrid(
         .columns(["application_id", "day"].map(Alias::new))
         .from(Alias::new("telemetry_dirty_days"))
         .and_where(Expr::col(Alias::new("environment_id")).eq(rollup_environment))
-        .and_where(rollup_repo::dirty_source_condition(
-            rollup_repo::DIRTY_SOURCE_EVENT,
-        ));
+        .and_where(rollups::dirty_source_condition(rollups::DIRTY_SOURCE_EVENT));
     if let Some(application_id) = application_id {
         dirty_query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
     }
@@ -365,8 +364,8 @@ async fn load_daily_user_sets_hybrid(
         sets.retain(|stored| stored.day != day);
         dirty.retain(|(_, dirty_day)| dirty_day != &day);
         let (day_start, day_end) = day_bounds(&day)?;
-        let range_start = since.map_or(day_start, |value| value.max(day_start));
-        let range_end = until.map_or(day_end, |value| value.min(day_end));
+        let range_start = since.map_or(day_start, |value| std::cmp::max(value, day_start));
+        let range_end = until.map_or(day_end, |value| std::cmp::min(value, day_end));
         if range_start < range_end {
             let fingerprints = raw_fingerprints(
                 database,
@@ -510,7 +509,9 @@ fn encode_fingerprints(values: &[Fingerprint]) -> Vec<u8> {
 
 fn decode_fingerprints(encoded: &[u8]) -> Result<Vec<Fingerprint>, DbErr> {
     if encoded.len() % FINGERPRINT_BYTES != 0 {
-        return Err(DbErr::Custom("invalid daily user-set fingerprint blob".into()));
+        return Err(DbErr::Custom(
+            "invalid daily user-set fingerprint blob".into(),
+        ));
     }
     encoded
         .chunks_exact(FINGERPRINT_BYTES)
@@ -672,7 +673,7 @@ fn day_bounds(day: &str) -> Result<(i64, i64), DbErr> {
 }
 
 fn positive_u64(value: i64) -> u64 {
-    value.max(0) as u64
+    std::cmp::max(value, 0) as u64
 }
 
 fn saturating_i64(value: u64) -> i64 {
@@ -699,7 +700,10 @@ mod tests {
 
         let merged = union_sorted_sets(vec![left, right]);
         assert_eq!(merged.len(), 3);
-        assert_eq!(decode_fingerprints(&encode_fingerprints(&merged)).unwrap(), merged);
+        assert_eq!(
+            decode_fingerprints(&encode_fingerprints(&merged)).unwrap(),
+            merged
+        );
         assert_eq!(fingerprint("alpha"), alpha);
     }
 
