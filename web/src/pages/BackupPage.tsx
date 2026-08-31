@@ -30,7 +30,6 @@ type RestoreResponse = {
 
 const BACKUP_TYPE = "sonde_full_backup_ndjson";
 const CURRENT_FORMAT_VERSION = "2.1";
-const SUPPORTED_FORMAT_VERSIONS = new Set([CURRENT_FORMAT_VERSION, "2.0"]);
 const MANIFEST_READ_BYTES = 64 * 1024;
 
 export function BackupPage() {
@@ -44,7 +43,7 @@ export function BackupPage() {
     setError("");
     setSuccess("");
     const link = document.createElement("a");
-    link.href = "/api/v1/admin/system/backup/archive";
+    link.href = "/api/v1/admin/system/backup";
     link.rel = "noopener";
     document.body.appendChild(link);
     link.click();
@@ -72,7 +71,7 @@ export function BackupPage() {
       }
       if (
         record.data.backupType !== BACKUP_TYPE ||
-        !SUPPORTED_FORMAT_VERSIONS.has(record.data.formatVersion)
+        record.data.formatVersion !== CURRENT_FORMAT_VERSION
       ) {
         throw new Error(
           `不支持的备份格式：${record.data.backupType ?? "unknown"} v${record.data.formatVersion ?? "unknown"}`,
@@ -99,7 +98,7 @@ export function BackupPage() {
     setError("");
     setSuccess("");
     try {
-      const result = await api<RestoreResponse>("/api/v1/admin/system/restore/archive", {
+      const result = await api<RestoreResponse>("/api/v1/admin/system/restore", {
         method: "POST",
         headers: { "content-type": "application/x-ndjson" },
         body: restoreFile,
