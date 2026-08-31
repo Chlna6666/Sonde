@@ -1,14 +1,17 @@
 use crate::{
-    auth, database::auth_repo, error::AppError, services::authentication::AuthenticatedUser,
+    auth,
+    database::{applications, auth as auth_store},
+    error::AppError,
+    services::authentication::AuthenticatedUser,
     state::InstalledState,
 };
 
 pub async fn list_users(
     installed: &InstalledState,
     user: &AuthenticatedUser,
-) -> Result<Vec<auth_repo::UserSummary>, AppError> {
+) -> Result<Vec<auth_store::UserSummary>, AppError> {
     user.require("members.read", None)?;
-    Ok(auth_repo::list_users(&installed.database).await?)
+    Ok(auth_store::list_users(&installed.database).await?)
 }
 
 pub async fn list_audit_logs(
@@ -18,11 +21,11 @@ pub async fn list_audit_logs(
     page_size: u64,
     action: Option<&str>,
     resource_type: Option<&str>,
-) -> Result<crate::database::app_repo::AuditLogPage, AppError> {
+) -> Result<applications::AuditLogPage, AppError> {
     user.require("audit.read", None)?;
     let page = page.max(1);
     let page_size = page_size.clamp(1, 100);
-    Ok(crate::database::app_repo::list_audit_logs(
+    Ok(applications::list_audit_logs(
         &installed.database,
         page,
         page_size,
@@ -54,7 +57,7 @@ pub async fn create_user(
         ));
     }
     let password_hash = auth::hash_password(input.password, input.pepper)?;
-    let user_id = auth_repo::create_user(
+    let user_id = auth_store::create_user(
         &installed.database,
         input.email,
         input.username,
@@ -68,7 +71,7 @@ pub async fn create_user(
     )
     .await?;
 
-    crate::database::app_repo::audit(
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "user.created",
@@ -100,7 +103,7 @@ pub async fn update_user(
             "email and username are required".into(),
         ));
     }
-    auth_repo::update_user(
+    auth_store::update_user(
         &installed.database,
         target_user_id,
         input.email,
@@ -111,7 +114,7 @@ pub async fn update_user(
     )
     .await?;
 
-    crate::database::app_repo::audit(
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "user.updated",
@@ -137,9 +140,9 @@ pub async fn reset_password(
         ));
     }
     let password_hash = auth::hash_password(new_password, pepper)?;
-    auth_repo::update_password_hash(&installed.database, target_user_id, &password_hash).await?;
+    auth_store::update_password_hash(&installed.database, target_user_id, &password_hash).await?;
 
-    crate::database::app_repo::audit(
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "user.password_reset",
@@ -162,9 +165,9 @@ pub async fn delete_user(
             "cannot delete current user account".into(),
         ));
     }
-    auth_repo::delete_user(&installed.database, target_user_id).await?;
+    auth_store::delete_user(&installed.database, target_user_id).await?;
 
-    crate::database::app_repo::audit(
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "user.deleted",
@@ -179,9 +182,9 @@ pub async fn delete_user(
 pub async fn list_roles(
     installed: &InstalledState,
     user: &AuthenticatedUser,
-) -> Result<Vec<auth_repo::RoleSummary>, AppError> {
+) -> Result<Vec<auth_store::RoleSummary>, AppError> {
     user.require("members.read", None)?;
-    Ok(auth_repo::list_roles(&installed.database).await?)
+    Ok(auth_store::list_roles(&installed.database).await?)
 }
 
 pub async fn get_user_assigned_applications(
@@ -190,7 +193,7 @@ pub async fn get_user_assigned_applications(
     target_user_id: &str,
 ) -> Result<Vec<String>, AppError> {
     user.require("members.read", None)?;
-    Ok(crate::database::app_repo::get_user_assigned_applications(
+    Ok(applications::get_user_assigned_applications(
         &installed.database,
         target_user_id,
     )
@@ -205,7 +208,7 @@ pub async fn set_user_assigned_applications(
     role: &str,
 ) -> Result<(), AppError> {
     user.require("members.manage", None)?;
-    crate::database::app_repo::set_user_assigned_applications(
+    applications::set_user_assigned_applications(
         &installed.database,
         target_user_id,
         app_ids,
@@ -213,7 +216,7 @@ pub async fn set_user_assigned_applications(
     )
     .await?;
 
-    crate::database::app_repo::audit(
+    applications::audit(
         &installed.database,
         Some(&user.id),
         "user.applications_assigned",
