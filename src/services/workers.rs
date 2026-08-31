@@ -5,10 +5,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{
-    database::{
-        alert_delivery_repo, device_risk_repo, first_seen_repo, ingest_bootstrap_repo,
-        ingest_nonce_repo,
-    },
+    database::{alert_delivery, device_risk, first_seen, ingest_bootstrap, ingest_nonce},
     services::{alerts, job_lease, retention},
 };
 
@@ -45,7 +42,7 @@ fn spawn_alert_worker(database: DatabaseConnection) {
             interval.tick().await;
             match job_lease::run_with_lease(
                 &database,
-                "alert-evaluator-v1",
+                "alert-evaluator",
                 &holder_id,
                 ALERT_LEASE_TTL,
                 || alerts::evaluate_all_rules(&database),
@@ -73,7 +70,7 @@ fn spawn_alert_delivery_worker(database: DatabaseConnection) {
             interval.tick().await;
             match job_lease::run_with_lease(
                 &database,
-                "alert-delivery-v1",
+                "alert-delivery",
                 &holder_id,
                 ALERT_DELIVERY_LEASE_TTL,
                 || alerts::process_due_deliveries(&database, ALERT_DELIVERY_BATCH),
@@ -101,7 +98,7 @@ fn spawn_retention_worker(database: DatabaseConnection) {
             interval.tick().await;
             match job_lease::run_with_lease(
                 &database,
-                "retention-sweep-v1",
+                "retention-sweep",
                 &holder_id,
                 RETENTION_LEASE_TTL,
                 || run_retention_cycle(&database),
@@ -126,7 +123,7 @@ async fn run_retention_cycle(
     let report = retention::run_retention_sweep(database).await?;
     let now = chrono::Utc::now().timestamp_millis();
     let cutoff = now.saturating_sub(ALERT_DELIVERY_HISTORY_RETENTION_MILLIS);
-    let pruned = alert_delivery_repo::prune_terminal_before(
+    let pruned = alert_delivery::prune_terminal_before(
         database,
         cutoff,
         ALERT_DELIVERY_HISTORY_PRUNE_MAX,
@@ -137,7 +134,7 @@ async fn run_retention_cycle(
     }
 
     let risk_cutoff = now.saturating_sub(DEVICE_RISK_DECAY_QUIET_MILLIS);
-    let decayed = device_risk_repo::decay_scores(database, risk_cutoff).await?;
+    let decayed = device_risk::decay_scores(database, risk_cutoff).await?;
     if decayed > 0 {
         info!(devices = decayed, "decayed device abuse risk after quiet period");
     }
@@ -153,15 +150,13 @@ fn spawn_ingest_security_cleanup_worker(database: DatabaseConnection) {
             interval.tick().await;
             match job_lease::run_with_lease(
                 &database,
-                // Keep the original lease name so rolling upgrades do not run the old nonce-only
-                // cleaner and the new combined cleaner concurrently.
-                "ingest-nonce-cleanup-v1",
+                "ingest-security-cleanup",
                 &holder_id,
                 INGEST_SECURITY_CLEANUP_LEASE_TTL,
                 || async {
                     let now = chrono::Utc::now().timestamp_millis();
-                    let replay = ingest_nonce_repo::cleanup_expired(&database, now).await?;
-                    let bootstrap = ingest_bootstrap_repo::cleanup_expired(&database, now).await?;
+                    let replay = ingest_nonce::cleanup_expired(&database, now).await?;
+                    let bootstrap = ingest_bootstrap::cleanup_expired(&database, now).await?;
                     Ok(replay.saturating_add(bootstrap))
                 },
             )
@@ -188,10 +183,10 @@ fn spawn_first_seen_backfill_worker(database: DatabaseConnection) {
             interval.tick().await;
             match job_lease::run_with_lease(
                 &database,
-                "first-seen-backfill-v1",
+                "first-seen-backfill",
                 &holder_id,
                 FIRST_SEEN_BACKFILL_LEASE_TTL,
-                || first_seen_repo::run_backfill_batch(&database, FIRST_SEEN_BACKFILL_BATCH),
+                || first_seen::run_backfill_batch(&database, FIRST_SEEN_BACKFILL_BATCH),
             )
             .await
             {
