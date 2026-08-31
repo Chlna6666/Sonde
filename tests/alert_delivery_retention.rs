@@ -1,7 +1,10 @@
 #![allow(clippy::unwrap_used)]
 
-use sea_orm::{ConnectionTrait, sea_query::{Alias, Expr, ExprTrait, Query, Value}};
-use sonde::database::{self, alert_delivery_repo, query::insert};
+use sea_orm::{
+    ConnectionTrait,
+    sea_query::{Alias, Expr, ExprTrait, Query, Value},
+};
+use sonde::database::{self, alert_delivery, query::insert};
 
 #[tokio::test]
 async fn terminal_history_pruning_never_deletes_pending_deliveries() {
@@ -49,10 +52,23 @@ async fn terminal_history_pruning_never_deletes_pending_deliveries() {
         .unwrap();
     }
 
-    assert_eq!(alert_delivery_repo::prune_terminal_before(&database, 100, 2).await.unwrap(), 2);
-    assert_eq!(ids(&database).await, vec!["new-delivered", "old-cancelled", "old-pending"]);
+    assert_eq!(
+        alert_delivery::prune_terminal_before(&database, 100, 2)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        ids(&database).await,
+        vec!["new-delivered", "old-cancelled", "old-pending"]
+    );
 
-    assert_eq!(alert_delivery_repo::prune_terminal_before(&database, 100, 10).await.unwrap(), 1);
+    assert_eq!(
+        alert_delivery::prune_terminal_before(&database, 100, 10)
+            .await
+            .unwrap(),
+        1
+    );
     assert_eq!(ids(&database).await, vec!["new-delivered", "old-pending"]);
 }
 
