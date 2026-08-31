@@ -6,8 +6,8 @@ use sea_orm::{
 };
 use sonde::{
     database::{
-        self, app_repo, application_delete_repo, dimension_rollup_repo, first_seen_repo,
-        log_error_rollup_repo, rollup_repo, telemetry_repo, user_rollup_repo,
+        self, application_delete, applications, dimension_rollup, first_seen, log_error_rollup,
+        rollups, telemetry, user_rollup,
     },
     domain::telemetry::{Attributes, EventInput, LogInput, LogLevel},
 };
@@ -61,54 +61,50 @@ async fn count_for_app(
 
 async fn finish_first_seen_backfill(database: &sea_orm::DatabaseConnection) {
     loop {
-        if first_seen_repo::run_backfill_batch(database, 32)
-            .await
-            .unwrap()
-            == 0
-        {
+        if first_seen::run_backfill_batch(database, 32).await.unwrap() == 0 {
             break;
         }
     }
-    assert!(first_seen_repo::backfill_complete(database).await.unwrap());
+    assert!(first_seen::backfill_complete(database).await.unwrap());
 }
 
 async fn process_all_rollups(database: &sea_orm::DatabaseConnection) {
     loop {
-        let dirty = rollup_repo::list_dirty_days(database, 64, i64::MAX)
+        let dirty = rollups::list_dirty_days(database, 64, i64::MAX)
             .await
             .unwrap();
         if dirty.is_empty() {
             break;
         }
         for item in dirty {
-            if item.has_source(rollup_repo::DIRTY_SOURCE_EVENT) {
-                if !dimension_rollup_repo::recompute_claimed_day_dimensions(database, &item)
+            if item.has_source(rollups::DIRTY_SOURCE_EVENT) {
+                if !dimension_rollup::recompute_claimed_day_dimensions(database, &item)
                     .await
                     .unwrap()
                 {
                     continue;
                 }
-                if !first_seen_repo::refresh_dirty_day(database, &item)
+                if !first_seen::refresh_dirty_day(database, &item)
                     .await
                     .unwrap()
                 {
                     continue;
                 }
-                if !user_rollup_repo::recompute_claimed_day_user_set(database, &item)
+                if !user_rollup::recompute_claimed_day_user_set(database, &item)
                     .await
                     .unwrap()
                 {
                     continue;
                 }
             }
-            if item.has_source(rollup_repo::DIRTY_SOURCE_LOG)
-                && !log_error_rollup_repo::recompute_claimed_day(database, &item)
+            if item.has_source(rollups::DIRTY_SOURCE_LOG)
+                && !log_error_rollup::recompute_claimed_day(database, &item)
                     .await
                     .unwrap()
             {
                 continue;
             }
-            let _ = rollup_repo::recompute_claimed_day(database, item)
+            let _ = rollups::recompute_claimed_day(database, item)
                 .await
                 .unwrap();
         }
@@ -120,12 +116,13 @@ async fn deleting_application_removes_raw_and_derived_state_without_touching_oth
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
     let (delete_app, delete_env) =
-        app_repo::create_application(&database, "Delete", "delete-app", None)
+        applications::create_application(&database, "Delete", "delete-app", None)
             .await
             .unwrap();
-    let (keep_app, keep_env) = app_repo::create_application(&database, "Keep", "keep-app", None)
-        .await
-        .unwrap();
+    let (keep_app, keep_env) =
+        applications::create_application(&database, "Keep", "keep-app", None)
+            .await
+            .unwrap();
     let start = chrono::NaiveDate::from_ymd_opt(2026, 8, 20)
         .unwrap()
         .and_hms_opt(0, 0, 0)
@@ -133,23 +130,23 @@ async fn deleting_application_removes_raw_and_derived_state_without_touching_oth
         .and_utc()
         .timestamp_millis();
 
-    let delete_scope = telemetry_repo::TelemetryScope {
+    let delete_scope = telemetry::TelemetryScope {
         application_id: delete_app.clone(),
         environment_id: delete_env,
     };
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &delete_scope,
         &[event(start + 1_000, "delete-1", "shared-user")],
     )
     .await
     .unwrap();
-    telemetry_repo::insert_logs(&database, &delete_scope, &[error_log(start + 1_500)])
+    telemetry::insert_logs(&database, &delete_scope, &[error_log(start + 1_500)])
         .await
         .unwrap();
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
-        &telemetry_repo::TelemetryScope {
+        &telemetry::TelemetryScope {
             application_id: keep_app.clone(),
             environment_id: keep_env,
         },
@@ -168,7 +165,7 @@ async fn deleting_application_removes_raw_and_derived_state_without_touching_oth
     assert!(count_for_app(&database, "telemetry_daily_user_sets", &delete_app).await > 0);
     assert!(count_for_app(&database, "telemetry_daily_log_errors", &delete_app).await > 0);
 
-    application_delete_repo::delete_application_exact(&database, &delete_app)
+    application_delete::delete_application_exact(&database, &delete_app)
         .await
         .unwrap();
 
@@ -198,7 +195,7 @@ async fn deleting_application_removes_raw_and_derived_state_without_touching_oth
     // Application deletion invalidates the current first-seen epoch in O(1). Old rows may still be
     // physically present but are unreachable; the next rebuild from surviving events makes a fresh
     // epoch authoritative and then garbage-collects old epochs.
-    assert!(!first_seen_repo::backfill_complete(&database).await.unwrap());
+    assert!(!first_seen::backfill_complete(&database).await.unwrap());
     finish_first_seen_backfill(&database).await;
     assert_eq!(
         count_for_app(&database, "telemetry_user_first_seen", &delete_app).await,
