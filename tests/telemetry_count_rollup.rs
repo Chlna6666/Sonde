@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use sonde::{
-    database::{log_error_rollup_repo, rollup_repo, telemetry_count_repo, telemetry_repo},
+    database::{log_error_rollup, rollups, telemetry, telemetry_count},
     domain::telemetry::{Attributes, LogInput, LogLevel, MetricInput, MetricType},
 };
 
@@ -31,19 +31,19 @@ fn log(timestamp: i64, level: LogLevel, message: &str) -> LogInput {
 
 async fn drain_daily_rollups(database: &sea_orm::DatabaseConnection) {
     loop {
-        let dirty = rollup_repo::list_dirty_days(database, 128, i64::MAX)
+        let dirty = rollups::list_dirty_days(database, 128, i64::MAX)
             .await
             .unwrap();
         if dirty.is_empty() {
             break;
         }
         for item in dirty {
-            if item.has_source(log_error_rollup_repo::DIRTY_SOURCE_LOG_ERROR) {
-                assert!(log_error_rollup_repo::recompute_claimed_day(database, &item)
+            if item.has_source(log_error_rollup::DIRTY_SOURCE_LOG_ERROR) {
+                assert!(log_error_rollup::recompute_claimed_day(database, &item)
                     .await
                     .unwrap());
             }
-            assert!(rollup_repo::recompute_claimed_day(database, item)
+            assert!(rollups::recompute_claimed_day(database, item)
                 .await
                 .unwrap());
         }
@@ -54,7 +54,7 @@ async fn drain_daily_rollups(database: &sea_orm::DatabaseConnection) {
 async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
     let database = sonde::database::connect("sqlite::memory:").await.unwrap();
     sonde::database::migrate(&database).await.unwrap();
-    let scope = telemetry_repo::TelemetryScope {
+    let scope = telemetry::TelemetryScope {
         application_id: "app-count".into(),
         environment_id: "prod".into(),
     };
@@ -66,14 +66,14 @@ async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
         .timestamp_millis();
     let day2 = day1 + 86_400_000;
 
-    telemetry_repo::insert_metrics(
+    telemetry::insert_metrics(
         &database,
         &scope,
         &[metric(day1 + 1_000, 1.0), metric(day2 + 1_000, 2.0)],
     )
     .await
     .unwrap();
-    telemetry_repo::insert_logs(
+    telemetry::insert_logs(
         &database,
         &scope,
         &[
@@ -85,59 +85,38 @@ async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
     .await
     .unwrap();
 
-    rollup_repo::seed_historical_dirty_days_once(&database)
+    rollups::seed_historical_dirty_days_once(&database)
         .await
         .unwrap();
-    log_error_rollup_repo::seed_historical_dirty_days_once(&database)
+    log_error_rollup::seed_historical_dirty_days_once(&database)
         .await
         .unwrap();
     drain_daily_rollups(&database).await;
 
-    assert_eq!(
-        telemetry_count_repo::count_hybrid(
-            &database,
-            telemetry_count_repo::RollupCountKind::Metrics,
-            Some(&scope.application_id),
-            Some(&scope.environment_id),
-            Some(day1),
-            Some(day2 + 86_400_000),
-        )
-        .await
-        .unwrap(),
-        2
-    );
-    assert_eq!(
-        telemetry_count_repo::count_hybrid(
-            &database,
-            telemetry_count_repo::RollupCountKind::Logs,
-            Some(&scope.application_id),
-            Some(&scope.environment_id),
-            Some(day1),
-            Some(day2 + 86_400_000),
-        )
-        .await
-        .unwrap(),
-        3
-    );
-    assert_eq!(
-        telemetry_count_repo::count_hybrid(
-            &database,
-            telemetry_count_repo::RollupCountKind::ErrorLogs,
-            Some(&scope.application_id),
-            Some(&scope.environment_id),
-            Some(day1),
-            Some(day2 + 86_400_000),
-        )
-        .await
-        .unwrap(),
-        2
-    );
+    for (kind, expected) in [
+        (telemetry_count::RollupCountKind::Metrics, 2),
+        (telemetry_count::RollupCountKind::Logs, 3),
+        (telemetry_count::RollupCountKind::ErrorLogs, 2),
+    ] {
+        assert_eq!(
+            telemetry_count::count_hybrid(
+                &database,
+                kind,
+                Some(&scope.application_id),
+                Some(&scope.environment_id),
+                Some(day1),
+                Some(day2 + 86_400_000),
+            )
+            .await
+            .unwrap(),
+            expected
+        );
+    }
 
-    // Fresh writes are visible immediately before the corresponding dirty day is folded back.
-    telemetry_repo::insert_metrics(&database, &scope, &[metric(day2 + 3_000, 3.0)])
+    telemetry::insert_metrics(&database, &scope, &[metric(day2 + 3_000, 3.0)])
         .await
         .unwrap();
-    telemetry_repo::insert_logs(
+    telemetry::insert_logs(
         &database,
         &scope,
         &[log(day2 + 4_000, LogLevel::Error, "error-three")],
@@ -145,9 +124,9 @@ async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
     .await
     .unwrap();
     assert_eq!(
-        telemetry_count_repo::count_hybrid(
+        telemetry_count::count_hybrid(
             &database,
-            telemetry_count_repo::RollupCountKind::Metrics,
+            telemetry_count::RollupCountKind::Metrics,
             Some(&scope.application_id),
             Some(&scope.environment_id),
             Some(day1),
@@ -158,9 +137,9 @@ async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
         3
     );
     assert_eq!(
-        telemetry_count_repo::count_hybrid(
+        telemetry_count::count_hybrid(
             &database,
-            telemetry_count_repo::RollupCountKind::ErrorLogs,
+            telemetry_count::RollupCountKind::ErrorLogs,
             Some(&scope.application_id),
             Some(&scope.environment_id),
             Some(day1),
@@ -171,8 +150,7 @@ async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
         3
     );
 
-    // An info-only write dirties the log count but must not invalidate the independent error count.
-    telemetry_repo::insert_logs(
+    telemetry::insert_logs(
         &database,
         &scope,
         &[log(day2 + 5_000, LogLevel::Info, "informational")],
@@ -180,9 +158,9 @@ async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
     .await
     .unwrap();
     assert_eq!(
-        telemetry_count_repo::count_hybrid(
+        telemetry_count::count_hybrid(
             &database,
-            telemetry_count_repo::RollupCountKind::ErrorLogs,
+            telemetry_count::RollupCountKind::ErrorLogs,
             Some(&scope.application_id),
             Some(&scope.environment_id),
             Some(day1),
@@ -193,11 +171,10 @@ async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
         3
     );
 
-    // Exact millisecond boundaries replace only the partial first day from raw telemetry.
     assert_eq!(
-        telemetry_count_repo::count_hybrid(
+        telemetry_count::count_hybrid(
             &database,
-            telemetry_count_repo::RollupCountKind::Metrics,
+            telemetry_count::RollupCountKind::Metrics,
             Some(&scope.application_id),
             Some(&scope.environment_id),
             Some(day1 + 1_500),
@@ -208,9 +185,9 @@ async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
         2
     );
     assert_eq!(
-        telemetry_count_repo::count_hybrid(
+        telemetry_count::count_hybrid(
             &database,
-            telemetry_count_repo::RollupCountKind::ErrorLogs,
+            telemetry_count::RollupCountKind::ErrorLogs,
             Some(&scope.application_id),
             Some(&scope.environment_id),
             Some(day1 + 2_500),
