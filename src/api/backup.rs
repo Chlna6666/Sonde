@@ -45,14 +45,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         web::post().to(restore_system_backup),
     )
     .route(
-        "/api/v1/admin/system/backup/v2",
-        web::get().to(export_system_backup_v2),
-    )
-    .route(
-        "/api/v1/admin/system/restore/v2",
-        web::post().to(restore_system_backup_v2),
-    )
-    .route(
         "/api/v1/admin/system/settings",
         web::get().to(get_system_settings),
     )
@@ -145,40 +137,10 @@ async fn import_application(
 async fn export_system_backup(
     state: web::Data<Arc<AppState>>,
     req: HttpRequest,
-) -> Result<impl Responder, AppError> {
-    let installed = state.installed().await?;
-    let user = authentication::authenticate(&installed, &req).await?;
-    let backup_data = backup::export_full_system(&installed, &user).await?;
-    let date = chrono::Utc::now().format("%Y-%m-%d");
-    Ok(HttpResponse::Ok()
-        .insert_header(("cache-control", "no-store"))
-        .insert_header((
-            "content-disposition",
-            format!("attachment; filename=\"sonde-full-backup-{date}.json\""),
-        ))
-        .json(backup_data))
-}
-
-async fn restore_system_backup(
-    state: web::Data<Arc<AppState>>,
-    req: HttpRequest,
-    body: web::Json<legacy_backup_repo::FullSystemBackup>,
-) -> Result<impl Responder, AppError> {
-    let installed = state.installed().await?;
-    let user = authentication::authenticate_mutation(&installed, &req).await?;
-    backup::restore_full_system(&installed, &user, body.into_inner()).await?;
-    Ok(HttpResponse::Ok().json(serde_json::json!({
-        "ok": true
-    })))
-}
-
-async fn export_system_backup_v2(
-    state: web::Data<Arc<AppState>>,
-    req: HttpRequest,
 ) -> Result<HttpResponse, AppError> {
     let installed = state.installed().await?;
     let user = authentication::authenticate(&installed, &req).await?;
-    let stream = backup::export_full_system_v2(&installed, &user).await?;
+    let stream = backup::export_system_backup(&installed, &user).await?;
     let body = stream.map(|chunk| {
         chunk.map(web::Bytes::from).map_err(|error| {
             tracing::error!(error = ?error, "backup export stream failed");
@@ -200,7 +162,7 @@ async fn export_system_backup_v2(
         .streaming(body))
 }
 
-async fn restore_system_backup_v2(
+async fn restore_system_backup(
     state: web::Data<Arc<AppState>>,
     req: HttpRequest,
     mut body: web::Payload,
@@ -246,7 +208,7 @@ async fn restore_system_backup_v2(
         .map_err(|error| AppError::internal("sync backup restore staging file", error))?;
     drop(staging_file);
 
-    let restored = backup::restore_full_system_v2(&installed, &user, staging.path()).await?;
+    let restored = backup::restore_system_backup(&installed, &user, staging.path()).await?;
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "ok": true,
         "restoredRecords": restored,

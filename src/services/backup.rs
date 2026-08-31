@@ -120,10 +120,13 @@ pub async fn restore_full_system(
     Ok(())
 }
 
-pub async fn export_full_system_v2(
+pub async fn export_system_backup(
     installed: &InstalledState,
     user: &AuthenticatedUser,
-) -> Result<impl Stream<Item = Result<Vec<u8>, backup_v2_repo::BackupV2Error>>, AppError> {
+) -> Result<
+    impl Stream<Item = Result<Vec<u8>, backup_v2_repo::BackupV2Error>> + use<>,
+    AppError,
+> {
     require_system_backup_access(user)?;
 
     app_repo::audit(
@@ -140,7 +143,7 @@ pub async fn export_full_system_v2(
     ))
 }
 
-pub async fn restore_full_system_v2(
+pub async fn restore_system_backup(
     installed: &InstalledState,
     user: &AuthenticatedUser,
     path: &Path,
@@ -152,7 +155,7 @@ pub async fn restore_full_system_v2(
         path,
     )
     .await
-    .map_err(map_backup_v2_error)?;
+    .map_err(map_backup_error)?;
 
     // Telemetry rollups are derived cache state and are intentionally rebuilt from restored raw
     // telemetry. Readiness is invalidated atomically by exact restore, so concurrent readers use
@@ -164,7 +167,7 @@ pub async fn restore_full_system_v2(
     app_repo::audit(
         &installed.database,
         None,
-        "system.backup_v2_restored",
+        "system.backup_restored",
         "system",
         None,
     )
@@ -332,7 +335,7 @@ fn require_system_backup_access(user: &AuthenticatedUser) -> Result<(), AppError
     }
 }
 
-fn map_backup_v2_error(error: backup_v2_repo::BackupV2Error) -> AppError {
+fn map_backup_error(error: backup_v2_repo::BackupV2Error) -> AppError {
     match error {
         backup_v2_repo::BackupV2Error::Database(error) => AppError::from(error),
         backup_v2_repo::BackupV2Error::Invalid(message) => AppError::Validation(message),

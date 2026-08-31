@@ -29,7 +29,8 @@ type RestoreResponse = {
 };
 
 const BACKUP_TYPE = "sonde_full_backup_ndjson";
-const FORMAT_VERSION = "2.0";
+const CURRENT_FORMAT_VERSION = "2.1";
+const SUPPORTED_FORMAT_VERSIONS = new Set([CURRENT_FORMAT_VERSION, "2.0"]);
 const MANIFEST_READ_BYTES = 64 * 1024;
 
 export function BackupPage() {
@@ -43,7 +44,7 @@ export function BackupPage() {
     setError("");
     setSuccess("");
     const link = document.createElement("a");
-    link.href = "/api/v1/admin/system/backup/v2";
+    link.href = "/api/v1/admin/system/backup";
     link.rel = "noopener";
     document.body.appendChild(link);
     link.click();
@@ -63,13 +64,16 @@ export function BackupPage() {
       if (file.size === 0) throw new Error("备份文件为空。");
       const prefix = await file.slice(0, Math.min(file.size, MANIFEST_READ_BYTES)).text();
       const newline = prefix.indexOf("\n");
-      if (newline < 0) throw new Error("未找到 v2 NDJSON manifest 行。");
+      if (newline < 0) throw new Error("未找到 NDJSON manifest 行。");
       const firstLine = prefix.slice(0, newline).replace(/\r$/, "");
       const record = JSON.parse(firstLine) as { type?: string; data?: BackupManifest };
       if (record.type !== "manifest" || !record.data) {
-        throw new Error("文件不是 Sonde v2 全量备份。");
+        throw new Error("文件不是 Sonde 全量备份。");
       }
-      if (record.data.backupType !== BACKUP_TYPE || record.data.formatVersion !== FORMAT_VERSION) {
+      if (
+        record.data.backupType !== BACKUP_TYPE ||
+        !SUPPORTED_FORMAT_VERSIONS.has(record.data.formatVersion)
+      ) {
         throw new Error(
           `不支持的备份格式：${record.data.backupType ?? "unknown"} v${record.data.formatVersion ?? "unknown"}`,
         );
@@ -95,7 +99,7 @@ export function BackupPage() {
     setError("");
     setSuccess("");
     try {
-      const result = await api<RestoreResponse>("/api/v1/admin/system/restore/v2", {
+      const result = await api<RestoreResponse>("/api/v1/admin/system/restore", {
         method: "POST",
         headers: { "content-type": "application/x-ndjson" },
         body: restoreFile,
@@ -118,12 +122,12 @@ export function BackupPage() {
         <div>
           <h2 className="text-xl font-bold tracking-tight text-[var(--text)] m-0">备份与恢复</h2>
           <p className="text-xs text-[var(--muted)] mt-1 mb-0">
-            使用 Sonde Backup v2 流式归档迁移完整实例，避免大数据量下整库 JSON 占用内存。
+            使用 Sonde 流式归档迁移完整实例，避免大数据量下整库 JSON 占用内存。
           </p>
         </div>
         <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-[var(--signal-subtle)] text-[var(--signal)] border border-[var(--signal)]/30">
           <HardDrive size={13} />
-          NDJSON v2
+          NDJSON {CURRENT_FORMAT_VERSION}
         </span>
       </div>
 
@@ -152,7 +156,9 @@ export function BackupPage() {
           <div className="rounded-xl border border-[var(--border-soft)] bg-[var(--input-bg)] p-4 text-xs text-[var(--muted)] space-y-2">
             <div className="flex justify-between gap-4">
               <span>格式</span>
-              <strong className="font-mono text-[var(--text)]">sonde_full_backup_ndjson / 2.0</strong>
+              <strong className="font-mono text-[var(--text)]">
+                {BACKUP_TYPE} / {CURRENT_FORMAT_VERSION}
+              </strong>
             </div>
             <div className="flex justify-between gap-4">
               <span>完整性</span>
@@ -174,7 +180,7 @@ export function BackupPage() {
           <div className="mt-auto">
             <button type="button" className="primary-button" style={{ width: "auto" }} onClick={handleExport}>
               <Download size={15} />
-              下载 Backup v2
+              下载全量备份
             </button>
           </div>
         </section>
@@ -197,7 +203,7 @@ export function BackupPage() {
           </div>
 
           <label className="field">
-            <span>选择 Sonde Backup v2 文件</span>
+            <span>选择 Sonde 备份文件</span>
             <input
               type="file"
               accept=".ndjson,.sonde.ndjson,application/x-ndjson"
