@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use super::dimension_rollup_repo::DimensionDayCount;
+use super::dimension_rollup::DimensionDayCount;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VersionBucket {
@@ -106,7 +106,7 @@ fn projected_bucket(day: &str, bucket_expr: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{supports_daily_projection, timeline, top_series};
-    use crate::database::dimension_rollup_repo::DimensionDayCount;
+    use crate::database::dimension_rollup::DimensionDayCount;
 
     #[test]
     fn projects_daily_rows_to_month_and_top_series() {
