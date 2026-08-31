@@ -7,7 +7,7 @@ use sea_orm::{
 };
 use sha2::{Digest, Sha256};
 
-use super::telemetry_repo::TelemetryScope;
+use super::telemetry::TelemetryScope;
 
 const GLOBAL_ENVIRONMENT: &str = "*";
 const ROLLUP_BACKFILL_KEY: &str = "telemetry_rollup_backfill_v1";
@@ -289,8 +289,6 @@ pub async fn recompute_claimed_day(
     )
     .await?;
 
-    // Only clear the exact generation/source snapshot we recomputed. If ingestion refreshed this
-    // marker while the rollup was being calculated, the newer row deliberately survives.
     let clear = Query::delete()
         .from_table(Alias::new("telemetry_dirty_days"))
         .and_where(Expr::col(Alias::new("id")).eq(&dirty.id))
@@ -484,7 +482,7 @@ pub async fn application_event_trend_hybrid(
     }
     let rollup_environment = environment_id.unwrap_or(GLOBAL_ENVIRONMENT);
 
-    let rollups = Query::select()
+    let rollup_query = Query::select()
         .columns(
             ["day", "events", "users", "metrics", "logs", "errors"].map(Alias::new),
         )
@@ -495,7 +493,7 @@ pub async fn application_event_trend_hybrid(
         .order_by(Alias::new("day"), Order::Asc)
         .to_owned();
     let mut points = BTreeMap::<String, DailyRollupPoint>::new();
-    for row in database.query_all(&rollups).await? {
+    for row in database.query_all(&rollup_query).await? {
         let day: String = row.try_get("", "day")?;
         points.insert(
             day.clone(),
@@ -586,16 +584,18 @@ async fn event_counts(
         query.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
     }
     let row = database.query_one(&query).await?;
-    let events = row
-        .as_ref()
-        .and_then(|row| row.try_get::<i64>("", "events").ok())
-        .unwrap_or(0)
-        .max(0) as u64;
-    let users = row
-        .as_ref()
-        .and_then(|row| row.try_get::<i64>("", "users").ok())
-        .unwrap_or(0)
-        .max(0) as u64;
+    let events = std::cmp::max(
+        row.as_ref()
+            .and_then(|row| row.try_get::<i64>("", "events").ok())
+            .unwrap_or(0),
+        0,
+    ) as u64;
+    let users = std::cmp::max(
+        row.as_ref()
+            .and_then(|row| row.try_get::<i64>("", "users").ok())
+            .unwrap_or(0),
+        0,
+    ) as u64;
     Ok((events, users))
 }
 
@@ -621,10 +621,10 @@ async fn time_count(
         query.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
     }
     let row = database.query_one(&query).await?;
-    Ok(row
+    let count = row
         .and_then(|row| row.try_get::<i64>("", "total").ok())
-        .unwrap_or(0)
-        .max(0) as u64)
+        .unwrap_or(0);
+    Ok(std::cmp::max(count, 0) as u64)
 }
 
 async fn set_system_state(
@@ -718,7 +718,7 @@ fn scoped_id(kind: &str, application_id: &str, environment_id: &str, day: &str) 
 }
 
 fn positive_u64(value: i64) -> u64 {
-    value.max(0) as u64
+    std::cmp::max(value, 0) as u64
 }
 
 fn saturating_i64(value: u64) -> i64 {
