@@ -1,8 +1,11 @@
 #![allow(clippy::unwrap_used)]
 
-use sea_orm::{ConnectionTrait, sea_query::{Alias, Expr, ExprTrait, Query, Value}};
+use sea_orm::{
+    ConnectionTrait,
+    sea_query::{Alias, Expr, ExprTrait, Query, Value},
+};
 use sea_orm_migration::MigratorTrait;
-use sonde::database::{self, alert_delivery_repo, query::insert};
+use sonde::database::{self, alert_delivery, query::insert};
 
 #[tokio::test]
 async fn migration_21_preserves_history_and_makes_legacy_pending_rows_reclaimable() {
@@ -52,12 +55,13 @@ async fn migration_21_preserves_history_and_makes_legacy_pending_rows_reclaimabl
         .unwrap()
         .unwrap();
     assert_eq!(row.try_get::<String>("", "status").unwrap(), "pending");
-    assert_eq!(row.try_get::<Option<String>>("", "payload_json").unwrap(), None);
+    assert_eq!(
+        row.try_get::<Option<String>>("", "payload_json").unwrap(),
+        None
+    );
     assert_eq!(row.try_get::<i64>("", "created_at").unwrap(), 100);
 
-    let due = alert_delivery_repo::list_due(&database, 1, 10)
-        .await
-        .unwrap();
+    let due = alert_delivery::list_due(&database, 1, 10).await.unwrap();
     assert_eq!(due.len(), 1);
     assert_eq!(due[0].id, "legacy-delivery");
     assert!(due[0].payload_json.is_empty());
