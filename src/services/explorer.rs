@@ -1,5 +1,5 @@
 use crate::{
-    database::explorer_repo,
+    database::explorer,
     error::AppError,
     services::authentication::AuthenticatedUser,
     state::InstalledState,
@@ -15,7 +15,7 @@ pub async fn events(
     filter: &ExplorerFilter,
 ) -> Result<Page<EventRecord>, AppError> {
     authorize(user, filter)?;
-    let record = explorer_repo::events(&installed.database, &repo_filter(filter)).await?;
+    let record = explorer::events(&installed.database, &database_filter(filter)).await?;
     Ok(map_page(record, map_event))
 }
 
@@ -25,7 +25,7 @@ pub async fn metrics(
     filter: &ExplorerFilter,
 ) -> Result<Page<MetricRecord>, AppError> {
     authorize(user, filter)?;
-    let record = explorer_repo::metrics(&installed.database, &repo_filter(filter)).await?;
+    let record = explorer::metrics(&installed.database, &database_filter(filter)).await?;
     Ok(map_page(record, map_metric))
 }
 
@@ -35,7 +35,7 @@ pub async fn logs(
     filter: &ExplorerFilter,
 ) -> Result<Page<LogRecord>, AppError> {
     authorize(user, filter)?;
-    let record = explorer_repo::logs(&installed.database, &repo_filter(filter)).await?;
+    let record = explorer::logs(&installed.database, &database_filter(filter)).await?;
     Ok(map_page(record, map_log))
 }
 
@@ -43,8 +43,8 @@ fn authorize(user: &AuthenticatedUser, filter: &ExplorerFilter) -> Result<(), Ap
     user.require("telemetry.read", Some(&filter.application_id))
 }
 
-fn repo_filter(filter: &ExplorerFilter) -> explorer_repo::ExplorerFilter {
-    explorer_repo::ExplorerFilter {
+fn database_filter(filter: &ExplorerFilter) -> explorer::ExplorerFilter {
+    explorer::ExplorerFilter {
         application_id: filter.application_id.clone(),
         environment_id: filter.environment_id.clone(),
         from: filter.from,
@@ -57,7 +57,7 @@ fn repo_filter(filter: &ExplorerFilter) -> explorer_repo::ExplorerFilter {
     }
 }
 
-fn map_page<T, U>(record: explorer_repo::Page<T>, map: fn(T) -> U) -> Page<U> {
+fn map_page<T, U>(record: explorer::Page<T>, map: fn(T) -> U) -> Page<U> {
     Page {
         items: record.items.into_iter().map(map).collect(),
         page: record.page,
@@ -66,7 +66,7 @@ fn map_page<T, U>(record: explorer_repo::Page<T>, map: fn(T) -> U) -> Page<U> {
     }
 }
 
-fn map_event(record: explorer_repo::EventRecord) -> EventRecord {
+fn map_event(record: explorer::EventRecord) -> EventRecord {
     EventRecord {
         id: record.id,
         name: record.name,
@@ -79,7 +79,7 @@ fn map_event(record: explorer_repo::EventRecord) -> EventRecord {
     }
 }
 
-fn map_metric(record: explorer_repo::MetricRecord) -> MetricRecord {
+fn map_metric(record: explorer::MetricRecord) -> MetricRecord {
     MetricRecord {
         id: record.id,
         name: record.name,
@@ -92,7 +92,7 @@ fn map_metric(record: explorer_repo::MetricRecord) -> MetricRecord {
     }
 }
 
-fn map_histogram(record: explorer_repo::HistogramRecord) -> HistogramRecord {
+fn map_histogram(record: explorer::HistogramRecord) -> HistogramRecord {
     HistogramRecord {
         count: record.count,
         sum: record.sum,
@@ -103,7 +103,7 @@ fn map_histogram(record: explorer_repo::HistogramRecord) -> HistogramRecord {
     }
 }
 
-fn map_log(record: explorer_repo::LogRecord) -> LogRecord {
+fn map_log(record: explorer::LogRecord) -> LogRecord {
     LogRecord {
         id: record.id,
         level: record.level,
