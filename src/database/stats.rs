@@ -7,7 +7,7 @@ use super::{
     version_dimension as version_dimension_repo,
 };
 
-#[path = "stats_impl.rs"]
-mod implementation;
+#[path = "stats/queries.rs"]
+mod queries;
 
-pub use implementation::*;
+pub use queries::*;
