@@ -13,5 +13,4 @@ mod sonde {
     }
 }
 
-#[path = "backup_archive/round_trip.rs"]
 mod round_trip;

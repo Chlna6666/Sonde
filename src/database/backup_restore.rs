@@ -7,7 +7,6 @@ use sea_orm::{
 
 use super::backup_archive::BackupError;
 
-#[path = "backup_restore_engine.rs"]
 mod engine;
 
 const LEGACY_LOG_ERROR_ROLLUP_BACKFILL_KEY: &str = "telemetry_log_error_rollup_backfill_v2";

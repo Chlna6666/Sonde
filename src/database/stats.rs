@@ -7,7 +7,6 @@ use super::{
     version_dimension as version_dimension_repo,
 };
 
-#[path = "stats/queries.rs"]
 mod queries;
 
 pub use queries::*;

@@ -31,6 +31,8 @@ Names must describe domain responsibility, not implementation mechanics.
 - Do **not** suffix current modules/files/types/functions with development-history versions such as `_v2` or `_v3`.
 - Do **not** prefix current code with `legacy_` unless it genuinely implements a still-required external legacy protocol.
 - Prefer a directory module when one domain needs several cohesive implementation files, e.g. `database/backup/{mod.rs,format.rs,restore.rs,validation.rs}`.
+- Use Rust's standard module discovery (`mod child;` with `parent/child.rs` or `parent/child/mod.rs`) for normal source modules.
+- Do **not** use `#[path = "..."]` to connect ordinary production modules. Reserve `#[path]` for exceptional generated/platform/test compilation cases where standard module discovery cannot express the layout, and document the reason at the declaration.
 
 ### Types and functions
 

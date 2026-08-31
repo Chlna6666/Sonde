@@ -1,4 +1,3 @@
-#[path = "backup_archive_format.rs"]
 mod format;
 
 pub use format::{
