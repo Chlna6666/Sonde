@@ -5,9 +5,9 @@ use uuid::Uuid;
 use crate::domain::telemetry::{ErrorSeverity, EventInput, LogInput, LogLevel, MetricInput};
 
 use super::{
-    log_error_rollup_repo,
+    log_error_rollup,
     query::{insert_batch, insert_batch_ignore_conflicts},
-    rollup_repo,
+    rollups,
 };
 
 #[derive(Clone, Debug)]
@@ -88,10 +88,10 @@ pub async fn insert_events(
         .await?;
     }
     if inserted > 0 {
-        rollup_repo::mark_dirty_timestamps_for_source(
+        rollups::mark_dirty_timestamps_for_source(
             &transaction,
             scope,
-            rollup_repo::DIRTY_SOURCE_EVENT,
+            rollups::DIRTY_SOURCE_EVENT,
             events
                 .iter()
                 .map(|event| event.timestamp.unwrap_or(received_at)),
@@ -162,10 +162,10 @@ pub async fn insert_metrics(
         }
         insert_batch(&transaction, "metric_points", &columns, rows).await?;
     }
-    rollup_repo::mark_dirty_timestamps_for_source(
+    rollups::mark_dirty_timestamps_for_source(
         &transaction,
         scope,
-        rollup_repo::DIRTY_SOURCE_METRIC,
+        rollups::DIRTY_SOURCE_METRIC,
         metrics
             .iter()
             .map(|metric| metric.timestamp.unwrap_or(received_at)),
@@ -253,17 +253,17 @@ pub async fn insert_logs(
         }
         insert_batch(&transaction, "logs", &columns, rows).await?;
     }
-    rollup_repo::mark_dirty_timestamps_for_source(
+    rollups::mark_dirty_timestamps_for_source(
         &transaction,
         scope,
-        rollup_repo::DIRTY_SOURCE_LOG,
+        rollups::DIRTY_SOURCE_LOG,
         logs.iter().map(|log| log.timestamp.unwrap_or(received_at)),
     )
     .await?;
-    rollup_repo::mark_dirty_timestamps_for_source(
+    rollups::mark_dirty_timestamps_for_source(
         &transaction,
         scope,
-        log_error_rollup_repo::DIRTY_SOURCE_LOG_ERROR,
+        log_error_rollup::DIRTY_SOURCE_LOG_ERROR,
         logs.iter()
             .filter(|log| matches!(&log.level, LogLevel::Error | LogLevel::Fatal))
             .map(|log| log.timestamp.unwrap_or(received_at)),
@@ -330,10 +330,10 @@ pub async fn insert_migrated_event(
     .await?
         > 0;
     if inserted {
-        rollup_repo::mark_dirty_timestamps_for_source(
+        rollups::mark_dirty_timestamps_for_source(
             &transaction,
             scope,
-            rollup_repo::DIRTY_SOURCE_EVENT,
+            rollups::DIRTY_SOURCE_EVENT,
             [timestamp],
         )
         .await?;
@@ -353,7 +353,7 @@ fn scoped_event_dedupe_key(scope: &TelemetryScope, idempotency_key: &str) -> Str
     format!("evt:{}", hex::encode(hasher.finalize()))
 }
 
-fn legacy_anonymous_hash(scope: &TelemetryScope, value: &str) -> String {
+fn anonymous_hash(scope: &TelemetryScope, value: &str) -> String {
     let salt = format!("{}:{}", scope.application_id, scope.environment_id);
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
@@ -410,7 +410,7 @@ pub async fn insert_errors(
             if let Some(ref anonymous_id) = err.anonymous_id {
                 attrs.insert(
                     "anonymous_id".into(),
-                    serde_json::Value::String(legacy_anonymous_hash(scope, anonymous_id)),
+                    serde_json::Value::String(anonymous_hash(scope, anonymous_id)),
                 );
             }
             if let Some(ref s) = err.session_id {
@@ -451,20 +451,20 @@ pub async fn insert_errors(
         insert_batch(&transaction, "logs", &columns, rows).await?;
     }
 
-    super::error_repo::insert_error_index(&transaction, scope, errors, received_at).await?;
-    rollup_repo::mark_dirty_timestamps_for_source(
+    super::errors::insert_error_index(&transaction, scope, errors, received_at).await?;
+    rollups::mark_dirty_timestamps_for_source(
         &transaction,
         scope,
-        rollup_repo::DIRTY_SOURCE_LOG | rollup_repo::DIRTY_SOURCE_ERROR,
+        rollups::DIRTY_SOURCE_LOG | rollups::DIRTY_SOURCE_ERROR,
         errors
             .iter()
             .map(|error| error.timestamp.unwrap_or(received_at)),
     )
     .await?;
-    rollup_repo::mark_dirty_timestamps_for_source(
+    rollups::mark_dirty_timestamps_for_source(
         &transaction,
         scope,
-        log_error_rollup_repo::DIRTY_SOURCE_LOG_ERROR,
+        log_error_rollup::DIRTY_SOURCE_LOG_ERROR,
         errors
             .iter()
             .filter(|error| !matches!(error.severity.as_ref(), Some(ErrorSeverity::Warning)))
@@ -479,7 +479,7 @@ pub async fn insert_errors(
 mod tests {
     use sha2::{Digest, Sha256};
 
-    use super::{TelemetryScope, legacy_anonymous_hash, scoped_event_dedupe_key};
+    use super::{TelemetryScope, anonymous_hash, scoped_event_dedupe_key};
 
     #[test]
     fn idempotency_key_is_scoped_to_application_and_environment() {
@@ -513,6 +513,6 @@ mod tests {
             hasher.update(b"app-a:prod");
             hex::encode(hasher.finalize())
         };
-        assert_eq!(legacy_anonymous_hash(&scope, "device-1"), expected);
+        assert_eq!(anonymous_hash(&scope, "device-1"), expected);
     }
 }
