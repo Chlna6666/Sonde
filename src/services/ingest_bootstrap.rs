@@ -1,6 +1,6 @@
 use sea_orm::{DatabaseConnection, DbErr};
 
-use crate::{database::ingest_bootstrap_repo, security::hmac_sha256};
+use crate::{database::ingest_bootstrap, security::hmac_sha256};
 
 const MINUTE_MILLIS: i64 = 60_000;
 const HOUR_MILLIS: i64 = 60 * MINUTE_MILLIS;
@@ -8,7 +8,7 @@ const PERSISTENCE_GRACE_MILLIS: i64 = 5 * MINUTE_MILLIS;
 const IP_TOKEN_REQUESTS_PER_MINUTE: i64 = 30;
 const DEVICE_TOKEN_REQUESTS_PER_MINUTE: i64 = 8;
 const NEW_DEVICES_PER_IP_PER_HOUR: i64 = 128;
-const OPAQUE_KEY_CONTEXT: &[u8] = b"sonde-ingest-bootstrap-key-v1\0";
+const OPAQUE_KEY_CONTEXT: &[u8] = b"sonde-ingest-bootstrap-key\0";
 
 pub(crate) async fn charge_ip_token(
     database: &DatabaseConnection,
@@ -68,7 +68,7 @@ async fn charge_ip_token_at(
 ) -> Result<bool, DbErr> {
     let (window_id, expires_at) = fixed_window(now, MINUTE_MILLIS);
     let bucket_key = opaque_key(pepper, b"ip-token", &[client_ip], window_id);
-    ingest_bootstrap_repo::charge_window(
+    ingest_bootstrap::charge_window(
         database,
         &bucket_key,
         1,
@@ -99,7 +99,7 @@ async fn check_device_enrollment_at(
         &[client_ip, application_id, device_id],
         window_id,
     );
-    ingest_bootstrap_repo::record_enrollment_with_budget(
+    ingest_bootstrap::record_enrollment_with_budget(
         database,
         &enrollment_key,
         &budget_key,
@@ -117,7 +117,7 @@ async fn charge_device_token_at(
     cost: u64,
     now: i64,
 ) -> Result<bool, DbErr> {
-    let cost = i64::try_from(cost.max(1)).unwrap_or(i64::MAX);
+    let cost = i64::try_from(std::cmp::max(cost, 1)).unwrap_or(i64::MAX);
     let (window_id, expires_at) = fixed_window(now, MINUTE_MILLIS);
     let bucket_key = opaque_key(
         pepper,
@@ -125,7 +125,7 @@ async fn charge_device_token_at(
         &[application_id, device_id],
         window_id,
     );
-    ingest_bootstrap_repo::charge_window(
+    ingest_bootstrap::charge_window(
         database,
         &bucket_key,
         cost,
