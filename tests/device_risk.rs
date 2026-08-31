@@ -1,9 +1,9 @@
 #![allow(clippy::unwrap_used)]
 
 use sonde::database::{
-    self, device_risk_repo,
-    device_state_repo::{self, DeviceObservation, DeviceTelemetryKind, TimedDimension},
-    telemetry_repo::TelemetryScope,
+    self, device_risk,
+    device_state::{self, DeviceObservation, DeviceTelemetryKind, TimedDimension},
+    telemetry::TelemetryScope,
 };
 
 fn observation(received_at: i64, telemetry_at: i64, os: &str) -> DeviceObservation {
@@ -40,14 +40,14 @@ async fn risk_is_read_by_device_scope_and_decays_only_after_quiet_cutoff(
     let device_hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let now = chrono::Utc::now().timestamp_millis();
 
-    device_state_repo::observe(
+    device_state::observe(
         &database,
         &scope,
         device_hash,
         &observation(now, now, "windows"),
     )
     .await?;
-    let baseline = device_risk_repo::risk_score_for_device(
+    let baseline = device_risk::risk_score_for_device(
         &database,
         &scope.application_id,
         &scope.environment_id,
@@ -58,7 +58,7 @@ async fn risk_is_read_by_device_scope_and_decays_only_after_quiet_cutoff(
     assert_eq!(baseline, 0);
 
     assert_eq!(
-        device_risk_repo::record_replay_detected(
+        device_risk::record_replay_detected(
             &database,
             &scope.application_id,
             &scope.environment_id,
@@ -68,7 +68,7 @@ async fn risk_is_read_by_device_scope_and_decays_only_after_quiet_cutoff(
         .await?,
         1
     );
-    let replay_risk = device_risk_repo::risk_score_for_device(
+    let replay_risk = device_risk::risk_score_for_device(
         &database,
         &scope.application_id,
         &scope.environment_id,
@@ -78,7 +78,7 @@ async fn risk_is_read_by_device_scope_and_decays_only_after_quiet_cutoff(
     .unwrap();
     assert_eq!(replay_risk, 2);
 
-    device_state_repo::observe(
+    device_state::observe(
         &database,
         &scope,
         device_hash,
@@ -86,7 +86,7 @@ async fn risk_is_read_by_device_scope_and_decays_only_after_quiet_cutoff(
     )
     .await?;
 
-    let risk = device_risk_repo::risk_score_for_device(
+    let risk = device_risk::risk_score_for_device(
         &database,
         &scope.application_id,
         &scope.environment_id,
@@ -96,9 +96,9 @@ async fn risk_is_read_by_device_scope_and_decays_only_after_quiet_cutoff(
     .unwrap();
     assert!(risk > replay_risk);
 
-    let untouched = device_risk_repo::decay_scores(&database, now + 500).await?;
+    let untouched = device_risk::decay_scores(&database, now + 500).await?;
     assert_eq!(untouched, 0);
-    let unchanged = device_risk_repo::risk_score_for_device(
+    let unchanged = device_risk::risk_score_for_device(
         &database,
         &scope.application_id,
         &scope.environment_id,
@@ -108,9 +108,9 @@ async fn risk_is_read_by_device_scope_and_decays_only_after_quiet_cutoff(
     .unwrap();
     assert_eq!(unchanged, risk);
 
-    let decayed = device_risk_repo::decay_scores(&database, now + 2_000).await?;
+    let decayed = device_risk::decay_scores(&database, now + 2_000).await?;
     assert_eq!(decayed, 1);
-    let after = device_risk_repo::risk_score_for_device(
+    let after = device_risk::risk_score_for_device(
         &database,
         &scope.application_id,
         &scope.environment_id,
