@@ -409,7 +409,7 @@ pub(crate) async fn import_application(
             vec![
                 Uuid::now_v7().to_string().into(),
                 application_id.clone().into(),
-                environment_id.clone().into(),
+                environment_id.to_owned().into(),
                 key.name.into(),
                 key.key_hash.into(),
                 key.key_prefix.into(),
@@ -451,7 +451,7 @@ pub(crate) async fn import_application(
             vec![
                 Uuid::now_v7().to_string().into(),
                 application_id.clone().into(),
-                environment_id.clone().into(),
+                environment_id.to_owned().into(),
                 event.name.into(),
                 event.timestamp.into(),
                 event.day.into(),
@@ -493,7 +493,7 @@ pub(crate) async fn import_application(
             vec![
                 Uuid::now_v7().to_string().into(),
                 application_id.clone().into(),
-                environment_id.clone().into(),
+                environment_id.to_owned().into(),
                 log.level.into(),
                 log.message.into(),
                 Value::from(log.logger),
