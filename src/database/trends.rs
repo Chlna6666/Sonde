@@ -6,7 +6,7 @@ use sea_orm::{
     sea_query::{Alias, Expr, ExprTrait, Func, Order, Query},
 };
 
-use super::{rollup_repo, user_rollup_repo};
+use super::{rollups, user_rollup};
 
 const GLOBAL_ENVIRONMENT: &str = "*";
 const MAX_DIRTY_DAY_BINDS: usize = 400;
@@ -47,7 +47,7 @@ pub async fn application_daily_hybrid(
     {
         return Ok(None);
     }
-    let Some(points) = rollup_repo::application_event_trend_hybrid(
+    let Some(points) = rollups::application_event_trend_hybrid(
         database,
         application_id,
         environment_id,
@@ -84,7 +84,7 @@ pub async fn application_daily_hybrid(
     }
 
     if monthly_buckets(days) {
-        let Some(users) = user_rollup_repo::user_growth_hybrid(
+        let Some(users) = user_rollup::user_growth_hybrid(
             database,
             Some(application_id),
             environment_id,
@@ -106,7 +106,7 @@ pub async fn global_daily_hybrid(
     days: Option<u32>,
     since_ts: Option<i64>,
 ) -> Result<Option<Vec<TrendPoint>>, DbErr> {
-    if !supports_rollup(days) || !rollup_repo::rollup_backfill_seeded(database).await? {
+    if !supports_rollup(days) || !rollups::rollup_backfill_seeded(database).await? {
         return Ok(None);
     }
 
@@ -116,7 +116,7 @@ pub async fn global_daily_hybrid(
 
     // Read one already-aggregated row per application/day and combine in Rust. PostgreSQL promotes
     // SUM(BIGINT) to NUMERIC; avoiding SQL SUM keeps the row type identical on SQLite/MySQL/Postgres.
-    let rollups = Query::select()
+    let rollups_query = Query::select()
         .columns(["day", "events"].map(Alias::new))
         .from(Alias::new("telemetry_daily_rollups"))
         .and_where(Expr::col(Alias::new("environment_id")).eq(GLOBAL_ENVIRONMENT))
@@ -125,7 +125,7 @@ pub async fn global_daily_hybrid(
         .to_owned();
 
     let mut points = BTreeMap::<String, TrendPoint>::new();
-    for row in database.query_all(&rollups).await? {
+    for row in database.query_all(&rollups_query).await? {
         let day: String = row.try_get("", "day")?;
         let events = positive_u64(row.try_get::<i64>("", "events").unwrap_or(0));
         points
@@ -145,9 +145,7 @@ pub async fn global_daily_hybrid(
         .from(Alias::new("telemetry_dirty_days"))
         .and_where(Expr::col(Alias::new("environment_id")).eq(GLOBAL_ENVIRONMENT))
         .and_where(Expr::col(Alias::new("day")).gte(&since_day))
-        .and_where(rollup_repo::dirty_source_condition(
-            rollup_repo::DIRTY_SOURCE_EVENT,
-        ))
+        .and_where(rollups::dirty_source_condition(rollups::DIRTY_SOURCE_EVENT))
         .distinct()
         .limit((MAX_DIRTY_DAY_BINDS + 1) as u64)
         .to_owned();
@@ -198,8 +196,7 @@ pub async fn global_daily_hybrid(
     }
 
     let monthly = monthly_buckets(days);
-    let Some(users) = user_rollup_repo::user_growth_hybrid(database, None, None, since_ts, monthly)
-        .await?
+    let Some(users) = user_rollup::user_growth_hybrid(database, None, None, since_ts, monthly).await?
     else {
         return Ok(None);
     };
@@ -233,9 +230,7 @@ async fn application_dirty_backlog_exceeds(
         .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
         .and_where(Expr::col(Alias::new("environment_id")).eq(rollup_environment))
         .and_where(Expr::col(Alias::new("day")).gte(since_day))
-        .and_where(rollup_repo::dirty_source_condition(
-            rollup_repo::DIRTY_SOURCE_EVENT,
-        ))
+        .and_where(rollups::dirty_source_condition(rollups::DIRTY_SOURCE_EVENT))
         .limit((MAX_DIRTY_DAY_BINDS + 1) as u64)
         .to_owned();
     Ok(database.query_all(&query).await?.len() > MAX_DIRTY_DAY_BINDS)
@@ -243,7 +238,7 @@ async fn application_dirty_backlog_exceeds(
 
 fn apply_user_counts(
     points: &mut BTreeMap<String, TrendPoint>,
-    users: Vec<user_rollup_repo::UserGrowthBucket>,
+    users: Vec<user_rollup::UserGrowthBucket>,
 ) {
     for user_bucket in users {
         points
@@ -259,7 +254,7 @@ fn apply_user_counts(
 
 fn project_monthly(
     daily: BTreeMap<String, TrendPoint>,
-    users: Vec<user_rollup_repo::UserGrowthBucket>,
+    users: Vec<user_rollup::UserGrowthBucket>,
 ) -> Result<Vec<TrendPoint>, DbErr> {
     let mut monthly = BTreeMap::<String, TrendPoint>::new();
     for point in daily.into_values() {
@@ -388,5 +383,5 @@ fn next_day_timestamp(day: &str) -> Option<i64> {
 }
 
 fn positive_u64(value: i64) -> u64 {
-    value.max(0) as u64
+    std::cmp::max(value, 0) as u64
 }
