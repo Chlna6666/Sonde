@@ -38,10 +38,18 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     )
     .route(
         "/api/v1/admin/system/backup",
-        web::get().to(export_system_backup),
+        web::get().to(export_legacy_system_backup),
     )
     .route(
         "/api/v1/admin/system/restore",
+        web::post().to(restore_legacy_system_backup),
+    )
+    .route(
+        "/api/v1/admin/system/backup/archive",
+        web::get().to(export_system_backup),
+    )
+    .route(
+        "/api/v1/admin/system/restore/archive",
         web::post().to(restore_system_backup),
     )
     .route(
@@ -131,6 +139,36 @@ async fn import_application(
     Ok(HttpResponse::Created().json(serde_json::json!({
         "ok": true,
         "applicationId": new_app_id
+    })))
+}
+
+async fn export_legacy_system_backup(
+    state: web::Data<Arc<AppState>>,
+    req: HttpRequest,
+) -> Result<impl Responder, AppError> {
+    let installed = state.installed().await?;
+    let user = authentication::authenticate(&installed, &req).await?;
+    let backup_data = backup::export_full_system(&installed, &user).await?;
+    let date = chrono::Utc::now().format("%Y-%m-%d");
+    Ok(HttpResponse::Ok()
+        .insert_header(("cache-control", "no-store"))
+        .insert_header((
+            "content-disposition",
+            format!("attachment; filename=\"sonde-full-backup-{date}.json\""),
+        ))
+        .json(backup_data))
+}
+
+async fn restore_legacy_system_backup(
+    state: web::Data<Arc<AppState>>,
+    req: HttpRequest,
+    body: web::Json<legacy_backup_repo::FullSystemBackup>,
+) -> Result<impl Responder, AppError> {
+    let installed = state.installed().await?;
+    let user = authentication::authenticate_mutation(&installed, &req).await?;
+    backup::restore_full_system(&installed, &user, body.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "ok": true
     })))
 }
 

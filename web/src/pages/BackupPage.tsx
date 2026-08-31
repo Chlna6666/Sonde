@@ -44,7 +44,7 @@ export function BackupPage() {
     setError("");
     setSuccess("");
     const link = document.createElement("a");
-    link.href = "/api/v1/admin/system/backup";
+    link.href = "/api/v1/admin/system/backup/archive";
     link.rel = "noopener";
     document.body.appendChild(link);
     link.click();
@@ -99,7 +99,7 @@ export function BackupPage() {
     setError("");
     setSuccess("");
     try {
-      const result = await api<RestoreResponse>("/api/v1/admin/system/restore", {
+      const result = await api<RestoreResponse>("/api/v1/admin/system/restore/archive", {
         method: "POST",
         headers: { "content-type": "application/x-ndjson" },
         body: restoreFile,
