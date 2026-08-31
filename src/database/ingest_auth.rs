@@ -3,7 +3,7 @@ use sea_orm::{
     sea_query::{Alias, Expr, ExprTrait, Query},
 };
 
-use super::app_repo::ApiKeyContext;
+use super::applications::ApiKeyContext;
 
 const LAST_USED_FLUSH_INTERVAL_MILLIS: i64 = 60_000;
 
@@ -74,17 +74,17 @@ pub async fn api_key_context(
 mod tests {
     use sha2::{Digest, Sha256};
 
-    use crate::database::{self, app_repo};
+    use crate::database::{self, applications};
 
     #[tokio::test]
     async fn ingest_key_last_used_is_throttled() -> Result<(), Box<dyn std::error::Error>> {
         let database = database::connect("sqlite::memory:").await?;
         database::migrate(&database).await?;
         let (app_id, env_id) =
-            app_repo::create_application(&database, "Demo", "demo", None).await?;
+            applications::create_application(&database, "Demo", "demo", None).await?;
         let raw_key = "sonde_ingest_test_key";
         let key_hash = hex::encode(Sha256::digest(raw_key.as_bytes()));
-        app_repo::create_api_key(
+        applications::create_api_key(
             &database,
             &app_id,
             &env_id,
