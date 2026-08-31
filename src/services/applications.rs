@@ -2,7 +2,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     auth,
-    database::{app_repo, application_delete_repo},
+    database::{application_delete, applications as application_store},
     error::AppError,
     services::authentication::AuthenticatedUser,
     state::InstalledState,
@@ -23,7 +23,7 @@ pub async fn list(
         .any(|r| r == "Super Admin" || r == "Admin")
         || user.grants.iter().any(|g| g.allows("*", None));
     let records =
-        app_repo::list_applications(&installed.database, Some(&user.id), is_admin).await?;
+        application_store::list_applications(&installed.database, Some(&user.id), is_admin).await?;
     Ok(records.into_iter().map(map_application).collect())
 }
 
@@ -31,7 +31,7 @@ pub async fn public_by_slug(
     installed: &InstalledState,
     slug: &str,
 ) -> Result<Option<PublicApplicationInfo>, AppError> {
-    Ok(app_repo::get_public_application_by_slug(&installed.database, slug)
+    Ok(application_store::get_public_application_by_slug(&installed.database, slug)
         .await?
         .map(map_public_application))
 }
@@ -42,7 +42,7 @@ pub async fn list_environments(
     application_id: &str,
 ) -> Result<Vec<EnvironmentSummary>, AppError> {
     ensure_app_access(&installed.database, user, application_id, false).await?;
-    let records = app_repo::list_environments(&installed.database, application_id).await?;
+    let records = application_store::list_environments(&installed.database, application_id).await?;
     Ok(records.into_iter().map(map_environment).collect())
 }
 
@@ -54,8 +54,8 @@ pub async fn create(
 ) -> Result<(String, String), AppError> {
     validate_application(name, slug)?;
     let created =
-        app_repo::create_application(&installed.database, name, slug, Some(&user.id)).await?;
-    app_repo::audit(
+        application_store::create_application(&installed.database, name, slug, Some(&user.id)).await?;
+    application_store::audit(
         &installed.database,
         Some(&user.id),
         "application.created",
@@ -72,7 +72,7 @@ pub async fn list_keys(
     application_id: &str,
 ) -> Result<Vec<ApiKeyDetail>, AppError> {
     ensure_app_access(&installed.database, user, application_id, false).await?;
-    let records = app_repo::list_api_keys(&installed.database, application_id).await?;
+    let records = application_store::list_api_keys(&installed.database, application_id).await?;
     Ok(records.into_iter().map(map_api_key).collect())
 }
 
@@ -93,7 +93,7 @@ pub async fn create_key(
     let raw_key = format!("sonde_{}", auth::random_token(32));
     let prefix = raw_key.chars().take(12).collect::<String>();
     let hash = hex::encode(Sha256::digest(raw_key.as_bytes()));
-    let id = app_repo::create_api_key(
+    let id = application_store::create_api_key(
         &installed.database,
         application_id,
         environment_id,
@@ -103,7 +103,7 @@ pub async fn create_key(
         scopes,
     )
     .await?;
-    app_repo::audit(
+    application_store::audit(
         &installed.database,
         Some(&user.id),
         "api_key.created",
@@ -121,11 +121,11 @@ pub async fn revoke_key(
     key_id: &str,
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
-    let revoked = app_repo::revoke_api_key(&installed.database, application_id, key_id).await?;
+    let revoked = application_store::revoke_api_key(&installed.database, application_id, key_id).await?;
     if !revoked {
         return Err(AppError::NotFound);
     }
-    app_repo::audit(
+    application_store::audit(
         &installed.database,
         Some(&user.id),
         "api_key.revoked",
@@ -143,11 +143,11 @@ pub async fn delete_key(
     key_id: &str,
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
-    let deleted = app_repo::delete_api_key(&installed.database, application_id, key_id).await?;
+    let deleted = application_store::delete_api_key(&installed.database, application_id, key_id).await?;
     if !deleted {
         return Err(AppError::NotFound);
     }
-    app_repo::audit(
+    application_store::audit(
         &installed.database,
         Some(&user.id),
         "api_key.deleted",
@@ -164,8 +164,8 @@ pub async fn clear_revoked_keys(
     application_id: &str,
 ) -> Result<u64, AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
-    let count = app_repo::delete_revoked_api_keys(&installed.database, application_id).await?;
-    app_repo::audit(
+    let count = application_store::delete_revoked_api_keys(&installed.database, application_id).await?;
+    application_store::audit(
         &installed.database,
         Some(&user.id),
         "api_key.cleared_revoked",
@@ -183,16 +183,16 @@ pub async fn regenerate_key(
     key_id: &str,
 ) -> Result<String, AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
-    let old_key = app_repo::get_api_key(&installed.database, application_id, key_id)
+    let old_key = application_store::get_api_key(&installed.database, application_id, key_id)
         .await?
         .ok_or(AppError::NotFound)?;
 
-    let _ = app_repo::revoke_api_key(&installed.database, application_id, key_id).await?;
+    let _ = application_store::revoke_api_key(&installed.database, application_id, key_id).await?;
 
     let raw_key = format!("sonde_{}", auth::random_token(32));
     let prefix = raw_key.chars().take(12).collect::<String>();
     let hash = hex::encode(Sha256::digest(raw_key.as_bytes()));
-    let new_id = app_repo::create_api_key(
+    let new_id = application_store::create_api_key(
         &installed.database,
         application_id,
         &old_key.environment_id,
@@ -206,7 +206,7 @@ pub async fn regenerate_key(
     )
     .await?;
 
-    app_repo::audit(
+    application_store::audit(
         &installed.database,
         Some(&user.id),
         "api_key.regenerated",
@@ -225,10 +225,10 @@ pub async fn update(
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
     validate_application(params.name, params.slug)?;
-    app_repo::update_application(
+    application_store::update_application(
         &installed.database,
         application_id,
-        app_repo::UpdateApplicationParams {
+        application_store::UpdateApplicationParams {
             name: params.name,
             slug: params.slug,
             retention_days: params.retention_days.clamp(0, 36500),
@@ -240,7 +240,7 @@ pub async fn update(
         },
     )
     .await?;
-    app_repo::audit(
+    application_store::audit(
         &installed.database,
         Some(&user.id),
         "application.updated",
@@ -257,8 +257,8 @@ pub async fn delete(
     application_id: &str,
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
-    application_delete_repo::delete_application_exact(&installed.database, application_id).await?;
-    app_repo::audit(
+    application_delete::delete_application_exact(&installed.database, application_id).await?;
+    application_store::audit(
         &installed.database,
         Some(&user.id),
         "application.deleted",
@@ -275,7 +275,7 @@ pub async fn list_members(
     application_id: &str,
 ) -> Result<Vec<AppMemberSummary>, AppError> {
     ensure_app_access(&installed.database, user, application_id, false).await?;
-    let records = app_repo::list_application_members(&installed.database, application_id).await?;
+    let records = application_store::list_application_members(&installed.database, application_id).await?;
     Ok(records.into_iter().map(map_member).collect())
 }
 
@@ -287,9 +287,9 @@ pub async fn grant_member(
     role: &str,
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
-    app_repo::grant_application_access(&installed.database, application_id, target_user_id, role)
+    application_store::grant_application_access(&installed.database, application_id, target_user_id, role)
         .await?;
-    app_repo::audit(
+    application_store::audit(
         &installed.database,
         Some(&user.id),
         "application.member_granted",
@@ -307,9 +307,9 @@ pub async fn revoke_member(
     target_user_id: &str,
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
-    app_repo::revoke_application_access(&installed.database, application_id, target_user_id)
+    application_store::revoke_application_access(&installed.database, application_id, target_user_id)
         .await?;
-    app_repo::audit(
+    application_store::audit(
         &installed.database,
         Some(&user.id),
         "application.member_revoked",
@@ -334,7 +334,7 @@ pub async fn ensure_app_access(
     {
         return Ok(());
     }
-    let app = app_repo::get_application(database, application_id)
+    let app = application_store::get_application(database, application_id)
         .await?
         .ok_or(AppError::NotFound)?;
     if app.owner_user_id.as_deref() == Some(&user.id) {
@@ -367,7 +367,7 @@ fn validate_application(name: &str, slug: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-fn map_application(record: app_repo::ApplicationSummary) -> ApplicationSummary {
+fn map_application(record: application_store::ApplicationSummary) -> ApplicationSummary {
     ApplicationSummary {
         id: record.id,
         name: record.name,
@@ -383,7 +383,7 @@ fn map_application(record: app_repo::ApplicationSummary) -> ApplicationSummary {
     }
 }
 
-fn map_public_application(record: app_repo::PublicApplicationInfo) -> PublicApplicationInfo {
+fn map_public_application(record: application_store::PublicApplicationInfo) -> PublicApplicationInfo {
     PublicApplicationInfo {
         id: record.id,
         name: record.name,
@@ -397,7 +397,7 @@ fn map_public_application(record: app_repo::PublicApplicationInfo) -> PublicAppl
     }
 }
 
-fn map_environment(record: app_repo::EnvironmentSummary) -> EnvironmentSummary {
+fn map_environment(record: application_store::EnvironmentSummary) -> EnvironmentSummary {
     EnvironmentSummary {
         id: record.id,
         application_id: record.application_id,
@@ -406,7 +406,7 @@ fn map_environment(record: app_repo::EnvironmentSummary) -> EnvironmentSummary {
     }
 }
 
-fn map_member(record: app_repo::AppMemberSummary) -> AppMemberSummary {
+fn map_member(record: application_store::AppMemberSummary) -> AppMemberSummary {
     AppMemberSummary {
         user_id: record.user_id,
         username: record.username,
@@ -416,7 +416,7 @@ fn map_member(record: app_repo::AppMemberSummary) -> AppMemberSummary {
     }
 }
 
-fn map_api_key(record: app_repo::ApiKeyDetail) -> ApiKeyDetail {
+fn map_api_key(record: application_store::ApiKeyDetail) -> ApiKeyDetail {
     ApiKeyDetail {
         id: record.id,
         application_id: record.application_id,
