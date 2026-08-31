@@ -1,4 +1,4 @@
-use sonde::database::{self, ingest_bootstrap_repo};
+use sonde::database::{self, ingest_bootstrap};
 
 #[tokio::test]
 async fn fixed_window_budget_is_atomic_across_connections(
@@ -15,9 +15,9 @@ async fn fixed_window_budget_is_atomic_across_connections(
 
     let key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let expires_at = chrono::Utc::now().timestamp_millis() + 60_000;
-    assert!(ingest_bootstrap_repo::charge_window(&replica_a, key, 1, 2, expires_at).await?);
-    assert!(ingest_bootstrap_repo::charge_window(&replica_b, key, 1, 2, expires_at).await?);
-    assert!(!ingest_bootstrap_repo::charge_window(&replica_a, key, 1, 2, expires_at).await?);
+    assert!(ingest_bootstrap::charge_window(&replica_a, key, 1, 2, expires_at).await?);
+    assert!(ingest_bootstrap::charge_window(&replica_b, key, 1, 2, expires_at).await?);
+    assert!(!ingest_bootstrap::charge_window(&replica_a, key, 1, 2, expires_at).await?);
 
     Ok(())
 }
@@ -42,7 +42,7 @@ async fn repeated_device_enrollment_does_not_consume_distinct_device_budget(
     let expires_at = chrono::Utc::now().timestamp_millis() + 3_600_000;
 
     assert!(
-        ingest_bootstrap_repo::record_enrollment_with_budget(
+        ingest_bootstrap::record_enrollment_with_budget(
             &replica_a,
             enrollment_a,
             budget_key,
@@ -52,7 +52,7 @@ async fn repeated_device_enrollment_does_not_consume_distinct_device_budget(
         .await?
     );
     assert!(
-        ingest_bootstrap_repo::record_enrollment_with_budget(
+        ingest_bootstrap::record_enrollment_with_budget(
             &replica_b,
             enrollment_a,
             budget_key,
@@ -62,7 +62,7 @@ async fn repeated_device_enrollment_does_not_consume_distinct_device_budget(
         .await?
     );
     assert!(
-        ingest_bootstrap_repo::record_enrollment_with_budget(
+        ingest_bootstrap::record_enrollment_with_budget(
             &replica_b,
             enrollment_b,
             budget_key,
@@ -72,7 +72,7 @@ async fn repeated_device_enrollment_does_not_consume_distinct_device_budget(
         .await?
     );
     assert!(
-        !ingest_bootstrap_repo::record_enrollment_with_budget(
+        !ingest_bootstrap::record_enrollment_with_budget(
             &replica_a,
             enrollment_c,
             budget_key,
@@ -82,7 +82,7 @@ async fn repeated_device_enrollment_does_not_consume_distinct_device_budget(
         .await?
     );
     assert!(
-        !ingest_bootstrap_repo::record_enrollment_with_budget(
+        !ingest_bootstrap::record_enrollment_with_budget(
             &replica_b,
             enrollment_c,
             budget_key,
