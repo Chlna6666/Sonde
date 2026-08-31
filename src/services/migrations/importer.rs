@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::{
-    database::{import_repo, telemetry_repo},
+    database::{imports, telemetry},
     domain::telemetry::EventInput,
     error::AppError,
     services::authentication::AuthenticatedUser,
@@ -15,7 +15,7 @@ use super::parser::parse_d1_export;
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ImportResult {
-    pub run: import_repo::ImportRun,
+    pub run: imports::ImportRun,
     pub already_imported: bool,
 }
 
@@ -25,14 +25,14 @@ pub(crate) async fn execute_d1_import(
     application_id: &str,
     environment_id: &str,
 ) -> Result<ImportResult, AppError> {
-    if !import_repo::scope_exists(&installed.database, application_id, environment_id).await? {
+    if !imports::scope_exists(&installed.database, application_id, environment_id).await? {
         return Err(AppError::Validation(
             "the selected application environment does not exist".into(),
         ));
     }
     let parsed = parse_d1_export(sql)?;
     if let Some(run) =
-        import_repo::find_by_source_hash(&installed.database, &parsed.preview.source_hash).await?
+        imports::find_by_source_hash(&installed.database, &parsed.preview.source_hash).await?
     {
         return Ok(ImportResult {
             run,
@@ -40,7 +40,7 @@ pub(crate) async fn execute_d1_import(
         });
     }
 
-    let scope = telemetry_repo::TelemetryScope {
+    let scope = telemetry::TelemetryScope {
         application_id: application_id.to_owned(),
         environment_id: environment_id.to_owned(),
     };
@@ -52,7 +52,7 @@ pub(crate) async fn execute_d1_import(
         parsed.preview.duplicates as i64,
     )
     .await?;
-    let run = import_repo::ImportRun {
+    let run = imports::ImportRun {
         id: uuid::Uuid::now_v7().to_string(),
         source_hash: parsed.preview.source_hash,
         application_id: application_id.to_owned(),
@@ -63,7 +63,7 @@ pub(crate) async fn execute_d1_import(
         rejected: parsed.preview.rejected as i64,
         created_at: chrono::Utc::now().timestamp_millis(),
     };
-    import_repo::create(&installed.database, &run).await?;
+    imports::create(&installed.database, &run).await?;
     Ok(ImportResult {
         run,
         already_imported: false,
@@ -73,14 +73,14 @@ pub(crate) async fn execute_d1_import(
 pub(crate) async fn list_runs(
     installed: &InstalledState,
     user: &AuthenticatedUser,
-) -> Result<Vec<import_repo::ImportRun>, AppError> {
+) -> Result<Vec<imports::ImportRun>, AppError> {
     user.require("migrations.manage", None)?;
-    Ok(import_repo::list(&installed.database).await?)
+    Ok(imports::list(&installed.database).await?)
 }
 
 pub(super) async fn import_rows(
     installed: &InstalledState,
-    scope: &telemetry_repo::TelemetryScope,
+    scope: &telemetry::TelemetryScope,
     application_id: &str,
     rows: Vec<super::parser::LegacyEventRow>,
     initial_duplicates: i64,
@@ -90,9 +90,7 @@ pub(super) async fn import_rows(
     for row in rows {
         let dedupe_key = format!("d1:{application_id}:{}:{}", row.day, row.user_hash);
         let event = migrated_event(row);
-        if telemetry_repo::insert_migrated_event(&installed.database, scope, &event, &dedupe_key)
-            .await?
-        {
+        if telemetry::insert_migrated_event(&installed.database, scope, &event, &dedupe_key).await? {
             inserted += 1;
         } else {
             deduped += 1;
