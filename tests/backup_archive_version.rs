@@ -1,27 +1,23 @@
 use std::error::Error;
 
 use sha2::{Digest, Sha256};
-use sonde::database::backup_archive_repo::{self, BackupEnd, BackupManifest, BackupRecord};
+use sonde::database::backup_archive::{self, BackupEnd, BackupManifest, BackupRecord};
 
 #[tokio::test]
 async fn current_validator_accepts_20_and_21_but_rejects_future_versions(
 ) -> Result<(), Box<dyn Error>> {
-    assert_eq!(backup_archive_repo::FORMAT_VERSION, "2.1");
+    assert_eq!(backup_archive::FORMAT_VERSION, "2.1");
 
     for version in ["2.0", "2.1"] {
         let archive = tempfile::NamedTempFile::new()?;
         write_manifest_only_archive(archive.path(), version).await?;
-        let manifest = backup_archive_repo::validate_backup_file(archive.path()).await?;
+        let manifest = backup_archive::validate_backup_file(archive.path()).await?;
         assert_eq!(manifest.format_version, version);
     }
 
     let future = tempfile::NamedTempFile::new()?;
     write_manifest_only_archive(future.path(), "2.2").await?;
-    assert!(
-        backup_archive_repo::validate_backup_file(future.path())
-            .await
-            .is_err()
-    );
+    assert!(backup_archive::validate_backup_file(future.path()).await.is_err());
     Ok(())
 }
 
@@ -31,7 +27,7 @@ async fn write_manifest_only_archive(
 ) -> Result<(), Box<dyn Error>> {
     let manifest = BackupRecord::Manifest(BackupManifest {
         format_version: version.into(),
-        backup_type: backup_archive_repo::BACKUP_TYPE.into(),
+        backup_type: backup_archive::BACKUP_TYPE.into(),
         exported_at: 1_777_680_000_000,
         server_version: "test".into(),
         contains_secrets: false,
