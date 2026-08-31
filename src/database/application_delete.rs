@@ -4,8 +4,8 @@ use sea_orm::{
 };
 
 const DELETE_ID_CHUNK: usize = 500;
-const FIRST_SEEN_BACKFILL_KEY: &str = "telemetry_first_seen_backfill_v1";
-const FIRST_SEEN_CURSOR_KEY: &str = "telemetry_first_seen_backfill_cursor_v1";
+const FIRST_SEEN_BACKFILL_KEY: &str = "telemetry_first_seen_backfill";
+const FIRST_SEEN_CURSOR_KEY: &str = "telemetry_first_seen_backfill_cursor";
 
 pub async fn delete_application_exact(
     database: &DatabaseConnection,
