@@ -3,7 +3,7 @@ use sea_orm::{
     sea_query::{Alias, Expr, ExprTrait, LockType, Query},
 };
 
-use super::{query::insert_batch_ignore_conflicts, telemetry_repo::TelemetryScope};
+use super::{query::insert_batch_ignore_conflicts, telemetry::TelemetryScope};
 
 const DAY_MILLIS: i64 = 86_400_000;
 const RAPID_SESSION_MILLIS: i64 = 30_000;
@@ -103,8 +103,6 @@ pub async fn observe(
     )
     .await?;
 
-    // Serialize profile updates for the same device on databases with row-lock support. SQLite
-    // serializes writes through its transaction semantics and must not receive FOR UPDATE syntax.
     let current = load_device_for_update(&transaction, device_hash)
         .await?
         .ok_or_else(|| DbErr::Custom("device profile row disappeared during update".into()))?;
@@ -136,12 +134,14 @@ pub async fn observe(
         .saturating_sub(current.last_seen_at)
         .div_euclid(DAY_MILLIS)
         .clamp(0, i32::MAX as i64) as i32;
-    let mut risk_score = current.risk_score.saturating_sub(elapsed_days).max(0);
+    let mut risk_score = std::cmp::max(current.risk_score.saturating_sub(elapsed_days), 0);
 
     if observation.item_count >= 750 {
         add_risk(&mut risk_score, 5, &mut anomaly_flags, "large_batch");
     }
-    let age = observation.received_at.saturating_sub(observation.telemetry_at);
+    let age = observation
+        .received_at
+        .saturating_sub(observation.telemetry_at);
     if age > DAY_MILLIS {
         add_risk(&mut risk_score, 3, &mut anomaly_flags, "late_telemetry");
     }
@@ -205,7 +205,7 @@ pub async fn observe(
         .table(Alias::new("telemetry_devices"))
         .value(
             Alias::new("last_seen_at"),
-            current.last_seen_at.max(observation.received_at),
+            std::cmp::max(current.last_seen_at, observation.received_at),
         )
         .value(Alias::new("last_event_at"), counters.last_event_at)
         .value(Alias::new("last_metric_at"), counters.last_metric_at)
@@ -476,7 +476,9 @@ fn merge_dimension(
         .as_deref()
         .is_some_and(|value| value != incoming.value.as_str());
     let change_interval = if changed {
-        current_timestamp.map(|timestamp| incoming.timestamp.saturating_sub(timestamp).max(0))
+        current_timestamp.map(|timestamp| {
+            std::cmp::max(incoming.timestamp.saturating_sub(timestamp), 0)
+        })
     } else {
         None
     };
@@ -489,7 +491,7 @@ fn merge_dimension(
 }
 
 fn max_timestamp(current: Option<i64>, incoming: i64) -> Option<i64> {
-    Some(current.map_or(incoming, |value| value.max(incoming)))
+    Some(current.map_or(incoming, |value| std::cmp::max(value, incoming)))
 }
 
 fn change_increment(changed: bool) -> i64 {
@@ -502,7 +504,7 @@ fn add_risk(
     flags: &mut Vec<&'static str>,
     flag: &'static str,
 ) {
-    *score = score.saturating_add(delta).min(100);
+    *score = std::cmp::min(score.saturating_add(delta), 100);
     flags.push(flag);
 }
 
