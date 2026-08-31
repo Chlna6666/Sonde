@@ -5,7 +5,7 @@ use sea_orm::{
     sea_query::{Alias, Expr, ExprTrait, Func, Query},
 };
 use sonde::{
-    database::{self, rollup_repo, telemetry_repo, user_rollup_repo},
+    database::{self, rollups, telemetry, user_rollup},
     domain::telemetry::{Attributes, EventInput},
 };
 
@@ -28,7 +28,7 @@ async fn recompute_scope_day(
     application_id: &str,
     environment_id: &str,
 ) {
-    let dirty = rollup_repo::list_dirty_days(database, 32, i64::MAX)
+    let dirty = rollups::list_dirty_days(database, 32, i64::MAX)
         .await
         .unwrap()
         .into_iter()
@@ -37,11 +37,11 @@ async fn recompute_scope_day(
         })
         .unwrap();
     assert!(
-        user_rollup_repo::recompute_claimed_day_user_set(database, &dirty)
+        user_rollup::recompute_claimed_day_user_set(database, &dirty)
             .await
             .unwrap()
     );
-    assert!(rollup_repo::recompute_claimed_day(database, dirty)
+    assert!(rollups::recompute_claimed_day(database, dirty)
         .await
         .unwrap());
 }
@@ -50,7 +50,7 @@ async fn recompute_scope_day(
 async fn user_rollup_merges_clean_days_dirty_days_and_partial_boundaries() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
-    let scope = telemetry_repo::TelemetryScope {
+    let scope = telemetry::TelemetryScope {
         application_id: "app-a".into(),
         environment_id: "prod".into(),
     };
@@ -61,7 +61,7 @@ async fn user_rollup_merges_clean_days_dirty_days_and_partial_boundaries() {
         .and_utc()
         .timestamp_millis();
 
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &scope,
         &[
@@ -74,7 +74,7 @@ async fn user_rollup_merges_clean_days_dirty_days_and_partial_boundaries() {
     .unwrap();
 
     assert_eq!(
-        user_rollup_repo::seed_historical_user_dirty_days_once(&database)
+        user_rollup::seed_historical_user_dirty_days_once(&database)
             .await
             .unwrap(),
         1
@@ -82,7 +82,7 @@ async fn user_rollup_merges_clean_days_dirty_days_and_partial_boundaries() {
     recompute_scope_day(&database, "app-a", "prod").await;
 
     assert_eq!(
-        user_rollup_repo::unique_users_hybrid(
+        user_rollup::unique_users_hybrid(
             &database,
             Some("app-a"),
             Some("prod"),
@@ -94,7 +94,7 @@ async fn user_rollup_merges_clean_days_dirty_days_and_partial_boundaries() {
         2
     );
 
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &scope,
         &[event(start + 15 * 3_600_000, "evt-4", "user-c")],
@@ -104,7 +104,7 @@ async fn user_rollup_merges_clean_days_dirty_days_and_partial_boundaries() {
 
     // The stored clean set is now stale, but the dirty marker forces an authoritative raw read.
     assert_eq!(
-        user_rollup_repo::unique_users_hybrid(
+        user_rollup::unique_users_hybrid(
             &database,
             Some("app-a"),
             Some("prod"),
@@ -119,7 +119,7 @@ async fn user_rollup_merges_clean_days_dirty_days_and_partial_boundaries() {
     // The first boundary day is only partially included; user-a occurred before noon and must not
     // leak in from the full-day cached set.
     assert_eq!(
-        user_rollup_repo::unique_users_hybrid(
+        user_rollup::unique_users_hybrid(
             &database,
             Some("app-a"),
             Some("prod"),
@@ -132,7 +132,7 @@ async fn user_rollup_merges_clean_days_dirty_days_and_partial_boundaries() {
     );
 
     let next_day = start + 86_400_000;
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &scope,
         &[
@@ -145,7 +145,7 @@ async fn user_rollup_merges_clean_days_dirty_days_and_partial_boundaries() {
 
     // Cross-day union must deduplicate user-b rather than summing daily unique counts.
     assert_eq!(
-        user_rollup_repo::unique_users_hybrid(
+        user_rollup::unique_users_hybrid(
             &database,
             Some("app-a"),
             Some("prod"),
@@ -162,7 +162,7 @@ async fn user_rollup_merges_clean_days_dirty_days_and_partial_boundaries() {
 async fn user_rollup_chunks_large_daily_unique_sets_without_losing_users() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
-    let scope = telemetry_repo::TelemetryScope {
+    let scope = telemetry::TelemetryScope {
         application_id: "app-chunk".into(),
         environment_id: "prod".into(),
     };
@@ -183,13 +183,13 @@ async fn user_rollup_chunks_large_daily_unique_sets_without_losing_users() {
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        telemetry_repo::insert_events(&database, &scope, &events)
+        telemetry::insert_events(&database, &scope, &events)
             .await
             .unwrap(),
         events.len()
     );
     assert_eq!(
-        user_rollup_repo::seed_historical_user_dirty_days_once(&database)
+        user_rollup::seed_historical_user_dirty_days_once(&database)
             .await
             .unwrap(),
         1
@@ -214,7 +214,7 @@ async fn user_rollup_chunks_large_daily_unique_sets_without_losing_users() {
     assert_eq!(chunk_count, 2);
 
     assert_eq!(
-        user_rollup_repo::unique_users_hybrid(
+        user_rollup::unique_users_hybrid(
             &database,
             Some("app-chunk"),
             Some("prod"),
@@ -231,7 +231,7 @@ async fn user_rollup_chunks_large_daily_unique_sets_without_losing_users() {
 async fn user_growth_projection_deduplicates_across_days_and_months() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
-    let scope = telemetry_repo::TelemetryScope {
+    let scope = telemetry::TelemetryScope {
         application_id: "app-growth".into(),
         environment_id: "prod".into(),
     };
@@ -244,7 +244,7 @@ async fn user_growth_projection_deduplicates_across_days_and_months() {
     let september_1 = august_31 + 86_400_000;
     let september_2 = september_1 + 86_400_000;
 
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &scope,
         &[
@@ -258,7 +258,7 @@ async fn user_growth_projection_deduplicates_across_days_and_months() {
     .await
     .unwrap();
     assert_eq!(
-        user_rollup_repo::seed_historical_user_dirty_days_once(&database)
+        user_rollup::seed_historical_user_dirty_days_once(&database)
             .await
             .unwrap(),
         3
@@ -267,7 +267,7 @@ async fn user_growth_projection_deduplicates_across_days_and_months() {
         recompute_scope_day(&database, "app-growth", "prod").await;
     }
 
-    let daily = user_rollup_repo::user_growth_hybrid(
+    let daily = user_rollup::user_growth_hybrid(
         &database,
         Some("app-growth"),
         Some("prod"),
@@ -282,7 +282,7 @@ async fn user_growth_projection_deduplicates_across_days_and_months() {
     assert_eq!((daily[1].new_users, daily[1].cumulative_users, daily[1].active_users), (1, 3, 2));
     assert_eq!((daily[2].new_users, daily[2].cumulative_users, daily[2].active_users), (1, 4, 1));
 
-    let monthly = user_rollup_repo::user_growth_hybrid(
+    let monthly = user_rollup::user_growth_hybrid(
         &database,
         Some("app-growth"),
         Some("prod"),
