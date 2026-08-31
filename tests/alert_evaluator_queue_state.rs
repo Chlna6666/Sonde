@@ -1,8 +1,11 @@
 #![allow(clippy::unwrap_used)]
 
-use sea_orm::{ConnectionTrait, sea_query::{Alias, Expr, Func, Query}};
+use sea_orm::{
+    ConnectionTrait,
+    sea_query::{Alias, Expr, Func, Query},
+};
 use sonde::{
-    database::{self, alert_repo, app_repo, telemetry_repo},
+    database::{self, alerts as alert_store, applications, telemetry},
     domain::{
         alert::{AlertExpression, AlertSource, Comparison},
         telemetry::{Attributes, EventInput},
@@ -14,12 +17,12 @@ async fn setup(consecutive_hits: u16) -> (sea_orm::DatabaseConnection, String) {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
     let (application_id, environment_id) =
-        app_repo::create_application(&database, "Evaluator", "evaluator", None)
+        applications::create_application(&database, "Evaluator", "evaluator", None)
             .await
             .unwrap();
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
-        &telemetry_repo::TelemetryScope {
+        &telemetry::TelemetryScope {
             application_id: application_id.clone(),
             environment_id,
         },
@@ -47,9 +50,9 @@ async fn setup(consecutive_hits: u16) -> (sea_orm::DatabaseConnection, String) {
         filters: Vec::new(),
     };
     let query = serde_json::to_value(expression).unwrap();
-    let rule_id = alert_repo::create_rule(
+    let rule_id = alert_store::create_rule(
         &database,
-        alert_repo::NewRule {
+        alert_store::NewRule {
             application_id: &application_id,
             name: "state machine",
             source_kind: "event_count",
@@ -60,7 +63,7 @@ async fn setup(consecutive_hits: u16) -> (sea_orm::DatabaseConnection, String) {
     )
     .await
     .unwrap();
-    alert_repo::create_channel(
+    alert_store::create_channel(
         &database,
         "queue only",
         "unsupported-test-channel",
@@ -78,7 +81,7 @@ async fn firing_rule_does_not_enqueue_again_inside_cooldown() {
     assert_eq!(alerts::evaluate_all_rules(&database).await.unwrap(), 1);
     assert_eq!(delivery_count(&database).await, 1);
     assert_eq!(
-        alert_repo::get_rule(&database, &rule_id)
+        alert_store::get_rule(&database, &rule_id)
             .await
             .unwrap()
             .unwrap()
@@ -96,7 +99,7 @@ async fn consecutive_hits_only_enqueue_after_threshold_is_reached() {
     assert_eq!(alerts::evaluate_all_rules(&database).await.unwrap(), 1);
     assert_eq!(delivery_count(&database).await, 0);
     assert_eq!(
-        alert_repo::get_rule(&database, &rule_id)
+        alert_store::get_rule(&database, &rule_id)
             .await
             .unwrap()
             .unwrap()
@@ -107,7 +110,7 @@ async fn consecutive_hits_only_enqueue_after_threshold_is_reached() {
     assert_eq!(alerts::evaluate_all_rules(&database).await.unwrap(), 1);
     assert_eq!(delivery_count(&database).await, 1);
     assert_eq!(
-        alert_repo::get_rule(&database, &rule_id)
+        alert_store::get_rule(&database, &rule_id)
             .await
             .unwrap()
             .unwrap()
@@ -120,7 +123,10 @@ async fn delivery_count(database: &sea_orm::DatabaseConnection) -> i64 {
     database
         .query_one(
             &Query::select()
-                .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("total"))
+                .expr_as(
+                    Func::count(Expr::col(Alias::new("id"))),
+                    Alias::new("total"),
+                )
                 .from(Alias::new("alert_deliveries"))
                 .to_owned(),
         )
