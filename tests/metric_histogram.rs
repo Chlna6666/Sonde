@@ -5,7 +5,7 @@ use sea_orm::{
     sea_query::{Alias, Expr, ExprTrait, Query},
 };
 use sonde::{
-    database::{self, explorer_repo, telemetry_repo},
+    database::{self, explorer, telemetry},
     domain::telemetry::{Attributes, HistogramInput, MetricInput, MetricType, ValidateTelemetry},
 };
 
@@ -78,7 +78,7 @@ fn metric_json_keeps_legacy_scalar_shape_and_accepts_aggregate_histograms() {
 async fn histogram_population_survives_storage_and_explorer_projection() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
-    let scope = telemetry_repo::TelemetryScope {
+    let scope = telemetry::TelemetryScope {
         application_id: "app-histogram".into(),
         environment_id: "prod".into(),
     };
@@ -89,7 +89,7 @@ async fn histogram_population_survives_storage_and_explorer_projection() {
         .and_utc()
         .timestamp_millis();
 
-    telemetry_repo::insert_metrics(
+    telemetry::insert_metrics(
         &database,
         &scope,
         &[aggregate_histogram(timestamp), legacy_histogram(timestamp + 1)],
@@ -121,18 +121,9 @@ async fn histogram_population_survives_storage_and_explorer_projection() {
         .unwrap()
         .unwrap();
     assert_eq!(aggregate.try_get::<i64>("", "histogram_count").unwrap(), 6);
-    assert_eq!(
-        aggregate.try_get::<f64>("", "histogram_sum").unwrap(),
-        63.0
-    );
-    assert_eq!(
-        aggregate.try_get::<f64>("", "histogram_min").unwrap(),
-        1.0
-    );
-    assert_eq!(
-        aggregate.try_get::<f64>("", "histogram_max").unwrap(),
-        25.0
-    );
+    assert_eq!(aggregate.try_get::<f64>("", "histogram_sum").unwrap(), 63.0);
+    assert_eq!(aggregate.try_get::<f64>("", "histogram_min").unwrap(), 1.0);
+    assert_eq!(aggregate.try_get::<f64>("", "histogram_max").unwrap(), 25.0);
     assert_eq!(aggregate.try_get::<f64>("", "value").unwrap(), 10.5);
     assert_eq!(
         serde_json::from_str::<Vec<f64>>(
@@ -196,9 +187,9 @@ async fn histogram_population_survives_storage_and_explorer_projection() {
         vec![1]
     );
 
-    let aggregate_page = explorer_repo::metrics(
+    let aggregate_page = explorer::metrics(
         &database,
-        &explorer_repo::ExplorerFilter {
+        &explorer::ExplorerFilter {
             application_id: scope.application_id.clone(),
             environment_id: Some(scope.environment_id.clone()),
             from: None,
@@ -219,9 +210,9 @@ async fn histogram_population_survives_storage_and_explorer_projection() {
     assert_eq!(histogram.explicit_bounds, vec![5.0, 10.0, 20.0]);
     assert_eq!(histogram.bucket_counts, vec![1, 2, 2, 1]);
 
-    let legacy_page = explorer_repo::metrics(
+    let legacy_page = explorer::metrics(
         &database,
-        &explorer_repo::ExplorerFilter {
+        &explorer::ExplorerFilter {
             application_id: scope.application_id,
             environment_id: Some(scope.environment_id),
             from: None,
