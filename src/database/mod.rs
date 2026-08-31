@@ -7,7 +7,7 @@ pub mod applications;
 pub mod auth;
 pub mod auth_state;
 pub mod backup_archive;
-pub mod backup_models;
+mod backup_records;
 pub mod backup_restore;
 pub mod backup_validation;
 pub mod device_query;

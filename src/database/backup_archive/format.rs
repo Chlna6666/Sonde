@@ -13,7 +13,7 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
 };
 
-use crate::database::backup_models::{
+use crate::database::backup_records::{
     BackupAlertRule, BackupApiKey, BackupApplication, BackupAuditLog, BackupDailyAggregate,
     BackupEnvironment, BackupEvent, BackupLog, BackupNotificationChannel, BackupRole,
     BackupRoleBinding, BackupUser,
@@ -203,9 +203,6 @@ pub fn export_full_system_stream(
     database: DatabaseConnection,
 ) -> impl Stream<Item = Result<Vec<u8>, BackupError>> {
     async_stream::try_stream! {
-        // Keep all cursor pages on one logical database snapshot. PostgreSQL defaults to
-        // READ COMMITTED, so long-running backups explicitly request REPEATABLE READ. SQLite's
-        // regular read transaction already pins its snapshot after the first read.
         let transaction = match database.get_database_backend() {
             DbBackend::Postgres | DbBackend::MySql => database
                 .begin_with_config(Some(IsolationLevel::RepeatableRead), Some(AccessMode::ReadOnly))
