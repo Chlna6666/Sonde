@@ -11,7 +11,7 @@ use crate::domain::telemetry::{ErrorInput, ErrorSeverity};
 
 use super::{
     query::{insert_batch, insert_batch_ignore_conflicts},
-    telemetry_repo::TelemetryScope,
+    telemetry::TelemetryScope,
 };
 
 #[derive(Debug)]
@@ -50,7 +50,7 @@ pub async fn insert_error_index(
         let anonymous_id = error
             .anonymous_id
             .as_deref()
-            .map(|value| legacy_anonymous_hash(scope, value));
+            .map(|value| anonymous_hash(scope, value));
         let handled = error.handled.map(|value| if value { 1_i64 } else { 0_i64 });
 
         let group = groups.entry(group_id.clone()).or_insert_with(|| ErrorGroupBatch {
@@ -239,7 +239,7 @@ fn error_group_id(scope: &TelemetryScope, fingerprint: &str) -> String {
     format!("eg_{}", hex::encode(hasher.finalize()))
 }
 
-fn legacy_anonymous_hash(scope: &TelemetryScope, value: &str) -> String {
+fn anonymous_hash(scope: &TelemetryScope, value: &str) -> String {
     let salt = format!("{}:{}", scope.application_id, scope.environment_id);
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
