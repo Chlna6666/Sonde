@@ -30,7 +30,6 @@ async fn sqlite_migration_and_super_admin_creation_are_usable() {
         .expect("query should succeed");
     assert!(owner.is_some(), "owner must be readable after setup");
 
-    // Test lookup by username
     let owner_by_username = auth_store::user_by_identifier(&database, "Super Admin")
         .await
         .expect("query by username should succeed");
@@ -39,7 +38,6 @@ async fn sqlite_migration_and_super_admin_creation_are_usable() {
         "owner must be readable by username"
     );
 
-    // Test repeated/idempotent execution
     auth_store::create_super_admin(
         &database,
         "owner@example.com",
@@ -75,13 +73,11 @@ async fn application_management_and_api_keys_and_stats() {
         .await
         .expect("schema migration should complete");
 
-    // 1. Create application
     let (app_id, env_id) =
         database::applications::create_application(&database, "Demo App", "demo-app", None)
             .await
             .expect("app creation should succeed");
 
-    // 2. Create API key
     let raw_key = "sonde_1234567890abcdef1234567890abcdef";
     let key_hash = hex::encode(sha2::Sha256::digest(raw_key.as_bytes()));
     let key_id = database::applications::create_api_key(
@@ -96,7 +92,6 @@ async fn application_management_and_api_keys_and_stats() {
     .await
     .expect("create api key should succeed");
 
-    // 3. List keys
     let keys = database::applications::list_api_keys(&database, &app_id)
         .await
         .expect("listing keys should succeed");
@@ -104,7 +99,6 @@ async fn application_management_and_api_keys_and_stats() {
     assert_eq!(keys[0].name, "Production Key");
     assert!(keys[0].is_active);
 
-    // 4. Update application
     database::applications::update_application(
         &database,
         &app_id,
@@ -130,7 +124,6 @@ async fn application_management_and_api_keys_and_stats() {
     assert!(apps[0].is_public);
     assert_eq!(apps[0].description.as_deref(), Some("A demo telemetry app"));
 
-    // 5. Revoke key
     let revoked = database::applications::revoke_api_key(&database, &app_id, &key_id)
         .await
         .expect("revoke key should succeed");
@@ -141,7 +134,6 @@ async fn application_management_and_api_keys_and_stats() {
         .expect("list keys should succeed");
     assert!(!keys_after_revoke[0].is_active);
 
-    // 5.1 Test create another key and delete_api_key
     let key2_id = database::applications::create_api_key(
         &database,
         &app_id,
@@ -165,7 +157,6 @@ async fn application_management_and_api_keys_and_stats() {
     assert_eq!(keys_after_del.len(), 1);
     assert_eq!(keys_after_del[0].id, key_id);
 
-    // 5.2 Test delete_revoked_api_keys
     let deleted_revoked_count =
         database::applications::delete_revoked_api_keys(&database, &app_id)
             .await
@@ -174,10 +165,9 @@ async fn application_management_and_api_keys_and_stats() {
 
     let keys_after_clear_revoked = database::applications::list_api_keys(&database, &app_id)
         .await
-        .expect("list keys should succeed");
+        .expect("list apps should succeed");
     assert_eq!(keys_after_clear_revoked.len(), 0);
 
-    // Re-create key for backup test
     let _ = database::applications::create_api_key(
         &database,
         &app_id,
@@ -190,37 +180,34 @@ async fn application_management_and_api_keys_and_stats() {
     .await
     .expect("create api key should succeed");
 
-    // 6. Test application stats query
     let stats = database::stats::application_stats(&database, &app_id, None, Some(30))
         .await
         .expect("application stats query should succeed");
     assert_eq!(stats.overview.total_events, 0);
 
-    // 7. Test Export Single Application
-    let export_payload = database::backup_models::export_single_application(&database, &app_id)
+    let export_payload = database::application_backup::export_single_application(&database, &app_id)
         .await
         .expect("export should succeed")
         .expect("application export payload should exist");
     assert_eq!(export_payload.application.name, "Demo App Renamed");
     assert_eq!(export_payload.api_keys.len(), 1);
+    assert_eq!(
+        export_payload.format_version,
+        database::application_backup::FORMAT_VERSION
+    );
 
-    // 8. Test Import Single Application
-    let imported_app_id =
-        database::backup_models::import_single_application(&database, None, export_payload)
-            .await
-            .expect("import single application should succeed");
+    let imported_app_id = database::application_backup::import_single_application(
+        &database,
+        None,
+        export_payload,
+    )
+    .await
+    .expect("import single application should succeed");
     let apps_after_import = database::applications::list_applications(&database, None, true)
         .await
         .expect("list apps should succeed");
     assert_eq!(apps_after_import.len(), 2);
 
-    // 9. Test Full System Backup
-    let backup_data = database::backup_models::export_full_system(&database)
-        .await
-        .expect("export full system should succeed");
-    assert_eq!(backup_data.applications.len(), 2);
-
-    // 10. Delete application
     database::applications::delete_application(&database, &app_id)
         .await
         .expect("delete application should succeed");

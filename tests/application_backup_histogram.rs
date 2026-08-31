@@ -29,7 +29,7 @@ fn histogram_metric(timestamp: i64) -> MetricInput {
 }
 
 #[tokio::test]
-async fn single_application_json_backup_preserves_histogram_population() {
+async fn single_application_backup_preserves_histogram_population() {
     let source = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&source).await.unwrap();
     let (application_id, environment_id) =
@@ -67,50 +67,8 @@ async fn single_application_json_backup_preserves_histogram_population() {
     assert_histogram_row(&target, &imported_application).await;
 }
 
-#[tokio::test]
-async fn full_system_json_backup_preserves_histogram_population_and_id() {
-    let source = database::connect("sqlite::memory:").await.unwrap();
-    database::migrate(&source).await.unwrap();
-    let (application_id, environment_id) =
-        applications::create_application(&source, "Histogram App", "histogram-app", None)
-            .await
-            .unwrap();
-    telemetry::insert_metrics(
-        &source,
-        &telemetry::TelemetryScope {
-            application_id: application_id.clone(),
-            environment_id,
-        },
-        &[histogram_metric(1_777_680_000_000)],
-    )
-    .await
-    .unwrap();
-    let original_id = metric_id(&source, &application_id).await;
-
-    let backup = application_backup::export_full_system(&source).await.unwrap();
-    assert_eq!(backup.format_version, application_backup::FORMAT_VERSION);
-    assert_eq!(backup.metric_points.len(), 1);
-    assert_eq!(backup.metric_points[0].id, original_id);
-    assert_eq!(
-        backup.metric_points[0]
-            .histogram
-            .as_ref()
-            .unwrap()
-            .bucket_counts,
-        vec![1, 2, 2, 1]
-    );
-
-    let target = database::connect("sqlite::memory:").await.unwrap();
-    database::migrate(&target).await.unwrap();
-    application_backup::restore_full_system(&target, backup)
-        .await
-        .unwrap();
-    assert_eq!(metric_id(&target, &application_id).await, original_id);
-    assert_histogram_row(&target, &application_id).await;
-}
-
 #[test]
-fn scalar_metric_without_histogram_is_still_accepted() {
+fn scalar_metric_without_histogram_is_accepted() {
     let metric: application_backup::ExportedMetricPoint =
         serde_json::from_value(serde_json::json!({
             "environmentId": "prod",
@@ -125,24 +83,6 @@ fn scalar_metric_without_histogram_is_still_accepted() {
         .unwrap();
     assert!(metric.histogram.is_none());
     assert_eq!(metric.value, 0.5);
-}
-
-async fn metric_id(database: &sea_orm::DatabaseConnection, application_id: &str) -> String {
-    database
-        .query_one(
-            &Query::select()
-                .column(Alias::new("id"))
-                .from(Alias::new("metric_points"))
-                .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
-                .and_where(Expr::col(Alias::new("name")).eq("backup.histogram"))
-                .limit(1)
-                .to_owned(),
-        )
-        .await
-        .unwrap()
-        .unwrap()
-        .try_get("", "id")
-        .unwrap()
 }
 
 async fn assert_histogram_row(database: &sea_orm::DatabaseConnection, application_id: &str) {

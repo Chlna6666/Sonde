@@ -1,27 +1,20 @@
-use std::collections::HashMap;
-
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DbErr, QueryResult,
+    ConnectionTrait, DatabaseConnection, DbErr, QueryResult, TransactionTrait,
     sea_query::{Alias, Expr, ExprTrait, Order, Query, Value},
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub use super::application_transfer::{
+    ExportedApiKey, ExportedApplication, ExportedEnvironment, ExportedEvent, ExportedLog,
+};
 use super::{
-    applications,
-    backup_models::{
-        self, BackupAlertRule, BackupApiKey, BackupApplication, BackupAuditLog,
-        BackupDailyAggregate, BackupEnvironment, BackupEvent, BackupLog, BackupNotificationChannel,
-        BackupRole, BackupRoleBinding, BackupUser, ExportedApiKey, ExportedApplication,
-        ExportedEnvironment, ExportedEvent, ExportedLog,
-    },
-    query::{insert_batch, insert_batch_ignore_conflicts},
+    application_transfer::{self, ApplicationTransfer},
+    query::insert_batch,
 };
 
 pub const FORMAT_VERSION: &str = "1.1";
-const LEGACY_FORMAT_VERSION: &str = "1.0";
 const APPLICATION_EXPORT_TYPE: &str = "sonde_application";
-const SYSTEM_BACKUP_TYPE: &str = "sonde_full_backup";
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,23 +46,6 @@ pub struct ExportedMetricPoint {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BackupMetricPoint {
-    pub id: String,
-    pub application_id: String,
-    pub environment_id: String,
-    pub name: String,
-    pub metric_type: String,
-    pub value: f64,
-    pub unit: Option<String>,
-    pub timestamp: i64,
-    pub attributes: String,
-    pub received_at: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub histogram: Option<HistogramBackup>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ExportedTelemetry {
     pub events: Vec<ExportedEvent>,
     pub metric_points: Vec<ExportedMetricPoint>,
@@ -88,58 +64,27 @@ pub struct SingleAppExport {
     pub telemetry: ExportedTelemetry,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FullSystemBackup {
-    pub format_version: String,
-    pub backup_type: String,
-    pub exported_at: i64,
-    pub server_version: String,
-    pub users: Vec<BackupUser>,
-    pub roles: Vec<BackupRole>,
-    pub role_bindings: Vec<BackupRoleBinding>,
-    pub applications: Vec<BackupApplication>,
-    pub environments: Vec<BackupEnvironment>,
-    pub api_keys: Vec<BackupApiKey>,
-    pub alert_rules: Vec<BackupAlertRule>,
-    pub notification_channels: Vec<BackupNotificationChannel>,
-    pub audit_log: Vec<BackupAuditLog>,
-    pub events: Vec<BackupEvent>,
-    pub metric_points: Vec<BackupMetricPoint>,
-    pub logs: Vec<BackupLog>,
-    pub daily_aggregates: Vec<BackupDailyAggregate>,
-}
-
 pub async fn export_single_application(
     database: &DatabaseConnection,
     application_id: &str,
 ) -> Result<Option<SingleAppExport>, DbErr> {
-    let Some(base) = backup_models::export_single_application(database, application_id).await?
+    let Some(base) = application_transfer::export_application(database, application_id).await?
     else {
         return Ok(None);
     };
     let metrics = export_application_metrics(database, application_id).await?;
-    let backup_models::SingleAppExport {
-        export_type,
-        exported_at,
-        application,
-        environments,
-        api_keys,
-        telemetry,
-        ..
-    } = base;
 
     Ok(Some(SingleAppExport {
         format_version: FORMAT_VERSION.into(),
-        export_type,
-        exported_at,
-        application,
-        environments,
-        api_keys,
+        export_type: APPLICATION_EXPORT_TYPE.into(),
+        exported_at: base.exported_at,
+        application: base.application,
+        environments: base.environments,
+        api_keys: base.api_keys,
         telemetry: ExportedTelemetry {
-            events: telemetry.events,
+            events: base.events,
             metric_points: metrics,
-            logs: telemetry.logs,
+            logs: base.logs,
         },
     }))
 }
@@ -149,155 +94,55 @@ pub async fn import_single_application(
     owner_user_id: Option<&str>,
     payload: SingleAppExport,
 ) -> Result<String, DbErr> {
-    validate_format(
-        &payload.format_version,
-        &payload.export_type,
-        APPLICATION_EXPORT_TYPE,
-    )?;
+    validate_format(&payload.format_version, &payload.export_type)?;
 
-    let environment_slugs = payload
-        .environments
-        .iter()
-        .map(|environment| (environment.id.clone(), environment.slug.clone()))
-        .collect::<HashMap<_, _>>();
-    let metrics = payload.telemetry.metric_points;
-    let legacy = backup_models::SingleAppExport {
-        format_version: LEGACY_FORMAT_VERSION.into(),
-        export_type: payload.export_type,
-        exported_at: payload.exported_at,
-        application: payload.application,
-        environments: payload.environments,
-        api_keys: payload.api_keys,
-        telemetry: backup_models::ExportedTelemetry {
-            events: payload.telemetry.events,
-            metric_points: Vec::new(),
-            logs: payload.telemetry.logs,
-        },
-    };
-
-    let new_application_id =
-        backup_models::import_single_application(database, owner_user_id, legacy).await?;
-    if metrics.is_empty() {
-        return Ok(new_application_id);
-    }
-
-    let imported_environments = applications::list_environments(database, &new_application_id).await?;
-    let by_slug = imported_environments
-        .iter()
-        .map(|environment| (environment.slug.as_str(), environment.id.as_str()))
-        .collect::<HashMap<_, _>>();
-    let fallback_environment = imported_environments
-        .first()
-        .map(|environment| environment.id.as_str())
-        .ok_or_else(|| DbErr::Custom("imported application has no environment".into()))?;
-
-    let mut rows = Vec::with_capacity(metrics.len());
-    for metric in metrics {
-        let mapped_environment = environment_slugs
-            .get(&metric.environment_id)
-            .and_then(|slug| by_slug.get(slug.as_str()).copied())
-            .unwrap_or(fallback_environment);
-        rows.push(application_metric_row(
-            &new_application_id,
-            mapped_environment,
-            metric,
-        )?);
-    }
-    insert_batch(database, "metric_points", metric_columns(), rows).await?;
-    Ok(new_application_id)
-}
-
-pub async fn export_full_system(database: &DatabaseConnection) -> Result<FullSystemBackup, DbErr> {
-    let base = backup_models::export_full_system(database).await?;
-    let metrics = export_system_metrics(database).await?;
-    let backup_models::FullSystemBackup {
-        backup_type,
+    let SingleAppExport {
         exported_at,
-        server_version,
-        users,
-        roles,
-        role_bindings,
-        applications,
+        application,
         environments,
         api_keys,
-        alert_rules,
-        notification_channels,
-        audit_log,
-        events,
-        logs,
-        daily_aggregates,
+        telemetry,
         ..
-    } = base;
-
-    Ok(FullSystemBackup {
-        format_version: FORMAT_VERSION.into(),
-        backup_type,
-        exported_at,
-        server_version,
-        users,
-        roles,
-        role_bindings,
-        applications,
-        environments,
-        api_keys,
-        alert_rules,
-        notification_channels,
-        audit_log,
+    } = payload;
+    let ExportedTelemetry {
         events,
-        metric_points: metrics,
+        metric_points,
         logs,
-        daily_aggregates,
-    })
-}
+    } = telemetry;
 
-pub async fn restore_full_system(
-    database: &DatabaseConnection,
-    payload: FullSystemBackup,
-) -> Result<(), DbErr> {
-    validate_format(
-        &payload.format_version,
-        &payload.backup_type,
-        SYSTEM_BACKUP_TYPE,
-    )?;
-    let metrics = payload.metric_points;
-    let legacy = backup_models::FullSystemBackup {
-        format_version: LEGACY_FORMAT_VERSION.into(),
-        backup_type: payload.backup_type,
-        exported_at: payload.exported_at,
-        server_version: payload.server_version,
-        users: payload.users,
-        roles: payload.roles,
-        role_bindings: payload.role_bindings,
-        applications: payload.applications,
-        environments: payload.environments,
-        api_keys: payload.api_keys,
-        alert_rules: payload.alert_rules,
-        notification_channels: payload.notification_channels,
-        audit_log: payload.audit_log,
-        events: payload.events,
-        metric_points: Vec::new(),
-        logs: payload.logs,
-        daily_aggregates: payload.daily_aggregates,
-    };
-    backup_models::restore_full_system(database, legacy).await?;
-
-    if metrics.is_empty() {
-        return Ok(());
-    }
-    let mut rows = Vec::with_capacity(metrics.len());
-    for metric in metrics {
-        rows.push(system_metric_row(metric)?);
-    }
-    insert_batch_ignore_conflicts(
-        database,
-        "metric_points",
-        metric_columns(),
-        rows,
-        "id",
-        "id",
+    let transaction = database.begin().await?;
+    let imported = application_transfer::import_application(
+        &transaction,
+        owner_user_id,
+        ApplicationTransfer {
+            exported_at,
+            application,
+            environments,
+            api_keys,
+            events,
+            logs,
+        },
     )
     .await?;
-    Ok(())
+
+    if !metric_points.is_empty() {
+        let mut rows = Vec::with_capacity(metric_points.len());
+        for metric in metric_points {
+            let environment_id = imported
+                .environment_ids
+                .get(&metric.environment_id)
+                .unwrap_or(&imported.fallback_environment_id);
+            rows.push(application_metric_row(
+                &imported.id,
+                environment_id,
+                metric,
+            )?);
+        }
+        insert_batch(&transaction, "metric_points", metric_columns(), rows).await?;
+    }
+
+    transaction.commit().await?;
+    Ok(imported.id)
 }
 
 async fn export_application_metrics(
@@ -323,22 +168,6 @@ async fn export_application_metrics(
         .collect()
 }
 
-async fn export_system_metrics(
-    database: &DatabaseConnection,
-) -> Result<Vec<BackupMetricPoint>, DbErr> {
-    let query = Query::select()
-        .columns(metric_columns().iter().map(|column| Alias::new(*column)))
-        .from(Alias::new("metric_points"))
-        .order_by(Alias::new("id"), Order::Asc)
-        .to_owned();
-    database
-        .query_all(&query)
-        .await?
-        .into_iter()
-        .map(map_system_metric)
-        .collect()
-}
-
 fn map_application_metric(row: QueryResult) -> Result<ExportedMetricPoint, DbErr> {
     let attributes_raw: String = row.try_get("", "attributes")?;
     let attributes = serde_json::from_str(&attributes_raw)
@@ -351,22 +180,6 @@ fn map_application_metric(row: QueryResult) -> Result<ExportedMetricPoint, DbErr
         unit: row.try_get("", "unit")?,
         timestamp: row.try_get("", "timestamp")?,
         attributes,
-        received_at: row.try_get("", "received_at")?,
-        histogram: histogram_from_row(&row)?,
-    })
-}
-
-fn map_system_metric(row: QueryResult) -> Result<BackupMetricPoint, DbErr> {
-    Ok(BackupMetricPoint {
-        id: row.try_get("", "id")?,
-        application_id: row.try_get("", "application_id")?,
-        environment_id: row.try_get("", "environment_id")?,
-        name: row.try_get("", "name")?,
-        metric_type: row.try_get("", "metric_type")?,
-        value: row.try_get("", "value")?,
-        unit: row.try_get("", "unit")?,
-        timestamp: row.try_get("", "timestamp")?,
-        attributes: row.try_get("", "attributes")?,
         received_at: row.try_get("", "received_at")?,
         histogram: histogram_from_row(&row)?,
     })
@@ -403,68 +216,25 @@ fn application_metric_row(
     environment_id: &str,
     metric: ExportedMetricPoint,
 ) -> Result<Vec<Value>, DbErr> {
-    metric_row(
-        Uuid::now_v7().to_string(),
-        application_id.to_owned(),
-        environment_id.to_owned(),
-        metric.name,
-        metric.metric_type,
-        metric.value,
-        metric.unit,
-        metric.timestamp,
-        serde_json::to_string(&metric.attributes).map_err(|error| {
-            DbErr::Custom(format!("metric attributes serialization failed: {error}"))
-        })?,
-        metric.received_at,
-        metric.histogram,
-    )
-}
-
-fn system_metric_row(metric: BackupMetricPoint) -> Result<Vec<Value>, DbErr> {
-    metric_row(
-        metric.id,
-        metric.application_id,
-        metric.environment_id,
-        metric.name,
-        metric.metric_type,
-        metric.value,
-        metric.unit,
-        metric.timestamp,
-        metric.attributes,
-        metric.received_at,
-        metric.histogram,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn metric_row(
-    id: String,
-    application_id: String,
-    environment_id: String,
-    name: String,
-    metric_type: String,
-    value: f64,
-    unit: Option<String>,
-    timestamp: i64,
-    attributes: String,
-    received_at: i64,
-    histogram: Option<HistogramBackup>,
-) -> Result<Vec<Value>, DbErr> {
-    if !value.is_finite() {
+    if !metric.value.is_finite() {
         return Err(DbErr::Custom("metric value must be finite".into()));
     }
-    let histogram_values = histogram_values(histogram.as_ref())?;
+    let histogram_values = histogram_values(metric.histogram.as_ref())?;
     let mut row = vec![
-        id.into(),
-        application_id.into(),
-        environment_id.into(),
-        name.into(),
-        metric_type.into(),
-        value.into(),
-        unit.map(Into::into).unwrap_or(Value::String(None)),
-        timestamp.into(),
-        attributes.into(),
-        received_at.into(),
+        Uuid::now_v7().to_string().into(),
+        application_id.to_owned().into(),
+        environment_id.to_owned().into(),
+        metric.name.into(),
+        metric.metric_type.into(),
+        metric.value.into(),
+        Value::from(metric.unit),
+        metric.timestamp.into(),
+        serde_json::to_string(&metric.attributes)
+            .map_err(|error| {
+                DbErr::Custom(format!("metric attributes serialization failed: {error}"))
+            })?
+            .into(),
+        metric.received_at.into(),
     ];
     row.extend(histogram_values);
     Ok(row)
@@ -486,9 +256,9 @@ fn histogram_values(histogram: Option<&HistogramBackup>) -> Result<Vec<Value>, D
         .map_err(|_| DbErr::Custom("histogram count exceeds database range".into()))?;
     Ok(vec![
         count.into(),
-        histogram.sum.map(Into::into).unwrap_or(Value::Double(None)),
-        histogram.min.map(Into::into).unwrap_or(Value::Double(None)),
-        histogram.max.map(Into::into).unwrap_or(Value::Double(None)),
+        Value::from(histogram.sum),
+        Value::from(histogram.min),
+        Value::from(histogram.max),
         serde_json::to_string(&histogram.explicit_bounds)
             .map_err(|error| DbErr::Custom(error.to_string()))?
             .into(),
@@ -545,15 +315,15 @@ fn validate_histogram(histogram: &HistogramBackup) -> Result<(), DbErr> {
     Ok(())
 }
 
-fn validate_format(version: &str, actual_type: &str, expected_type: &str) -> Result<(), DbErr> {
-    if !matches!(version, FORMAT_VERSION | LEGACY_FORMAT_VERSION) {
+fn validate_format(version: &str, export_type: &str) -> Result<(), DbErr> {
+    if version != FORMAT_VERSION {
         return Err(DbErr::Custom(format!(
-            "unsupported backup format version {version}"
+            "unsupported application backup format version {version}"
         )));
     }
-    if actual_type != expected_type {
+    if export_type != APPLICATION_EXPORT_TYPE {
         return Err(DbErr::Custom(format!(
-            "unexpected backup type {actual_type}"
+            "unexpected application backup type {export_type}"
         )));
     }
     Ok(())
@@ -561,7 +331,6 @@ fn validate_format(version: &str, actual_type: &str, expected_type: &str) -> Res
 
 fn application_metric_select_columns() -> &'static [&'static str] {
     &[
-        "id",
         "environment_id",
         "name",
         "metric_type",
