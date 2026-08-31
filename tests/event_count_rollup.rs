@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use sonde::{
-    database::{self, rollup_repo, telemetry_count_repo, telemetry_repo},
+    database::{self, rollups, telemetry, telemetry_count},
     domain::telemetry::{Attributes, EventInput},
 };
 
@@ -21,14 +21,14 @@ fn event(timestamp: i64, key: &str) -> EventInput {
 
 async fn flush_daily_rollups(database: &sea_orm::DatabaseConnection) {
     loop {
-        let dirty = rollup_repo::list_dirty_days(database, 128, i64::MAX)
+        let dirty = rollups::list_dirty_days(database, 128, i64::MAX)
             .await
             .unwrap();
         if dirty.is_empty() {
             break;
         }
         for item in dirty {
-            let _ = rollup_repo::recompute_claimed_day(database, item)
+            let _ = rollups::recompute_claimed_day(database, item)
                 .await
                 .unwrap();
         }
@@ -42,9 +42,9 @@ async fn event_count(
     since: Option<i64>,
     until: Option<i64>,
 ) -> u64 {
-    telemetry_count_repo::count_hybrid(
+    telemetry_count::count_hybrid(
         database,
-        telemetry_count_repo::RollupCountKind::Events,
+        telemetry_count::RollupCountKind::Events,
         application_id,
         environment_id,
         since,
@@ -59,15 +59,15 @@ async fn event_count_hybrid_matches_exact_windows_and_dirty_fallback() {
     let database = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&database).await.unwrap();
 
-    let app_a_prod = telemetry_repo::TelemetryScope {
+    let app_a_prod = telemetry::TelemetryScope {
         application_id: "app-a".into(),
         environment_id: "prod".into(),
     };
-    let app_a_beta = telemetry_repo::TelemetryScope {
+    let app_a_beta = telemetry::TelemetryScope {
         application_id: "app-a".into(),
         environment_id: "beta".into(),
     };
-    let app_b_prod = telemetry_repo::TelemetryScope {
+    let app_b_prod = telemetry::TelemetryScope {
         application_id: "app-b".into(),
         environment_id: "prod".into(),
     };
@@ -80,7 +80,7 @@ async fn event_count_hybrid_matches_exact_windows_and_dirty_fallback() {
     let day2 = day1 + 86_400_000;
     let day3 = day2 + 86_400_000;
 
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &app_a_prod,
         &[
@@ -92,14 +92,14 @@ async fn event_count_hybrid_matches_exact_windows_and_dirty_fallback() {
     )
     .await
     .unwrap();
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &app_a_beta,
         &[event(day2 + 2_000, "ab1")],
     )
     .await
     .unwrap();
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &app_b_prod,
         &[event(day1 + 3_000, "b1"), event(day2 + 3_000, "b2")],
@@ -107,7 +107,7 @@ async fn event_count_hybrid_matches_exact_windows_and_dirty_fallback() {
     .await
     .unwrap();
 
-    rollup_repo::seed_historical_dirty_days_once(&database)
+    rollups::seed_historical_dirty_days_once(&database)
         .await
         .unwrap();
     flush_daily_rollups(&database).await;
@@ -127,9 +127,11 @@ async fn event_count_hybrid_matches_exact_windows_and_dirty_fallback() {
         event_count(&database, Some("app-a"), None, Some(day1), Some(day3)).await,
         5
     );
-    assert_eq!(event_count(&database, None, None, Some(day1), Some(day3)).await, 7);
+    assert_eq!(
+        event_count(&database, None, None, Some(day1), Some(day3)).await,
+        7
+    );
 
-    // Both boundaries are partial. Only a2 and a3 fall inside this exact interval.
     assert_eq!(
         event_count(
             &database,
@@ -142,9 +144,7 @@ async fn event_count_hybrid_matches_exact_windows_and_dirty_fallback() {
         2
     );
 
-    // A fresh event makes the day dirty. The cached rollup is stale, but the hybrid result must be
-    // authoritative immediately without waiting for the background worker.
-    telemetry_repo::insert_events(
+    telemetry::insert_events(
         &database,
         &app_a_prod,
         &[event(day2 + 50_000, "a5")],
@@ -162,5 +162,8 @@ async fn event_count_hybrid_matches_exact_windows_and_dirty_fallback() {
         .await,
         5
     );
-    assert_eq!(event_count(&database, None, None, Some(day1), Some(day3)).await, 8);
+    assert_eq!(
+        event_count(&database, None, None, Some(day1), Some(day3)).await,
+        8
+    );
 }
