@@ -3,10 +3,10 @@ use tracing::warn;
 
 use crate::{
     database::{
-        device_risk_repo,
-        device_state_repo::{self, DeviceObservation, DeviceTelemetryKind, TimedDimension},
-        ingest_auth_repo, ingest_nonce_repo,
-        telemetry_repo::TelemetryScope,
+        device_risk,
+        device_state::{self, DeviceObservation, DeviceTelemetryKind, TimedDimension},
+        ingest_auth, ingest_nonce,
+        telemetry::TelemetryScope,
     },
     domain::telemetry::{
         BatchReceipt, ErrorInput, EventInput, LogInput, MAX_BATCH_ITEMS, MetricInput, RejectedItem,
@@ -140,7 +140,7 @@ pub async fn issue_token(
     let device_id = validate_device_id(&body.device_id)?.to_owned();
     let raw_key = request.raw_key.ok_or(AppError::Unauthorized)?;
     let hash = hex::encode(Sha256::digest(raw_key.as_bytes()));
-    let context = ingest_auth_repo::api_key_context(
+    let context = ingest_auth::api_key_context(
         &installed.database,
         &hash,
         chrono::Utc::now().timestamp_millis(),
@@ -162,7 +162,7 @@ pub async fn issue_token(
 
     let salt = format!("{}:{}", context.application_id, context.environment_id);
     let device_hash = anonymous_hash(&device_id, &salt);
-    let risk_score = device_risk_repo::risk_score_for_device(
+    let risk_score = device_risk::risk_score_for_device(
         &installed.database,
         &context.application_id,
         &context.environment_id,
@@ -292,7 +292,7 @@ async fn signed_scope(
         signature,
     )?;
 
-    if !ingest_nonce_repo::record_once(
+    if !ingest_nonce::record_once(
         &installed.database,
         &claims.token_id,
         nonce,
@@ -305,7 +305,7 @@ async fn signed_scope(
             &format!("{}:{}", claims.application_id, claims.environment_id),
         );
         let now = chrono::Utc::now().timestamp_millis();
-        if let Err(error) = device_risk_repo::record_replay_detected(
+        if let Err(error) = device_risk::record_replay_detected(
             &installed.database,
             &claims.application_id,
             &claims.environment_id,
@@ -462,7 +462,7 @@ async fn observe_signed_device(
     };
     let salt = format!("{}:{}", scope.application_id, scope.environment_id);
     let device_hash = anonymous_hash(scope.signed_device_id(), &salt);
-    if let Err(error) = device_state_repo::observe(
+    if let Err(error) = device_state::observe(
         &installed.database,
         storage_scope,
         &device_hash,
@@ -759,7 +759,7 @@ pub(crate) fn anonymous_hash(value: &str, salt: &str) -> String {
 mod tests {
     use super::{IngestScope, bind_event_device, event_observation, simple_observation};
     use crate::{
-        database::device_state_repo::DeviceTelemetryKind,
+        database::device_state::DeviceTelemetryKind,
         domain::telemetry::EventInput,
         services::ingest_abuse::RiskTier,
     };
