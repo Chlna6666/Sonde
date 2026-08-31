@@ -82,7 +82,7 @@ pub(super) async fn import_rows(
     installed: &InstalledState,
     scope: &telemetry::TelemetryScope,
     application_id: &str,
-    rows: Vec<super::parser::LegacyEventRow>,
+    rows: Vec<super::parser::D1EventRow>,
     initial_duplicates: i64,
 ) -> Result<(i64, i64), AppError> {
     let mut inserted = 0_i64;
@@ -99,7 +99,7 @@ pub(super) async fn import_rows(
     Ok((inserted, deduped))
 }
 
-fn migrated_event(row: super::parser::LegacyEventRow) -> EventInput {
+fn migrated_event(row: super::parser::D1EventRow) -> EventInput {
     let mut attributes = BTreeMap::new();
     attributes.insert(
         "migration.source_day".into(),
