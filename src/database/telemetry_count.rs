@@ -6,7 +6,7 @@ use sea_orm::{
     sea_query::{Alias, Expr, ExprTrait, Func, Order, Query, SelectStatement, SimpleExpr},
 };
 
-use super::{log_error_rollup_repo, rollup_repo};
+use super::{log_error_rollup, rollups};
 
 const GLOBAL_ENVIRONMENT: &str = "*";
 const MAX_DIRTY_DAY_BINDS: usize = 400;
@@ -46,10 +46,10 @@ impl RollupCountKind {
 
     fn source_mask(self) -> i64 {
         match self {
-            Self::Events => rollup_repo::DIRTY_SOURCE_EVENT,
-            Self::Metrics => rollup_repo::DIRTY_SOURCE_METRIC,
-            Self::Logs => rollup_repo::DIRTY_SOURCE_LOG,
-            Self::ErrorLogs => log_error_rollup_repo::DIRTY_SOURCE_LOG_ERROR,
+            Self::Events => rollups::DIRTY_SOURCE_EVENT,
+            Self::Metrics => rollups::DIRTY_SOURCE_METRIC,
+            Self::Logs => rollups::DIRTY_SOURCE_LOG,
+            Self::ErrorLogs => log_error_rollup::DIRTY_SOURCE_LOG_ERROR,
         }
     }
 
@@ -157,9 +157,9 @@ async fn backfill_ready(
     kind: RollupCountKind,
 ) -> Result<bool, DbErr> {
     match kind {
-        RollupCountKind::ErrorLogs => log_error_rollup_repo::backfill_seeded(database).await,
+        RollupCountKind::ErrorLogs => log_error_rollup::backfill_seeded(database).await,
         RollupCountKind::Events | RollupCountKind::Metrics | RollupCountKind::Logs => {
-            rollup_repo::rollup_backfill_seeded(database).await
+            rollups::rollup_backfill_seeded(database).await
         }
     }
 }
@@ -179,7 +179,7 @@ async fn replace_dirty_days(
         .column(Alias::new("day"))
         .from(Alias::new("telemetry_dirty_days"))
         .and_where(Expr::col(Alias::new("environment_id")).eq(dirty_environment))
-        .and_where(rollup_repo::dirty_source_condition(kind.source_mask()))
+        .and_where(rollups::dirty_source_condition(kind.source_mask()))
         .distinct()
         .limit((MAX_DIRTY_DAY_BINDS + 1) as u64);
     if let Some(application_id) = application_id {
@@ -282,7 +282,7 @@ async fn replace_partial_boundaries(
             application_id,
             environment_id,
             Some(since),
-            Some(until.map_or(day_end, |value| value.min(day_end))),
+            Some(until.map_or(day_end, |value| std::cmp::min(value, day_end))),
         )
         .await?;
         replace_day(counts, day, count);
@@ -299,7 +299,7 @@ async fn replace_partial_boundaries(
             kind,
             application_id,
             environment_id,
-            Some(since.map_or(day_start, |value| value.max(day_start))),
+            Some(since.map_or(day_start, |value| std::cmp::max(value, day_start))),
             Some(until),
         )
         .await?;
@@ -337,10 +337,11 @@ async fn raw_count(
     }
     kind.apply_raw_filter(&mut query);
     let row = database.query_one(&query).await?;
-    Ok(row
-        .and_then(|row| row.try_get::<i64>("", "total").ok())
-        .unwrap_or(0)
-        .max(0) as u64)
+    Ok(std::cmp::max(
+        row.and_then(|row| row.try_get::<i64>("", "total").ok())
+            .unwrap_or(0),
+        0,
+    ) as u64)
 }
 
 fn raw_day_expression(database: &DatabaseConnection, kind: RollupCountKind) -> SimpleExpr {
@@ -391,7 +392,7 @@ fn next_day_timestamp(day: &str) -> Option<i64> {
 }
 
 fn positive_u64(value: i64) -> u64 {
-    value.max(0) as u64
+    std::cmp::max(value, 0) as u64
 }
 
 #[cfg(test)]
