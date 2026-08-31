@@ -1,5 +1,5 @@
 use crate::{
-    database::stats_repo,
+    database::stats,
     error::AppError,
     services::authentication::AuthenticatedUser,
     state::InstalledState,
@@ -31,7 +31,7 @@ pub async fn overview(
 ) -> Result<Overview, AppError> {
     user.require("telemetry.read", None)?;
     let days = validate_days(days)?;
-    Ok(map_overview(stats_repo::overview(&installed.database, days).await?))
+    Ok(map_overview(stats::overview(&installed.database, days).await?))
 }
 
 pub async fn application_stats(
@@ -61,12 +61,11 @@ async fn query_application_stats(
 ) -> Result<AppTelemetryStats, AppError> {
     let days = validate_days(days)?;
     Ok(map_application_stats(
-        stats_repo::application_stats(&installed.database, application_id, environment_id, days)
-            .await?,
+        stats::application_stats(&installed.database, application_id, environment_id, days).await?,
     ))
 }
 
-fn map_overview(record: stats_repo::Overview) -> Overview {
+fn map_overview(record: stats::Overview) -> Overview {
     Overview {
         applications: record.applications,
         events_24h: record.events_24h,
@@ -113,7 +112,7 @@ fn map_overview(record: stats_repo::Overview) -> Overview {
     }
 }
 
-fn map_application_stats(record: stats_repo::AppTelemetryStats) -> AppTelemetryStats {
+fn map_application_stats(record: stats::AppTelemetryStats) -> AppTelemetryStats {
     AppTelemetryStats {
         overview: map_app_overview(record.overview),
         growth: map_growth(record.growth),
@@ -161,7 +160,7 @@ fn map_application_stats(record: stats_repo::AppTelemetryStats) -> AppTelemetryS
     }
 }
 
-fn map_app_overview(record: stats_repo::AppStatsOverview) -> AppStatsOverview {
+fn map_app_overview(record: stats::AppStatsOverview) -> AppStatsOverview {
     AppStatsOverview {
         total_events: record.total_events,
         active_users: record.active_users,
@@ -174,7 +173,7 @@ fn map_app_overview(record: stats_repo::AppStatsOverview) -> AppStatsOverview {
     }
 }
 
-fn map_growth(record: stats_repo::GrowthMetrics) -> GrowthMetrics {
+fn map_growth(record: stats::GrowthMetrics) -> GrowthMetrics {
     GrowthMetrics {
         events_growth_pct: record.events_growth_pct,
         users_growth_pct: record.users_growth_pct,
@@ -183,7 +182,7 @@ fn map_growth(record: stats_repo::GrowthMetrics) -> GrowthMetrics {
     }
 }
 
-fn map_trend(record: stats_repo::DailyTrendPoint) -> DailyTrendPoint {
+fn map_trend(record: stats::DailyTrendPoint) -> DailyTrendPoint {
     DailyTrendPoint {
         day: record.day,
         events: record.events,
@@ -191,7 +190,7 @@ fn map_trend(record: stats_repo::DailyTrendPoint) -> DailyTrendPoint {
     }
 }
 
-fn map_user_growth(record: stats_repo::UserGrowthPoint) -> UserGrowthPoint {
+fn map_user_growth(record: stats::UserGrowthPoint) -> UserGrowthPoint {
     UserGrowthPoint {
         bucket: record.bucket,
         new_users: record.new_users,
@@ -200,7 +199,7 @@ fn map_user_growth(record: stats_repo::UserGrowthPoint) -> UserGrowthPoint {
     }
 }
 
-fn map_version_timeline(record: stats_repo::VersionTimelinePoint) -> VersionTimelinePoint {
+fn map_version_timeline(record: stats::VersionTimelinePoint) -> VersionTimelinePoint {
     VersionTimelinePoint {
         bucket: record.bucket,
         total_events: record.total_events,
@@ -208,7 +207,7 @@ fn map_version_timeline(record: stats_repo::VersionTimelinePoint) -> VersionTime
     }
 }
 
-fn map_version_share(record: stats_repo::VersionShare) -> VersionShare {
+fn map_version_share(record: stats::VersionShare) -> VersionShare {
     VersionShare {
         version: record.version,
         count: record.count,
@@ -216,7 +215,7 @@ fn map_version_share(record: stats_repo::VersionShare) -> VersionShare {
     }
 }
 
-fn map_version_series(record: stats_repo::VersionSeries) -> VersionSeries {
+fn map_version_series(record: stats::VersionSeries) -> VersionSeries {
     VersionSeries {
         version: record.version,
         total_count: record.total_count,
@@ -228,14 +227,14 @@ fn map_version_series(record: stats_repo::VersionSeries) -> VersionSeries {
     }
 }
 
-fn map_version_series_point(record: stats_repo::VersionSeriesPoint) -> VersionSeriesPoint {
+fn map_version_series_point(record: stats::VersionSeriesPoint) -> VersionSeriesPoint {
     VersionSeriesPoint {
         day: record.day,
         count: record.count,
     }
 }
 
-fn map_distribution(record: stats_repo::DistributionItem) -> DistributionItem {
+fn map_distribution(record: stats::DistributionItem) -> DistributionItem {
     DistributionItem {
         name: record.name,
         count: record.count,
