@@ -5,7 +5,7 @@ use sea_orm::{
 use tracing::{info, warn};
 
 use crate::database::{
-    first_seen_repo, log_error_rollup_repo, rollup_repo, telemetry_repo::TelemetryScope,
+    auth_state, first_seen, log_error_rollup, rollups, telemetry::TelemetryScope,
 };
 
 /// Each deleted id becomes one bind variable in the follow-up `IN (...)` statement. Keep this
@@ -143,19 +143,18 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
         // event/user/dimension scans after a metric-only or log-only retention change.
         let mut source_mask = 0_i64;
         if events_deleted > 0 {
-            source_mask |= rollup_repo::DIRTY_SOURCE_EVENT;
+            source_mask |= rollups::DIRTY_SOURCE_EVENT;
         }
         if metrics_deleted > 0 {
-            source_mask |= rollup_repo::DIRTY_SOURCE_METRIC;
+            source_mask |= rollups::DIRTY_SOURCE_METRIC;
         }
         if logs_deleted > 0 {
             // Retention deletes logs without decoding severity first. The deleted subset may contain
             // error/fatal rows, so conservatively repair both the total-log and ErrorLogs rollups.
-            source_mask |=
-                rollup_repo::DIRTY_SOURCE_LOG | log_error_rollup_repo::DIRTY_SOURCE_LOG_ERROR;
+            source_mask |= rollups::DIRTY_SOURCE_LOG | log_error_rollup::DIRTY_SOURCE_LOG_ERROR;
         }
         if error_occurrences_deleted > 0 {
-            source_mask |= rollup_repo::DIRTY_SOURCE_ERROR;
+            source_mask |= rollups::DIRTY_SOURCE_ERROR;
         }
         if source_mask != 0 {
             mark_retention_boundary_dirty(database, &app_id, cutoff, source_mask).await?;
@@ -175,10 +174,10 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
     // Rebuild asynchronously from the remaining authoritative rows instead of preserving deleted
     // user history past the configured retention boundary.
     if first_seen_needs_rebuild {
-        first_seen_repo::invalidate(database).await?;
+        first_seen::invalidate(database).await?;
     }
 
-    crate::database::auth_state_repo::cleanup_expired(database).await?;
+    auth_state::cleanup_expired(database).await?;
 
     if report.apps_processed > 0 {
         info!(
@@ -217,8 +216,7 @@ async fn mark_retention_boundary_dirty(
             application_id: application_id.to_owned(),
             environment_id: row.try_get("", "id")?,
         };
-        rollup_repo::mark_dirty_timestamps_for_source(database, &scope, source_mask, [cutoff])
-            .await?;
+        rollups::mark_dirty_timestamps_for_source(database, &scope, source_mask, [cutoff]).await?;
     }
     Ok(())
 }
