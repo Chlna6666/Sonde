@@ -3,7 +3,7 @@ use sea_orm::{
     sea_query::{Alias, Expr, ExprTrait, Func, Query},
 };
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 fn time_bucket_expr(backend: DbBackend, days: Option<u32>) -> String {
     match backend {
@@ -146,135 +146,32 @@ pub struct AppTelemetryStats {
     pub build_distribution: Vec<DistributionItem>,
 }
 
-pub async fn overview(
-    database: &DatabaseConnection,
-    days: Option<u32>,
-) -> Result<Overview, DbErr> {
+pub async fn overview(database: &DatabaseConnection, days: Option<u32>) -> Result<Overview, DbErr> {
     let now = chrono::Utc::now().timestamp_millis();
     let since_24h = now - 86_400_000;
     let since_7d = now - 7 * 86_400_000;
     let since_30d = now - 30 * 86_400_000;
 
     let applications = count(database, "applications", None).await?;
-    let events_24h = crate::database::telemetry_count::count_hybrid(
-        database,
-        crate::database::telemetry_count::RollupCountKind::Events,
-        None,
-        None,
-        Some(since_24h),
-        None,
-    )
-    .await?;
-    let metrics_24h = crate::database::telemetry_count::count_hybrid(
-        database,
-        crate::database::telemetry_count::RollupCountKind::Metrics,
-        None,
-        None,
-        Some(since_24h),
-        None,
-    )
-    .await?;
-    let logs_24h = crate::database::telemetry_count::count_hybrid(
-        database,
-        crate::database::telemetry_count::RollupCountKind::Logs,
-        None,
-        None,
-        Some(since_24h),
-        None,
-    )
-    .await?;
-    let errors_24h = crate::database::telemetry_count::count_hybrid(
-        database,
-        crate::database::telemetry_count::RollupCountKind::ErrorLogs,
-        None,
-        None,
-        Some(since_24h),
-        None,
-    )
-    .await?;
-    let active_users_24h = distinct_users(database, since_24h, None, None).await?;
+    let events_24h = telemetry_count(database, crate::database::telemetry_count::RollupCountKind::Events, None, None, Some(since_24h), None).await?;
+    let metrics_24h = telemetry_count(database, crate::database::telemetry_count::RollupCountKind::Metrics, None, None, Some(since_24h), None).await?;
+    let logs_24h = telemetry_count(database, crate::database::telemetry_count::RollupCountKind::Logs, None, None, Some(since_24h), None).await?;
+    let errors_24h = telemetry_count(database, crate::database::telemetry_count::RollupCountKind::ErrorLogs, None, None, Some(since_24h), None).await?;
 
+    let active_users_24h = distinct_users(database, since_24h, None, None).await?;
     let total_users = count_distinct_users(database, None, None, None).await?;
     let dau = active_users_24h;
     let wau = distinct_users(database, since_7d, None, None).await?;
     let mau = distinct_users(database, since_30d, None, None).await?;
 
     let bucket_expr = time_bucket_expr(database.get_database_backend(), days);
-    let (since_ts, prev_since_ts, prev_until_ts) = match days {
-        Some(1) => (
-            Some(now - 86_400_000),
-            Some(now - 2 * 86_400_000),
-            Some(now - 86_400_000),
-        ),
-        Some(7) => (
-            Some(now - 7 * 86_400_000),
-            Some(now - 14 * 86_400_000),
-            Some(now - 7 * 86_400_000),
-        ),
-        Some(30) => (
-            Some(now - 30 * 86_400_000),
-            Some(now - 60 * 86_400_000),
-            Some(now - 30 * 86_400_000),
-        ),
-        Some(365) => (
-            Some(now - 365 * 86_400_000),
-            Some(now - 2 * 365 * 86_400_000),
-            Some(now - 365 * 86_400_000),
-        ),
-        Some(d) => (
-            Some(now - d as i64 * 86_400_000),
-            Some(now - 2 * d as i64 * 86_400_000),
-            Some(now - d as i64 * 86_400_000),
-        ),
-        None => (None, None, None),
-    };
-
+    let (since_ts, prev_since_ts, prev_until_ts) = statistics_window(now, days);
     let growth = compute_growth(database, None, None, since_ts, prev_since_ts, prev_until_ts).await?;
+    let user_growth = compute_user_growth(database, None, None, since_ts, days).await?;
+    let event_trend = event_trend(database, None, None, days, since_ts, &bucket_expr).await?;
+    let trend = merge_activity_trend(event_trend, &user_growth);
 
-    let trend = if let Some(points) =
-        crate::database::trends::global_daily_hybrid(database, days, since_ts).await?
-    {
-        points
-            .into_iter()
-            .map(|point| DailyTrendPoint {
-                day: point.day,
-                events: point.events,
-                users: point.users,
-            })
-            .collect()
-    } else {
-        let mut trend_query = Query::select();
-        trend_query
-            .expr_as(Expr::cust(bucket_expr.to_string()), Alias::new("bucket_time"))
-            .expr_as(
-                Func::count(Expr::col(Alias::new("id"))),
-                Alias::new("events"),
-            )
-            .expr_as(
-                Expr::cust("COUNT(DISTINCT anonymous_id)"),
-                Alias::new("users"),
-            )
-            .from(Alias::new("events"));
-        if let Some(since) = since_ts {
-            trend_query.and_where(Expr::col(Alias::new("timestamp")).gte(since));
-        }
-        trend_query
-            .group_by_col(Alias::new("bucket_time"))
-            .order_by(Alias::new("bucket_time"), sea_orm::sea_query::Order::Asc);
-
-        let trend_rows = database.query_all(&trend_query).await?;
-        let mut trend = Vec::with_capacity(trend_rows.len());
-        for row in trend_rows {
-            trend.push(DailyTrendPoint {
-                day: row.try_get("", "bucket_time")?,
-                events: std::cmp::max(row.try_get::<i64>("", "events").unwrap_or(0), 0) as u64,
-                users: std::cmp::max(row.try_get::<i64>("", "users").unwrap_or(0), 0) as u64,
-            });
-        }
-        trend
-    };
-
-    let total_events = crate::database::telemetry_count::count_hybrid(
+    let total_events = telemetry_count(
         database,
         crate::database::telemetry_count::RollupCountKind::Events,
         None,
@@ -283,7 +180,6 @@ pub async fn overview(
         None,
     )
     .await?;
-    let user_growth = compute_user_growth(database, None, None, since_ts, days, &bucket_expr).await?;
     let version_timeline = compute_version_timeline(database, None, None, since_ts, &bucket_expr).await?;
     let version_series = compute_version_series(database, None, None, since_ts, &bucket_expr).await?;
 
@@ -297,18 +193,9 @@ pub async fn overview(
     .await?;
     let (os_families, operating_systems, build_distribution) = if let Some(points) = os_dimension {
         (
-            distribution_items(
-                crate::database::dimension_rollup::aggregate_os_families(&points),
-                usize::MAX,
-            ),
-            distribution_items(
-                crate::database::dimension_rollup::aggregate_dimension(&points),
-                50,
-            ),
-            distribution_items(
-                crate::database::dimension_rollup::aggregate_os_builds(&points),
-                100,
-            ),
+            distribution_items(crate::database::dimension_rollup::aggregate_os_families(&points), usize::MAX),
+            distribution_items(crate::database::dimension_rollup::aggregate_dimension(&points), 50),
+            distribution_items(crate::database::dimension_rollup::aggregate_os_builds(&points), 100),
         )
     } else {
         (
@@ -340,47 +227,6 @@ pub async fn overview(
     })
 }
 
-async fn count(
-    database: &DatabaseConnection,
-    table: &str,
-    since: Option<(&str, i64)>,
-) -> Result<u64, DbErr> {
-    let mut query = Query::select();
-    query
-        .expr_as(
-            Func::count(Expr::col(Alias::new("id"))),
-            Alias::new("total"),
-        )
-        .from(Alias::new(table));
-    if let Some((column, value)) = since {
-        query.and_where(Expr::col(Alias::new(column)).gte(value));
-    }
-    let row = database.query_one(&query).await?;
-    Ok(std::cmp::max(
-        row.and_then(|value| value.try_get::<i64>("", "total").ok())
-            .unwrap_or(0),
-        0,
-    ) as u64)
-}
-
-async fn distinct_users(
-    database: &DatabaseConnection,
-    since: i64,
-    app_id: Option<&str>,
-    env_id: Option<&str>,
-) -> Result<u64, DbErr> {
-    crate::database::user_rollup::unique_users_hybrid(database, app_id, env_id, Some(since), None).await
-}
-
-async fn count_distinct_users(
-    database: &DatabaseConnection,
-    app_id: Option<&str>,
-    env_id: Option<&str>,
-    since: Option<i64>,
-) -> Result<u64, DbErr> {
-    crate::database::user_rollup::unique_users_hybrid(database, app_id, env_id, since, None).await
-}
-
 pub async fn application_stats(
     database: &DatabaseConnection,
     application_id: &str,
@@ -391,38 +237,10 @@ pub async fn application_stats(
     let since_24h = now - 86_400_000;
     let since_7d = now - 7 * 86_400_000;
     let since_30d = now - 30 * 86_400_000;
-
     let bucket_expr = time_bucket_expr(database.get_database_backend(), days);
-    let (since_ts, prev_since_ts, prev_until_ts) = match days {
-        Some(1) => (
-            Some(now - 86_400_000),
-            Some(now - 2 * 86_400_000),
-            Some(now - 86_400_000),
-        ),
-        Some(7) => (
-            Some(now - 7 * 86_400_000),
-            Some(now - 14 * 86_400_000),
-            Some(now - 7 * 86_400_000),
-        ),
-        Some(30) => (
-            Some(now - 30 * 86_400_000),
-            Some(now - 60 * 86_400_000),
-            Some(now - 30 * 86_400_000),
-        ),
-        Some(365) => (
-            Some(now - 365 * 86_400_000),
-            Some(now - 2 * 365 * 86_400_000),
-            Some(now - 365 * 86_400_000),
-        ),
-        Some(d) => (
-            Some(now - d as i64 * 86_400_000),
-            Some(now - 2 * d as i64 * 86_400_000),
-            Some(now - d as i64 * 86_400_000),
-        ),
-        None => (None, None, None),
-    };
+    let (since_ts, prev_since_ts, prev_until_ts) = statistics_window(now, days);
 
-    let total_events = crate::database::telemetry_count::count_hybrid(
+    let total_events = telemetry_count(
         database,
         crate::database::telemetry_count::RollupCountKind::Events,
         Some(application_id),
@@ -431,14 +249,12 @@ pub async fn application_stats(
         None,
     )
     .await?;
-
     let active_users = count_distinct_users(database, Some(application_id), environment_id, since_ts).await?;
     let total_users = count_distinct_users(database, Some(application_id), environment_id, None).await?;
     let dau = distinct_users(database, since_24h, Some(application_id), environment_id).await?;
     let wau = distinct_users(database, since_7d, Some(application_id), environment_id).await?;
     let mau = distinct_users(database, since_30d, Some(application_id), environment_id).await?;
-
-    let total_errors = crate::database::telemetry_count::count_hybrid(
+    let total_errors = telemetry_count(
         database,
         crate::database::telemetry_count::RollupCountKind::ErrorLogs,
         Some(application_id),
@@ -457,71 +273,26 @@ pub async fn application_stats(
         prev_until_ts,
     )
     .await?;
-
-    let trend = if let Some(points) = crate::database::trends::application_daily_hybrid(
-        database,
-        application_id,
-        environment_id,
-        days,
-        since_ts,
-    )
-    .await?
-    {
-        points
-            .into_iter()
-            .map(|point| DailyTrendPoint {
-                day: point.day,
-                events: point.events,
-                users: point.users,
-            })
-            .collect()
-    } else {
-        let mut trend_query = Query::select();
-        trend_query
-            .expr_as(Expr::cust(bucket_expr.to_string()), Alias::new("bucket_time"))
-            .expr_as(
-                Func::count(Expr::col(Alias::new("id"))),
-                Alias::new("events"),
-            )
-            .expr_as(
-                Expr::cust("COUNT(DISTINCT anonymous_id)"),
-                Alias::new("users"),
-            )
-            .from(Alias::new("events"))
-            .and_where(Expr::col(Alias::new("application_id")).eq(application_id));
-        if let Some(env_id) = environment_id {
-            trend_query.and_where(Expr::col(Alias::new("environment_id")).eq(env_id));
-        }
-        if let Some(since) = since_ts {
-            trend_query.and_where(Expr::col(Alias::new("timestamp")).gte(since));
-        }
-        trend_query
-            .group_by_col(Alias::new("bucket_time"))
-            .order_by(Alias::new("bucket_time"), sea_orm::sea_query::Order::Asc);
-        let trend_rows = database.query_all(&trend_query).await?;
-        let mut trend = Vec::with_capacity(trend_rows.len());
-        for row in trend_rows {
-            trend.push(DailyTrendPoint {
-                day: row.try_get("", "bucket_time")?,
-                events: std::cmp::max(row.try_get::<i64>("", "events").unwrap_or(0), 0) as u64,
-                users: std::cmp::max(row.try_get::<i64>("", "users").unwrap_or(0), 0) as u64,
-            });
-        }
-        trend
-    };
-
-    let days_count = std::cmp::max(trend.len(), 1) as u64;
-    let avg_daily_events = total_events / days_count;
-
     let user_growth = compute_user_growth(
         database,
         Some(application_id),
         environment_id,
         since_ts,
         days,
+    )
+    .await?;
+    let event_trend = event_trend(
+        database,
+        Some(application_id),
+        environment_id,
+        days,
+        since_ts,
         &bucket_expr,
     )
     .await?;
+    let trend = merge_activity_trend(event_trend, &user_growth);
+    let bucket_count = std::cmp::max(trend.len(), 1) as u64;
+    let avg_daily_events = total_events / bucket_count;
 
     let version_timeline = compute_version_timeline(
         database,
@@ -531,7 +302,6 @@ pub async fn application_stats(
         &bucket_expr,
     )
     .await?;
-
     let version_series = compute_version_series(
         database,
         Some(application_id),
@@ -550,46 +320,23 @@ pub async fn application_stats(
     )
     .await?;
     let app_versions = if let Some(points) = app_version_dimension {
-        distribution_items(
-            crate::database::dimension_rollup::aggregate_dimension(&points),
-            50,
-        )
+        distribution_items(crate::database::dimension_rollup::aggregate_dimension(&points), 50)
     } else {
-        distribution(
-            database,
-            application_id,
-            environment_id,
-            since_ts,
-            "app_version",
-            total_events,
-        )
-        .await?
+        distribution(database, application_id, environment_id, since_ts, "app_version", total_events).await?
     };
 
-    let launcher_version_dimension =
-        crate::database::dimension_rollup::event_dimension_timeline_hybrid(
-            database,
-            Some(application_id),
-            environment_id,
-            since_ts,
-            crate::database::dimension_rollup::DIMENSION_LAUNCHER_VERSION,
-        )
-        .await?;
+    let launcher_version_dimension = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
+        database,
+        Some(application_id),
+        environment_id,
+        since_ts,
+        crate::database::dimension_rollup::DIMENSION_LAUNCHER_VERSION,
+    )
+    .await?;
     let launcher_versions = if let Some(points) = launcher_version_dimension {
-        distribution_items(
-            crate::database::dimension_rollup::aggregate_dimension(&points),
-            50,
-        )
+        distribution_items(crate::database::dimension_rollup::aggregate_dimension(&points), 50)
     } else {
-        distribution(
-            database,
-            application_id,
-            environment_id,
-            since_ts,
-            "launcher_version",
-            total_events,
-        )
-        .await?
+        distribution(database, application_id, environment_id, since_ts, "launcher_version", total_events).await?
     };
 
     let os_dimension = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
@@ -602,46 +349,15 @@ pub async fn application_stats(
     .await?;
     let (os_families, operating_systems, build_distribution) = if let Some(points) = os_dimension {
         (
-            distribution_items(
-                crate::database::dimension_rollup::aggregate_os_families(&points),
-                usize::MAX,
-            ),
-            distribution_items(
-                crate::database::dimension_rollup::aggregate_dimension(&points),
-                50,
-            ),
-            distribution_items(
-                crate::database::dimension_rollup::aggregate_os_builds(&points),
-                100,
-            ),
+            distribution_items(crate::database::dimension_rollup::aggregate_os_families(&points), usize::MAX),
+            distribution_items(crate::database::dimension_rollup::aggregate_dimension(&points), 50),
+            distribution_items(crate::database::dimension_rollup::aggregate_os_builds(&points), 100),
         )
     } else {
         (
-            os_family_distribution(
-                database,
-                Some(application_id),
-                environment_id,
-                since_ts,
-                total_events,
-            )
-            .await?,
-            distribution_all(
-                database,
-                Some(application_id),
-                environment_id,
-                since_ts,
-                "os",
-                total_events,
-            )
-            .await?,
-            build_distribution(
-                database,
-                Some(application_id),
-                environment_id,
-                since_ts,
-                total_events,
-            )
-            .await?,
+            os_family_distribution(database, Some(application_id), environment_id, since_ts, total_events).await?,
+            distribution_all(database, Some(application_id), environment_id, since_ts, "os", total_events).await?,
+            build_distribution(database, Some(application_id), environment_id, since_ts, total_events).await?,
         )
     };
 
@@ -669,6 +385,99 @@ pub async fn application_stats(
     })
 }
 
+fn statistics_window(now: i64, days: Option<u32>) -> (Option<i64>, Option<i64>, Option<i64>) {
+    match days {
+        Some(1) => (Some(now - 86_400_000), Some(now - 2 * 86_400_000), Some(now - 86_400_000)),
+        Some(7) => (Some(now - 7 * 86_400_000), Some(now - 14 * 86_400_000), Some(now - 7 * 86_400_000)),
+        Some(30) => (Some(now - 30 * 86_400_000), Some(now - 60 * 86_400_000), Some(now - 30 * 86_400_000)),
+        Some(365) => (Some(now - 365 * 86_400_000), Some(now - 2 * 365 * 86_400_000), Some(now - 365 * 86_400_000)),
+        Some(days) => {
+            let span = days as i64 * 86_400_000;
+            (Some(now - span), Some(now - 2 * span), Some(now - span))
+        }
+        None => (None, None, None),
+    }
+}
+
+async fn telemetry_count(
+    database: &DatabaseConnection,
+    kind: crate::database::telemetry_count::RollupCountKind,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since: Option<i64>,
+    until: Option<i64>,
+) -> Result<u64, DbErr> {
+    crate::database::telemetry_count::count_hybrid(
+        database,
+        kind,
+        application_id,
+        environment_id,
+        since,
+        until,
+    )
+    .await
+}
+
+async fn count(
+    database: &DatabaseConnection,
+    table: &str,
+    since: Option<(&str, i64)>,
+) -> Result<u64, DbErr> {
+    let mut query = Query::select();
+    query
+        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("total"))
+        .from(Alias::new(table));
+    if let Some((column, value)) = since {
+        query.and_where(Expr::col(Alias::new(column)).gte(value));
+    }
+    let value = database
+        .query_one(&query)
+        .await?
+        .and_then(|row| row.try_get::<i64>("", "total").ok())
+        .unwrap_or(0);
+    u64::try_from(value).map_err(|_| DbErr::Custom("negative statistics count".into()))
+}
+
+async fn distinct_users(
+    database: &DatabaseConnection,
+    since: i64,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+) -> Result<u64, DbErr> {
+    crate::database::device_activity::unique_devices(
+        database,
+        application_id,
+        environment_id,
+        Some(since),
+        None,
+    )
+    .await
+}
+
+async fn count_distinct_users(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since: Option<i64>,
+) -> Result<u64, DbErr> {
+    match since {
+        Some(since) => crate::database::device_activity::unique_devices(
+            database,
+            application_id,
+            environment_id,
+            Some(since),
+            None,
+        )
+        .await,
+        None => crate::database::device_activity::total_devices(
+            database,
+            application_id,
+            environment_id,
+        )
+        .await,
+    }
+}
+
 async fn compute_growth(
     database: &DatabaseConnection,
     application_id: Option<&str>,
@@ -677,10 +486,8 @@ async fn compute_growth(
     prev_since_ts: Option<i64>,
     prev_until_ts: Option<i64>,
 ) -> Result<GrowthMetrics, DbErr> {
-    if let (Some(since), Some(prev_since), Some(prev_until)) =
-        (since_ts, prev_since_ts, prev_until_ts)
-    {
-        let curr_events = crate::database::telemetry_count::count_hybrid(
+    if let (Some(since), Some(prev_since), Some(prev_until)) = (since_ts, prev_since_ts, prev_until_ts) {
+        let curr_events = telemetry_count(
             database,
             crate::database::telemetry_count::RollupCountKind::Events,
             application_id,
@@ -689,7 +496,7 @@ async fn compute_growth(
             None,
         )
         .await?;
-        let prev_events = crate::database::telemetry_count::count_hybrid(
+        let prev_events = telemetry_count(
             database,
             crate::database::telemetry_count::RollupCountKind::Events,
             application_id,
@@ -698,8 +505,7 @@ async fn compute_growth(
             Some(prev_until),
         )
         .await?;
-
-        let curr_users = crate::database::user_rollup::unique_users_hybrid(
+        let curr_users = crate::database::device_activity::unique_devices(
             database,
             application_id,
             environment_id,
@@ -707,7 +513,7 @@ async fn compute_growth(
             None,
         )
         .await?;
-        let prev_users = crate::database::user_rollup::unique_users_hybrid(
+        let prev_users = crate::database::device_activity::unique_devices(
             database,
             application_id,
             environment_id,
@@ -716,21 +522,9 @@ async fn compute_growth(
         )
         .await?;
 
-        let events_growth_pct = if prev_events > 0 {
-            let pct = ((curr_events as f64 - prev_events as f64) / prev_events as f64) * 100.0;
-            Some((pct * 10.0).round() / 10.0)
-        } else {
-            None
-        };
-
-        let users_growth_pct = if prev_users > 0 {
-            let pct = ((curr_users as f64 - prev_users as f64) / prev_users as f64) * 100.0;
-            Some((pct * 10.0).round() / 10.0)
-        } else {
-            None
-        };
-
-        let new_users = crate::database::first_seen::count_new_users_hybrid(
+        let events_growth_pct = growth_percentage(curr_events, prev_events);
+        let users_growth_pct = growth_percentage(curr_users, prev_users);
+        let new_users = crate::database::device_activity::new_devices(
             database,
             application_id,
             environment_id,
@@ -739,7 +533,6 @@ async fn compute_growth(
         )
         .await?;
         let returning_users = curr_users.saturating_sub(new_users);
-
         Ok(GrowthMetrics {
             events_growth_pct,
             users_growth_pct,
@@ -747,7 +540,12 @@ async fn compute_growth(
             returning_users,
         })
     } else {
-        let total_users = count_distinct_users(database, application_id, environment_id, None).await?;
+        let total_users = crate::database::device_activity::total_devices(
+            database,
+            application_id,
+            environment_id,
+        )
+        .await?;
         Ok(GrowthMetrics {
             events_growth_pct: None,
             users_growth_pct: None,
@@ -757,127 +555,120 @@ async fn compute_growth(
     }
 }
 
+fn growth_percentage(current: u64, previous: u64) -> Option<f64> {
+    if previous == 0 {
+        return None;
+    }
+    let percentage = ((current as f64 - previous as f64) / previous as f64) * 100.0;
+    Some((percentage * 10.0).round() / 10.0)
+}
+
 async fn compute_user_growth(
     database: &DatabaseConnection,
     application_id: Option<&str>,
     environment_id: Option<&str>,
     since_ts: Option<i64>,
     days: Option<u32>,
-    bucket_expr: &str,
 ) -> Result<Vec<UserGrowthPoint>, DbErr> {
-    if days != Some(1) {
-        let monthly = matches!(days, Some(365) | None);
-        if let Some(points) = crate::database::user_rollup::user_growth_hybrid(
+    Ok(crate::database::device_activity::growth_timeline(
+        database,
+        application_id,
+        environment_id,
+        since_ts,
+        days,
+    )
+    .await?
+    .into_iter()
+    .map(|point| UserGrowthPoint {
+        bucket: point.bucket,
+        new_users: point.new_devices,
+        cumulative_users: point.cumulative_devices,
+        active_users: point.active_devices,
+    })
+    .collect())
+}
+
+async fn event_trend(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    days: Option<u32>,
+    since_ts: Option<i64>,
+    bucket_expr: &str,
+) -> Result<Vec<DailyTrendPoint>, DbErr> {
+    let cached = match application_id {
+        Some(application_id) => crate::database::trends::application_daily_hybrid(
             database,
             application_id,
             environment_id,
+            days,
             since_ts,
-            monthly,
         )
-        .await?
-        {
-            return Ok(points
-                .into_iter()
-                .map(|point| UserGrowthPoint {
-                    bucket: point.bucket,
-                    new_users: point.new_users,
-                    cumulative_users: point.cumulative_users,
-                    active_users: point.active_users,
-                })
-                .collect());
-        }
+        .await?,
+        None => crate::database::trends::global_daily_hybrid(database, days, since_ts).await?,
+    };
+    if let Some(points) = cached {
+        return Ok(points
+            .into_iter()
+            .map(|point| DailyTrendPoint {
+                day: point.day,
+                events: point.events,
+                users: 0,
+            })
+            .collect());
     }
 
-    // Raw fallback is retained for one-day hourly statistics and while historical user-set backfill
-    // is incomplete. The grouped subquery deliberately reuses the names `timestamp` and `day`, so
-    // the existing backend-specific bucket expression can be applied unchanged in the outer query.
-    let mut first_seen = Query::select();
-    first_seen
-        .column(Alias::new("anonymous_id"))
-        .expr_as(
-            Func::min(Expr::col(Alias::new("timestamp"))),
-            Alias::new("timestamp"),
-        )
-        .expr_as(
-            Func::min(Expr::col(Alias::new("day"))),
-            Alias::new("day"),
-        )
-        .from(Alias::new("events"))
-        .and_where(Expr::col(Alias::new("anonymous_id")).is_not_null());
-    if let Some(id) = application_id {
-        first_seen.and_where(Expr::col(Alias::new("application_id")).eq(id));
+    let mut query = Query::select();
+    query
+        .expr_as(Expr::cust(bucket_expr.to_owned()), Alias::new("bucket_time"))
+        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("events"))
+        .from(Alias::new("events"));
+    if let Some(application_id) = application_id {
+        query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
     }
-    if let Some(env) = environment_id {
-        first_seen.and_where(Expr::col(Alias::new("environment_id")).eq(env));
+    if let Some(environment_id) = environment_id {
+        query.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
     }
     if let Some(since) = since_ts {
-        first_seen.and_where(Expr::col(Alias::new("timestamp")).gte(since));
+        query.and_where(Expr::col(Alias::new("timestamp")).gte(since));
     }
-    first_seen.group_by_col(Alias::new("anonymous_id"));
-
-    let mut fs_q = Query::select();
-    fs_q
-        .expr_as(
-            Expr::cust(bucket_expr.to_string()),
-            Alias::new("first_bucket"),
-        )
-        .expr_as(
-            Func::count(Expr::col(Alias::new("anonymous_id"))),
-            Alias::new("new_users"),
-        )
-        .from_subquery(first_seen.take(), Alias::new("first_seen"))
-        .group_by_col(Alias::new("first_bucket"));
-
-    let mut new_users_by_bucket: HashMap<String, u64> = HashMap::new();
-    for row in database.query_all(&fs_q).await? {
-        let bucket: String = row.try_get("", "first_bucket")?;
-        let count = std::cmp::max(row.try_get::<i64>("", "new_users").unwrap_or(0), 0) as u64;
-        new_users_by_bucket.insert(bucket, count);
-    }
-
-    let mut act_q = Query::select();
-    act_q
-        .expr_as(Expr::cust(bucket_expr.to_string()), Alias::new("bucket_time"))
-        .expr_as(
-            Expr::cust("COUNT(DISTINCT anonymous_id)"),
-            Alias::new("active_users"),
-        )
-        .from(Alias::new("events"))
-        .and_where(Expr::col(Alias::new("anonymous_id")).is_not_null());
-    if let Some(id) = application_id {
-        act_q.and_where(Expr::col(Alias::new("application_id")).eq(id));
-    }
-    if let Some(env) = environment_id {
-        act_q.and_where(Expr::col(Alias::new("environment_id")).eq(env));
-    }
-    if let Some(since) = since_ts {
-        act_q.and_where(Expr::col(Alias::new("timestamp")).gte(since));
-    }
-    act_q
+    query
         .group_by_col(Alias::new("bucket_time"))
         .order_by(Alias::new("bucket_time"), sea_orm::sea_query::Order::Asc);
 
-    let act_rows = database.query_all(&act_q).await?;
-    let mut points = Vec::with_capacity(act_rows.len());
-    let mut cumulative = 0u64;
+    database
+        .query_all(&query)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(DailyTrendPoint {
+                day: row.try_get("", "bucket_time")?,
+                events: u64::try_from(row.try_get::<i64>("", "events").unwrap_or(0)).unwrap_or(0),
+                users: 0,
+            })
+        })
+        .collect()
+}
 
-    for row in act_rows {
-        let bucket: String = row.try_get("", "bucket_time")?;
-        let active = std::cmp::max(
-            row.try_get::<i64>("", "active_users").unwrap_or(0),
-            0,
-        ) as u64;
-        let new_u = new_users_by_bucket.get(&bucket).copied().unwrap_or(0);
-        cumulative = cumulative.saturating_add(new_u);
-        points.push(UserGrowthPoint {
-            bucket,
-            new_users: new_u,
-            cumulative_users: cumulative,
-            active_users: active,
-        });
+fn merge_activity_trend(
+    event_points: Vec<DailyTrendPoint>,
+    activity_points: &[UserGrowthPoint],
+) -> Vec<DailyTrendPoint> {
+    let mut points = event_points
+        .into_iter()
+        .map(|point| (point.day.clone(), point))
+        .collect::<BTreeMap<_, _>>();
+    for activity in activity_points {
+        points
+            .entry(activity.bucket.clone())
+            .and_modify(|point| point.users = activity.active_users)
+            .or_insert(DailyTrendPoint {
+                day: activity.bucket.clone(),
+                events: 0,
+                users: activity.active_users,
+            });
     }
-
-    Ok(points)
+    points.into_values().collect()
 }
 
 async fn compute_version_timeline(
@@ -903,17 +694,10 @@ async fn compute_version_timeline(
                     let versions = bucket
                         .versions
                         .into_iter()
-                        .map(|(version, count)| {
-                            let percentage = if bucket.total > 0 {
-                                ((count as f64 / bucket.total as f64) * 1000.0).round() / 10.0
-                            } else {
-                                0.0
-                            };
-                            VersionShare {
-                                version,
-                                count,
-                                percentage,
-                            }
+                        .map(|(version, count)| VersionShare {
+                            version,
+                            count,
+                            percentage: percentage(count, bucket.total),
                         })
                         .collect();
                     VersionTimelinePoint {
@@ -928,21 +712,15 @@ async fn compute_version_timeline(
 
     let mut query = Query::select();
     query
-        .expr_as(Expr::cust(bucket_expr.to_string()), Alias::new("bucket_time"))
-        .expr_as(
-            Expr::cust("COALESCE(app_version, 'unknown')"),
-            Alias::new("ver_name"),
-        )
-        .expr_as(
-            Func::count(Expr::col(Alias::new("id"))),
-            Alias::new("ver_count"),
-        )
+        .expr_as(Expr::cust(bucket_expr.to_owned()), Alias::new("bucket_time"))
+        .expr_as(Expr::cust("COALESCE(app_version, 'unknown')"), Alias::new("ver_name"))
+        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("ver_count"))
         .from(Alias::new("events"));
-    if let Some(id) = application_id {
-        query.and_where(Expr::col(Alias::new("application_id")).eq(id));
+    if let Some(application_id) = application_id {
+        query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
     }
-    if let Some(env) = environment_id {
-        query.and_where(Expr::col(Alias::new("environment_id")).eq(env));
+    if let Some(environment_id) = environment_id {
+        query.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
     }
     if let Some(since) = since_ts {
         query.and_where(Expr::col(Alias::new("timestamp")).gte(since));
@@ -953,47 +731,31 @@ async fn compute_version_timeline(
         .order_by(Alias::new("bucket_time"), sea_orm::sea_query::Order::Asc)
         .order_by(Alias::new("ver_count"), sea_orm::sea_query::Order::Desc);
 
-    let rows = database.query_all(&query).await?;
-    let mut bucket_map: HashMap<String, Vec<(String, u64)>> = HashMap::new();
-    let mut bucket_order: Vec<String> = Vec::new();
-
-    for row in rows {
+    let mut buckets: BTreeMap<String, Vec<(String, u64)>> = BTreeMap::new();
+    for row in database.query_all(&query).await? {
         let bucket: String = row.try_get("", "bucket_time")?;
-        let ver: String = row.try_get("", "ver_name")?;
-        let count = std::cmp::max(row.try_get::<i64>("", "ver_count").unwrap_or(0), 0) as u64;
-
-        if !bucket_map.contains_key(&bucket) {
-            bucket_order.push(bucket.clone());
-        }
-        bucket_map.entry(bucket).or_default().push((ver, count));
+        let version: String = row.try_get("", "ver_name")?;
+        let count = u64::try_from(row.try_get::<i64>("", "ver_count").unwrap_or(0)).unwrap_or(0);
+        buckets.entry(bucket).or_default().push((version, count));
     }
-
-    let mut result = Vec::with_capacity(bucket_order.len());
-    for bucket in bucket_order {
-        if let Some(list) = bucket_map.remove(&bucket) {
-            let total_events: u64 = list.iter().map(|(_, c)| *c).sum();
-            let mut versions = Vec::with_capacity(list.len());
-            for (version, count) in list {
-                let percentage = if total_events > 0 {
-                    ((count as f64 / total_events as f64) * 100.0 * 10.0).round() / 10.0
-                } else {
-                    0.0
-                };
-                versions.push(VersionShare {
-                    version,
-                    count,
-                    percentage,
-                });
-            }
-            result.push(VersionTimelinePoint {
+    Ok(buckets
+        .into_iter()
+        .map(|(bucket, versions)| {
+            let total_events = versions.iter().fold(0_u64, |total, (_, count)| total.saturating_add(*count));
+            VersionTimelinePoint {
                 bucket,
                 total_events,
-                versions,
-            });
-        }
-    }
-
-    Ok(result)
+                versions: versions
+                    .into_iter()
+                    .map(|(version, count)| VersionShare {
+                        version,
+                        count,
+                        percentage: percentage(count, total_events),
+                    })
+                    .collect(),
+            }
+        })
+        .collect())
 }
 
 async fn compute_version_series(
@@ -1028,114 +790,92 @@ async fn compute_version_series(
         }
     }
 
-    let mut top_v_q = Query::select();
-    top_v_q
-        .expr_as(
-            Expr::cust("COALESCE(app_version, 'unknown')"),
-            Alias::new("ver"),
-        )
-        .expr_as(
-            Func::count(Expr::col(Alias::new("id"))),
-            Alias::new("total"),
-        )
+    let mut top_query = Query::select();
+    top_query
+        .expr_as(Expr::cust("COALESCE(app_version, 'unknown')"), Alias::new("ver"))
+        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("total"))
         .from(Alias::new("events"));
-    if let Some(id) = application_id {
-        top_v_q.and_where(Expr::col(Alias::new("application_id")).eq(id));
-    }
-    if let Some(env) = environment_id {
-        top_v_q.and_where(Expr::col(Alias::new("environment_id")).eq(env));
-    }
-    if let Some(since) = since_ts {
-        top_v_q.and_where(Expr::col(Alias::new("timestamp")).gte(since));
-    }
-    top_v_q
+    apply_event_scope(&mut top_query, application_id, environment_id, since_ts);
+    top_query
         .group_by_col(Alias::new("ver"))
         .order_by(Alias::new("total"), sea_orm::sea_query::Order::Desc)
         .limit(8);
 
-    let top_rows = database.query_all(&top_v_q).await?;
-    let mut top_versions = Vec::with_capacity(top_rows.len());
-    let mut version_totals = HashMap::new();
-    for r in top_rows {
-        let v: String = r.try_get("", "ver")?;
-        let tot = std::cmp::max(r.try_get::<i64>("", "total").unwrap_or(0), 0) as u64;
-        version_totals.insert(v.clone(), tot);
-        top_versions.push(v);
+    let mut top_versions = Vec::new();
+    let mut totals = HashMap::new();
+    for row in database.query_all(&top_query).await? {
+        let version: String = row.try_get("", "ver")?;
+        let total = u64::try_from(row.try_get::<i64>("", "total").unwrap_or(0)).unwrap_or(0);
+        totals.insert(version.clone(), total);
+        top_versions.push(version);
     }
-
     if top_versions.is_empty() {
         return Ok(Vec::new());
     }
 
+    let escaped_versions = top_versions
+        .iter()
+        .map(|value| format!("'{}'", value.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(",");
     let mut query = Query::select();
     query
-        .expr_as(Expr::cust(bucket_expr.to_string()), Alias::new("bucket_time"))
-        .expr_as(
-            Expr::cust("COALESCE(app_version, 'unknown')"),
-            Alias::new("ver"),
-        )
-        .expr_as(
-            Func::count(Expr::col(Alias::new("id"))),
-            Alias::new("cnt"),
-        )
+        .expr_as(Expr::cust(bucket_expr.to_owned()), Alias::new("bucket_time"))
+        .expr_as(Expr::cust("COALESCE(app_version, 'unknown')"), Alias::new("ver"))
+        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("cnt"))
         .from(Alias::new("events"))
-        .and_where(Expr::cust(format!(
-            "COALESCE(app_version, 'unknown') IN ({})",
-            top_versions
-                .iter()
-                .map(|v| format!("'{}'", v.replace('\'', "''")))
-                .collect::<Vec<_>>()
-                .join(",")
-        )));
-    if let Some(id) = application_id {
-        query.and_where(Expr::col(Alias::new("application_id")).eq(id));
-    }
-    if let Some(env) = environment_id {
-        query.and_where(Expr::col(Alias::new("environment_id")).eq(env));
-    }
-    if let Some(since) = since_ts {
-        query.and_where(Expr::col(Alias::new("timestamp")).gte(since));
-    }
+        .and_where(Expr::cust(format!("COALESCE(app_version, 'unknown') IN ({escaped_versions})")));
+    apply_event_scope(&mut query, application_id, environment_id, since_ts);
     query
         .group_by_col(Alias::new("bucket_time"))
         .group_by_col(Alias::new("ver"))
         .order_by(Alias::new("bucket_time"), sea_orm::sea_query::Order::Asc);
 
-    let rows = database.query_all(&query).await?;
-    let mut version_data: HashMap<String, HashMap<String, u64>> = HashMap::new();
-    let mut all_buckets = Vec::new();
-
-    for row in rows {
-        let b: String = row.try_get("", "bucket_time")?;
-        let v: String = row.try_get("", "ver")?;
-        let c = std::cmp::max(row.try_get::<i64>("", "cnt").unwrap_or(0), 0) as u64;
-
-        if !all_buckets.contains(&b) {
-            all_buckets.push(b.clone());
-        }
-        version_data.entry(v).or_default().insert(b, c);
+    let mut data: HashMap<String, BTreeMap<String, u64>> = HashMap::new();
+    let mut buckets = BTreeMap::<String, ()>::new();
+    for row in database.query_all(&query).await? {
+        let bucket: String = row.try_get("", "bucket_time")?;
+        let version: String = row.try_get("", "ver")?;
+        let count = u64::try_from(row.try_get::<i64>("", "cnt").unwrap_or(0)).unwrap_or(0);
+        buckets.insert(bucket.clone(), ());
+        data.entry(version).or_default().insert(bucket, count);
     }
 
-    let mut result = Vec::with_capacity(top_versions.len());
-    for v in top_versions {
-        let tot = version_totals.get(&v).copied().unwrap_or(0);
-        let mut pts = Vec::with_capacity(all_buckets.len());
-        if let Some(map) = version_data.get(&v) {
-            for b in &all_buckets {
-                pts.push(VersionSeriesPoint {
-                    day: b.clone(),
-                    count: map.get(b).copied().unwrap_or(0),
-                });
-            }
-        }
-        result.push(VersionSeries {
-            version: v,
-            total_count: tot,
-            data: pts,
-        });
-    }
+    Ok(top_versions
+        .into_iter()
+        .map(|version| VersionSeries {
+            total_count: totals.get(&version).copied().unwrap_or(0),
+            data: buckets
+                .keys()
+                .map(|bucket| VersionSeriesPoint {
+                    day: bucket.clone(),
+                    count: data
+                        .get(&version)
+                        .and_then(|points| points.get(bucket))
+                        .copied()
+                        .unwrap_or(0),
+                })
+                .collect(),
+            version,
+        })
+        .collect())
+}
 
-    Ok(result)
+fn apply_event_scope(
+    query: &mut sea_orm::sea_query::SelectStatement,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since_ts: Option<i64>,
+) {
+    if let Some(application_id) = application_id {
+        query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
+    }
+    if let Some(environment_id) = environment_id {
+        query.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
+    }
+    if let Some(since) = since_ts {
+        query.and_where(Expr::col(Alias::new("timestamp")).gte(since));
+    }
 }
 
 async fn os_family_distribution(
@@ -1145,45 +885,8 @@ async fn os_family_distribution(
     since_ts: Option<i64>,
     total_events: u64,
 ) -> Result<Vec<DistributionItem>, DbErr> {
-    let family_expr = "CASE         WHEN os LIKE 'Windows%' THEN 'Windows'         WHEN os LIKE 'Linux%' OR os LIKE '%Linux%' OR os LIKE '%Fedora%' OR os LIKE '%Ubuntu%' OR os LIKE '%Debian%' OR os LIKE '%Arch%' THEN 'Linux'         WHEN os LIKE 'Mac%' OR os LIKE 'Darwin%' OR os LIKE 'macOS%' THEN 'macOS'         WHEN os LIKE 'Android%' THEN 'Android'         WHEN os LIKE 'iOS%' THEN 'iOS'         ELSE COALESCE(os, 'Unknown')     END";
-
-    let mut query = Query::select();
-    query
-        .expr_as(Expr::cust(family_expr), Alias::new("family_name"))
-        .expr_as(
-            Func::count(Expr::col(Alias::new("id"))),
-            Alias::new("item_count"),
-        )
-        .from(Alias::new("events"));
-    if let Some(id) = application_id {
-        query.and_where(Expr::col(Alias::new("application_id")).eq(id));
-    }
-    if let Some(env_id) = environment_id {
-        query.and_where(Expr::col(Alias::new("environment_id")).eq(env_id));
-    }
-    if let Some(since) = since_ts {
-        query.and_where(Expr::col(Alias::new("timestamp")).gte(since));
-    }
-    query
-        .group_by_col(Alias::new("family_name"))
-        .order_by(Alias::new("item_count"), sea_orm::sea_query::Order::Desc);
-
-    let rows = database.query_all(&query).await?;
-    let mut items = Vec::with_capacity(rows.len());
-    for row in rows {
-        let count = std::cmp::max(row.try_get::<i64>("", "item_count").unwrap_or(0), 0) as u64;
-        let percentage = if total_events > 0 {
-            (count as f64 / total_events as f64) * 100.0
-        } else {
-            0.0
-        };
-        items.push(DistributionItem {
-            name: row.try_get("", "family_name")?,
-            count,
-            percentage: (percentage * 10.0).round() / 10.0,
-        });
-    }
-    Ok(items)
+    let family_expr = "CASE WHEN os LIKE 'Windows%' THEN 'Windows' WHEN os LIKE 'Linux%' OR os LIKE '%Linux%' OR os LIKE '%Fedora%' OR os LIKE '%Ubuntu%' OR os LIKE '%Debian%' OR os LIKE '%Arch%' THEN 'Linux' WHEN os LIKE 'Mac%' OR os LIKE 'Darwin%' OR os LIKE 'macOS%' THEN 'macOS' WHEN os LIKE 'Android%' THEN 'Android' WHEN os LIKE 'iOS%' THEN 'iOS' ELSE COALESCE(os, 'Unknown') END";
+    grouped_distribution(database, application_id, environment_id, since_ts, family_expr, "family_name", total_events, None).await
 }
 
 async fn build_distribution(
@@ -1193,46 +896,8 @@ async fn build_distribution(
     since_ts: Option<i64>,
     total_events: u64,
 ) -> Result<Vec<DistributionItem>, DbErr> {
-    let build_expr = "CASE         WHEN os LIKE 'Windows % Build %' THEN 'Win ' || SUBSTR(os, 9, INSTR(SUBSTR(os, 9), ' Build ') - 1) || ' (' || SUBSTR(os, INSTR(os, 'Build ') + 6) || ')'         WHEN os LIKE 'Windows %' THEN os         WHEN os LIKE 'Linux (% Linux %)' THEN REPLACE(SUBSTR(os, 8, LENGTH(os) - 8), ' Linux', '')         WHEN os LIKE 'Linux (%)' THEN SUBSTR(os, 8, LENGTH(os) - 8)         WHEN os LIKE 'Mac OS X %' THEN REPLACE(os, 'Mac OS X ', 'macOS ')         WHEN os LIKE 'Darwin %' THEN REPLACE(os, 'Darwin ', 'macOS ')         WHEN os LIKE 'Android%' THEN os         WHEN os LIKE 'iOS%' THEN os         ELSE COALESCE(os, 'Unknown')     END";
-
-    let mut query = Query::select();
-    query
-        .expr_as(Expr::cust(build_expr), Alias::new("build_name"))
-        .expr_as(
-            Func::count(Expr::col(Alias::new("id"))),
-            Alias::new("item_count"),
-        )
-        .from(Alias::new("events"));
-    if let Some(id) = application_id {
-        query.and_where(Expr::col(Alias::new("application_id")).eq(id));
-    }
-    if let Some(env_id) = environment_id {
-        query.and_where(Expr::col(Alias::new("environment_id")).eq(env_id));
-    }
-    if let Some(since) = since_ts {
-        query.and_where(Expr::col(Alias::new("timestamp")).gte(since));
-    }
-    query
-        .group_by_col(Alias::new("build_name"))
-        .order_by(Alias::new("item_count"), sea_orm::sea_query::Order::Desc)
-        .limit(100);
-
-    let rows = database.query_all(&query).await?;
-    let mut items = Vec::with_capacity(rows.len());
-    for row in rows {
-        let count = std::cmp::max(row.try_get::<i64>("", "item_count").unwrap_or(0), 0) as u64;
-        let percentage = if total_events > 0 {
-            (count as f64 / total_events as f64) * 100.0
-        } else {
-            0.0
-        };
-        items.push(DistributionItem {
-            name: row.try_get("", "build_name")?,
-            count,
-            percentage: (percentage * 10.0).round() / 10.0,
-        });
-    }
-    Ok(items)
+    let build_expr = "CASE WHEN os LIKE 'Windows % Build %' THEN 'Win ' || SUBSTR(os, 9, INSTR(SUBSTR(os, 9), ' Build ') - 1) || ' (' || SUBSTR(os, INSTR(os, 'Build ') + 6) || ')' WHEN os LIKE 'Windows %' THEN os WHEN os LIKE 'Linux (% Linux %)' THEN REPLACE(SUBSTR(os, 8, LENGTH(os) - 8), ' Linux', '') WHEN os LIKE 'Linux (%)' THEN SUBSTR(os, 8, LENGTH(os) - 8) WHEN os LIKE 'Mac OS X %' THEN REPLACE(os, 'Mac OS X ', 'macOS ') WHEN os LIKE 'Darwin %' THEN REPLACE(os, 'Darwin ', 'macOS ') WHEN os LIKE 'Android%' THEN os WHEN os LIKE 'iOS%' THEN os ELSE COALESCE(os, 'Unknown') END";
+    grouped_distribution(database, application_id, environment_id, since_ts, build_expr, "build_name", total_events, Some(100)).await
 }
 
 async fn distribution_all(
@@ -1243,46 +908,55 @@ async fn distribution_all(
     column: &str,
     total_events: u64,
 ) -> Result<Vec<DistributionItem>, DbErr> {
+    grouped_distribution(
+        database,
+        application_id,
+        environment_id,
+        since_ts,
+        &format!("COALESCE({column}, 'unknown')"),
+        "item_name",
+        total_events,
+        Some(50),
+    )
+    .await
+}
+
+async fn grouped_distribution(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since_ts: Option<i64>,
+    expression: &str,
+    alias: &str,
+    total_events: u64,
+    limit: Option<u64>,
+) -> Result<Vec<DistributionItem>, DbErr> {
     let mut query = Query::select();
     query
-        .expr_as(
-            Expr::cust(format!("COALESCE({column}, 'unknown')")),
-            Alias::new("item_name"),
-        )
-        .expr_as(
-            Func::count(Expr::col(Alias::new("id"))),
-            Alias::new("item_count"),
-        )
+        .expr_as(Expr::cust(expression.to_owned()), Alias::new(alias))
+        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("item_count"))
         .from(Alias::new("events"));
-    if let Some(id) = application_id {
-        query.and_where(Expr::col(Alias::new("application_id")).eq(id));
-    }
-    if let Some(env_id) = environment_id {
-        query.and_where(Expr::col(Alias::new("environment_id")).eq(env_id));
-    }
-    if let Some(since) = since_ts {
-        query.and_where(Expr::col(Alias::new("timestamp")).gte(since));
-    }
+    apply_event_scope(&mut query, application_id, environment_id, since_ts);
     query
-        .group_by_col(Alias::new("item_name"))
-        .order_by(Alias::new("item_count"), sea_orm::sea_query::Order::Desc)
-        .limit(50);
-    let rows = database.query_all(&query).await?;
-    let mut items = Vec::with_capacity(rows.len());
-    for row in rows {
-        let count = std::cmp::max(row.try_get::<i64>("", "item_count").unwrap_or(0), 0) as u64;
-        let percentage = if total_events > 0 {
-            (count as f64 / total_events as f64) * 100.0
-        } else {
-            0.0
-        };
-        items.push(DistributionItem {
-            name: row.try_get("", "item_name")?,
-            count,
-            percentage: (percentage * 10.0).round() / 10.0,
-        });
+        .group_by_col(Alias::new(alias))
+        .order_by(Alias::new("item_count"), sea_orm::sea_query::Order::Desc);
+    if let Some(limit) = limit {
+        query.limit(limit);
     }
-    Ok(items)
+
+    database
+        .query_all(&query)
+        .await?
+        .into_iter()
+        .map(|row| {
+            let count = u64::try_from(row.try_get::<i64>("", "item_count").unwrap_or(0)).unwrap_or(0);
+            Ok(DistributionItem {
+                name: row.try_get("", alias)?,
+                count,
+                percentage: percentage(count, total_events),
+            })
+        })
+        .collect()
 }
 
 async fn distribution(
@@ -1308,23 +982,21 @@ fn distribution_items(
     counts: Vec<crate::database::dimension_rollup::DimensionCount>,
     limit: usize,
 ) -> Vec<DistributionItem> {
-    let total = counts
-        .iter()
-        .fold(0_u64, |acc, item| acc.saturating_add(item.count));
+    let total = counts.iter().fold(0_u64, |sum, item| sum.saturating_add(item.count));
     counts
         .into_iter()
         .take(limit)
-        .map(|item| {
-            let percentage = if total > 0 {
-                (item.count as f64 / total as f64) * 100.0
-            } else {
-                0.0
-            };
-            DistributionItem {
-                name: item.value,
-                count: item.count,
-                percentage: (percentage * 10.0).round() / 10.0,
-            }
+        .map(|item| DistributionItem {
+            name: item.value,
+            count: item.count,
+            percentage: percentage(item.count, total),
         })
         .collect()
+}
+
+fn percentage(count: u64, total: u64) -> f64 {
+    if total == 0 {
+        return 0.0;
+    }
+    (((count as f64 / total as f64) * 100.0) * 10.0).round() / 10.0
 }
