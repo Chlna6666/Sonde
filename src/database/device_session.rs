@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use sea_orm::{
-    ConnectionTrait, DbBackend, DbErr,
-    sea_query::{Alias, Expr, ExprTrait, Func, Order, Query},
+    ConnectionTrait, DbErr,
+    sea_query::{Alias, Expr, ExprTrait, Func, Query},
 };
 
 use super::{query::insert_batch_ignore_conflicts, telemetry::TelemetryScope};
@@ -116,11 +116,7 @@ pub async fn summary(
 ) -> Result<SessionSummary, DbErr> {
     let mut query = Query::select();
     query
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("sessions"))
-        .expr_as(
-            Func::sum(Expr::col(Alias::new("active_millis"))),
-            Alias::new("active_millis"),
-        )
+        .column(Alias::new("active_millis"))
         .from(Alias::new("telemetry_device_sessions"));
     apply_scope(&mut query, application_id, environment_id);
     if let Some(since) = since {
@@ -129,20 +125,23 @@ pub async fn summary(
     if let Some(until) = until {
         query.and_where(Expr::col(Alias::new("started_at")).lt(until));
     }
-    let Some(row) = database.query_one(&query.to_owned()).await? else {
-        return Ok(SessionSummary::default());
-    };
-    let total_sessions = nonnegative(row.try_get::<i64>("", "sessions").unwrap_or(0));
-    let total_active_millis = nonnegative(row.try_get::<i64>("", "active_millis").unwrap_or(0));
-    let average_session_millis = if total_sessions == 0 {
-        0
-    } else {
-        total_active_millis / total_sessions
-    };
+
+    let rows = database.query_all(&query.to_owned()).await?;
+    let total_sessions = u64::try_from(rows.len()).unwrap_or(u64::MAX);
+    let mut total_active_millis = 0_u64;
+    for row in rows {
+        total_active_millis = total_active_millis.saturating_add(nonnegative(
+            row.try_get::<i64>("", "active_millis").unwrap_or(0),
+        ));
+    }
     Ok(SessionSummary {
         total_sessions,
         total_active_millis,
-        average_session_millis,
+        average_session_millis: if total_sessions == 0 {
+            0
+        } else {
+            total_active_millis / total_sessions
+        },
     })
 }
 
@@ -158,37 +157,36 @@ pub async fn buckets(
         Some(365) | None => SessionGranularity::Month,
         _ => SessionGranularity::Day,
     };
-    let bucket_expr = started_bucket_expr(database.get_database_backend(), granularity)?;
     let mut query = Query::select();
     query
-        .expr_as(Expr::cust(bucket_expr), Alias::new("bucket"))
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("sessions"))
-        .expr_as(
-            Func::sum(Expr::col(Alias::new("active_millis"))),
-            Alias::new("active_millis"),
-        )
-        .from(Alias::new("telemetry_device_sessions"))
-        .group_by_col(Alias::new("bucket"))
-        .order_by(Alias::new("bucket"), Order::Asc);
+        .columns(["started_at", "active_millis"].map(Alias::new))
+        .from(Alias::new("telemetry_device_sessions"));
     apply_scope(&mut query, application_id, environment_id);
     if let Some(since) = since {
         query.and_where(Expr::col(Alias::new("started_at")).gte(since));
     }
 
-    database
-        .query_all(&query.to_owned())
-        .await?
-        .into_iter()
-        .map(|row| {
-            Ok(SessionBucket {
-                bucket: row.try_get("", "bucket")?,
-                sessions: nonnegative(row.try_get::<i64>("", "sessions").unwrap_or(0)),
-                active_millis: nonnegative(
-                    row.try_get::<i64>("", "active_millis").unwrap_or(0),
-                ),
+    let mut buckets = BTreeMap::<String, (u64, u64)>::new();
+    for row in database.query_all(&query.to_owned()).await? {
+        let started_at: i64 = row.try_get("", "started_at")?;
+        let bucket = session_bucket(started_at, granularity);
+        let active_millis = nonnegative(row.try_get::<i64>("", "active_millis").unwrap_or(0));
+        buckets
+            .entry(bucket)
+            .and_modify(|value| {
+                value.0 = value.0.saturating_add(1);
+                value.1 = value.1.saturating_add(active_millis);
             })
+            .or_insert((1, active_millis));
+    }
+    Ok(buckets
+        .into_iter()
+        .map(|(bucket, (sessions, active_millis))| SessionBucket {
+            bucket,
+            sessions,
+            active_millis,
         })
-        .collect()
+        .collect())
 }
 
 pub async fn sessions_before(
@@ -211,41 +209,19 @@ pub async fn sessions_before(
     Ok(nonnegative(count))
 }
 
-fn started_bucket_expr(
-    backend: DbBackend,
-    granularity: SessionGranularity,
-) -> Result<String, DbErr> {
-    let expression = match (backend, granularity) {
-        (DbBackend::Postgres, SessionGranularity::Hour) => {
-            "to_char(to_timestamp(started_at / 1000.0), 'YYYY-MM-DD HH24:00')"
-        }
-        (DbBackend::Postgres, SessionGranularity::Day) => {
-            "to_char(to_timestamp(started_at / 1000.0), 'YYYY-MM-DD')"
-        }
-        (DbBackend::Postgres, SessionGranularity::Month) => {
-            "to_char(to_timestamp(started_at / 1000.0), 'YYYY-MM')"
-        }
-        (DbBackend::MySql, SessionGranularity::Hour) => {
-            "DATE_FORMAT(FROM_UNIXTIME(started_at / 1000), '%Y-%m-%d %H:00')"
-        }
-        (DbBackend::MySql, SessionGranularity::Day) => {
-            "DATE_FORMAT(FROM_UNIXTIME(started_at / 1000), '%Y-%m-%d')"
-        }
-        (DbBackend::MySql, SessionGranularity::Month) => {
-            "DATE_FORMAT(FROM_UNIXTIME(started_at / 1000), '%Y-%m')"
-        }
-        (DbBackend::Sqlite, SessionGranularity::Hour) => {
-            "strftime('%Y-%m-%d %H:00', started_at / 1000, 'unixepoch')"
-        }
-        (DbBackend::Sqlite, SessionGranularity::Day) => {
-            "strftime('%Y-%m-%d', started_at / 1000, 'unixepoch')"
-        }
-        (DbBackend::Sqlite, SessionGranularity::Month) => {
-            "strftime('%Y-%m', started_at / 1000, 'unixepoch')"
-        }
-        _ => return Err(DbErr::Custom("unsupported database backend for device sessions".into())),
+fn session_bucket(timestamp: i64, granularity: SessionGranularity) -> String {
+    let Some(value) = chrono::DateTime::from_timestamp_millis(timestamp) else {
+        return match granularity {
+            SessionGranularity::Hour => "1970-01-01 00:00".into(),
+            SessionGranularity::Day => "1970-01-01".into(),
+            SessionGranularity::Month => "1970-01".into(),
+        };
     };
-    Ok(expression.to_owned())
+    match granularity {
+        SessionGranularity::Hour => value.format("%Y-%m-%d %H:00").to_string(),
+        SessionGranularity::Day => value.format("%Y-%m-%d").to_string(),
+        SessionGranularity::Month => value.format("%Y-%m").to_string(),
+    }
 }
 
 fn apply_scope(
