@@ -60,6 +60,8 @@ pub struct DeviceSummary {
     pub app_version: Option<String>,
     pub launcher_version: Option<String>,
     pub os: Option<String>,
+    pub system_language: Option<String>,
+    pub architecture: Option<String>,
     pub event_items: i64,
     pub metric_items: i64,
     pub log_items: i64,
