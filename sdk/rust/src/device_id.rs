@@ -17,10 +17,10 @@ const CREATE_RACE_READ_DELAY: Duration = Duration::from_millis(5);
 
 /// Generate a high-entropy pseudonymous installation/device identifier.
 ///
-/// The identifier contains no hardware or account information. Persist it and reuse it for the
-/// lifetime of the installation.
+/// The identifier is a random UUID v4 and therefore contains no hardware, account, or creation-time
+/// information. Persist it and reuse it for the lifetime of the installation.
 pub fn generate_device_id() -> String {
-    Uuid::now_v7().to_string()
+    Uuid::new_v4().to_string()
 }
 
 /// Load a stable installation/device identifier from `path`, creating it on first launch.
