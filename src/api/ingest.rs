@@ -5,7 +5,10 @@ use futures_util::StreamExt;
 use serde::de::DeserializeOwned;
 
 use crate::{
-    domain::telemetry::{Batch, ErrorInput, EventInput, LogInput, MetricInput},
+    domain::{
+        device_facts::DeviceFactsInput,
+        telemetry::{Batch, ErrorInput, EventInput, LogInput, MetricInput},
+    },
     error::AppError,
     services::telemetry::{self, IngestRequestContext, IngestTokenContext, IngestTokenRequest},
     state::AppState,
@@ -15,12 +18,14 @@ use super::request_auth::bearer_token;
 
 const MAX_INGEST_BODY_BYTES: usize = 1_048_576;
 const MAX_TOKEN_BODY_BYTES: usize = 16_384;
+const MAX_DEVICE_FACTS_BODY_BYTES: usize = 16_384;
 
 pub fn configure(config: &mut web::ServiceConfig) {
     config.service(
         web::scope("/api/v1/ingest")
             .app_data(super::json_config(MAX_TOKEN_BODY_BYTES))
             .route("/token", web::post().to(token))
+            .route("/heartbeat", web::post().to(heartbeat))
             .route("/events", web::post().to(events))
             .route("/metrics", web::post().to(metrics))
             .route("/logs", web::post().to(logs))
@@ -45,6 +50,29 @@ async fn token(
     Ok(HttpResponse::Ok().json(response))
 }
 
+async fn heartbeat(
+    state: web::Data<Arc<AppState>>,
+    request: HttpRequest,
+    body: web::Payload,
+) -> Result<HttpResponse, AppError> {
+    let _permit = state.try_acquire_ingest()?;
+    preflight_device_token(&request)?;
+    let body = read_body(body, MAX_DEVICE_FACTS_BODY_BYTES).await?;
+    let installed = state.installed().await?;
+    let client_ip = extract_client_ip(&request);
+    let scope = telemetry::scope_from_context_with_permission(
+        &installed,
+        ingest_request_context(&request, &client_ip),
+        "telemetry.heartbeat",
+        body.as_ref(),
+    )
+    .await?;
+    let facts: DeviceFactsInput = parse_json(&body)?;
+    telemetry::heartbeat(&installed, &scope, facts).await?;
+    publish(&state, &scope.application_id, "heartbeat", 1);
+    Ok(HttpResponse::NoContent().finish())
+}
+
 async fn events(
     state: web::Data<Arc<AppState>>,
     request: HttpRequest,
@@ -52,7 +80,7 @@ async fn events(
 ) -> Result<HttpResponse, AppError> {
     let _permit = state.try_acquire_ingest()?;
     preflight_device_token(&request)?;
-    let body = read_ingest_body(body).await?;
+    let body = read_body(body, MAX_INGEST_BODY_BYTES).await?;
     let installed = state.installed().await?;
     let client_ip = extract_client_ip(&request);
     let scope = telemetry::scope_from_context_with_permission(
@@ -62,7 +90,7 @@ async fn events(
         body.as_ref(),
     )
     .await?;
-    let batch: Batch<EventInput> = parse_batch(&body)?;
+    let batch: Batch<EventInput> = parse_json(&body)?;
     let receipt = telemetry::events(&installed, &scope, batch.items).await?;
     publish(&state, &scope.application_id, "events", receipt.accepted);
     Ok(HttpResponse::Accepted().json(receipt))
@@ -75,7 +103,7 @@ async fn metrics(
 ) -> Result<HttpResponse, AppError> {
     let _permit = state.try_acquire_ingest()?;
     preflight_device_token(&request)?;
-    let body = read_ingest_body(body).await?;
+    let body = read_body(body, MAX_INGEST_BODY_BYTES).await?;
     let installed = state.installed().await?;
     let client_ip = extract_client_ip(&request);
     let scope = telemetry::scope_from_context_with_permission(
@@ -85,7 +113,7 @@ async fn metrics(
         body.as_ref(),
     )
     .await?;
-    let batch: Batch<MetricInput> = parse_batch(&body)?;
+    let batch: Batch<MetricInput> = parse_json(&body)?;
     let receipt = telemetry::metrics(&installed, &scope, batch.items).await?;
     publish(&state, &scope.application_id, "metrics", receipt.accepted);
     Ok(HttpResponse::Accepted().json(receipt))
@@ -98,7 +126,7 @@ async fn logs(
 ) -> Result<HttpResponse, AppError> {
     let _permit = state.try_acquire_ingest()?;
     preflight_device_token(&request)?;
-    let body = read_ingest_body(body).await?;
+    let body = read_body(body, MAX_INGEST_BODY_BYTES).await?;
     let installed = state.installed().await?;
     let client_ip = extract_client_ip(&request);
     let scope = telemetry::scope_from_context_with_permission(
@@ -108,7 +136,7 @@ async fn logs(
         body.as_ref(),
     )
     .await?;
-    let batch: Batch<LogInput> = parse_batch(&body)?;
+    let batch: Batch<LogInput> = parse_json(&body)?;
     let receipt = telemetry::logs(&installed, &scope, batch.items).await?;
     publish(&state, &scope.application_id, "logs", receipt.accepted);
     Ok(HttpResponse::Accepted().json(receipt))
@@ -121,7 +149,7 @@ async fn errors(
 ) -> Result<HttpResponse, AppError> {
     let _permit = state.try_acquire_ingest()?;
     preflight_device_token(&request)?;
-    let body = read_ingest_body(body).await?;
+    let body = read_body(body, MAX_INGEST_BODY_BYTES).await?;
     let installed = state.installed().await?;
     let client_ip = extract_client_ip(&request);
     let scope = telemetry::scope_from_context_with_permission(
@@ -131,18 +159,18 @@ async fn errors(
         body.as_ref(),
     )
     .await?;
-    let batch: Batch<ErrorInput> = parse_batch(&body)?;
+    let batch: Batch<ErrorInput> = parse_json(&body)?;
     let receipt = telemetry::errors(&installed, &scope, batch.items).await?;
     publish(&state, &scope.application_id, "errors", receipt.accepted);
     Ok(HttpResponse::Accepted().json(receipt))
 }
 
-async fn read_ingest_body(mut payload: web::Payload) -> Result<web::Bytes, AppError> {
+async fn read_body(mut payload: web::Payload, max_bytes: usize) -> Result<web::Bytes, AppError> {
     let mut body = web::BytesMut::new();
     while let Some(chunk) = payload.next().await {
         let chunk = chunk
             .map_err(|error| AppError::Validation(format!("request body could not be read: {error}")))?;
-        if body.len().saturating_add(chunk.len()) > MAX_INGEST_BODY_BYTES {
+        if body.len().saturating_add(chunk.len()) > max_bytes {
             return Err(AppError::PayloadTooLarge);
         }
         body.extend_from_slice(&chunk);
@@ -150,7 +178,7 @@ async fn read_ingest_body(mut payload: web::Payload) -> Result<web::Bytes, AppEr
     Ok(body.freeze())
 }
 
-fn parse_batch<T: DeserializeOwned>(body: &[u8]) -> Result<Batch<T>, AppError> {
+fn parse_json<T: DeserializeOwned>(body: &[u8]) -> Result<T, AppError> {
     serde_json::from_slice(body)
         .map_err(|_| AppError::Validation("invalid telemetry JSON payload".into()))
 }
