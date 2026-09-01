@@ -3,24 +3,29 @@ use sea_orm::{
     sea_query::{Alias, Query},
 };
 
-use super::{dimension_rollup, first_seen, log_error_rollup, rollups, user_rollup};
+use super::{
+    device_activity_backfill, dimension_rollup, first_seen, log_error_rollup, rollups, user_rollup,
+};
 
-/// Telemetry rollups and first-seen indexes are derived state, not authoritative backup data.
+/// Telemetry rollups, activity indexes and first-seen indexes are derived state, not authoritative
+/// backup data.
 ///
 /// Invalidate readiness before deleting cached rows so concurrent statistics requests immediately
-/// fall back to raw telemetry. Historical source days are then marked dirty again and background
-/// workers rebuild every derived structure from the restored authoritative rows.
+/// stop treating a prior rebuild as complete. Historical source days are then marked dirty again and
+/// background workers rebuild every derived structure from the restored authoritative rows.
 pub async fn reset_after_full_restore(database: &DatabaseConnection) -> Result<usize, DbErr> {
     rollups::invalidate_rollup_backfill(database).await?;
     dimension_rollup::invalidate_dimension_backfill(database).await?;
     user_rollup::invalidate_user_backfill(database).await?;
     log_error_rollup::invalidate_backfill(database).await?;
     first_seen::invalidate(database).await?;
+    device_activity_backfill::invalidate(database).await?;
 
-    // Base rollups are intentionally rebuilt too. A backup snapshot may contain raw rows written
-    // after the latest worker fold, while dirty markers themselves are ephemeral and not archived.
-    // Keeping archived base rollups could therefore make restored statistics permanently stale.
+    // Derived caches are deliberately rebuilt. A backup snapshot may contain raw rows written after
+    // the latest worker fold, while dirty markers themselves are ephemeral and not archived.
     for table in [
+        "telemetry_device_activity_hours",
+        "telemetry_device_activity_days",
         "telemetry_daily_rollups",
         "telemetry_daily_dimensions",
         "telemetry_daily_user_sets",
