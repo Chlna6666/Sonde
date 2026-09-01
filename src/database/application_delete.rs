@@ -35,6 +35,7 @@ pub async fn delete_application_exact(
     for table in [
         "error_occurrences",
         "error_groups",
+        "telemetry_device_sessions",
         "telemetry_device_activity_hours",
         "telemetry_device_activity_days",
         "telemetry_devices",
