@@ -52,7 +52,7 @@ pub async fn run_batch(database: &DatabaseConnection, limit: u64) -> Result<usiz
         .order_by(Alias::new("id"), Order::Asc)
         .limit(std::cmp::max(limit, 1));
     if let Some((timestamp, id)) = cursor.as_ref() {
-        query.and_where(
+        query.cond_where(
             Condition::any()
                 .add(Expr::col(Alias::new("timestamp")).gt(*timestamp))
                 .add(
