@@ -7,12 +7,14 @@ use super::{
     device_activity_backfill, dimension_rollup, first_seen, log_error_rollup, rollups, user_rollup,
 };
 
-/// Telemetry rollups, activity indexes and first-seen indexes are derived state, not authoritative
-/// backup data.
+/// Telemetry rollups, activity/session indexes and first-seen indexes are derived state, not
+/// authoritative backup data.
 ///
 /// Invalidate readiness before deleting cached rows so concurrent statistics requests immediately
 /// stop treating a prior rebuild as complete. Historical source days are then marked dirty again and
-/// background workers rebuild every derived structure from the restored authoritative rows.
+/// background workers rebuild every structure that can be reconstructed from authoritative rows.
+/// Session duration is intentionally not reconstructed from historical events because events do not
+/// prove continuous online presence.
 pub async fn reset_after_full_restore(database: &DatabaseConnection) -> Result<usize, DbErr> {
     rollups::invalidate_rollup_backfill(database).await?;
     dimension_rollup::invalidate_dimension_backfill(database).await?;
@@ -21,9 +23,8 @@ pub async fn reset_after_full_restore(database: &DatabaseConnection) -> Result<u
     first_seen::invalidate(database).await?;
     device_activity_backfill::invalidate(database).await?;
 
-    // Derived caches are deliberately rebuilt. A backup snapshot may contain raw rows written after
-    // the latest worker fold, while dirty markers themselves are ephemeral and not archived.
     for table in [
+        "telemetry_device_sessions",
         "telemetry_device_activity_hours",
         "telemetry_device_activity_days",
         "telemetry_daily_rollups",
