@@ -129,6 +129,8 @@ fn map_device(
         app_version: record.last_app_version,
         launcher_version: record.last_launcher_version,
         os: record.last_os,
+        system_language: record.last_system_language,
+        architecture: record.last_architecture,
         event_items: record.event_items,
         metric_items: record.metric_items,
         log_items: record.log_items,
