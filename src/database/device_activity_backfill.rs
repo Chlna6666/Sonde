@@ -5,10 +5,11 @@ use sea_orm::{
     sea_query::{Alias, Condition, Expr, ExprTrait, OnConflict, Order, Query, Value},
 };
 
-use super::{device_activity, telemetry::TelemetryScope};
+use super::{device_activity, device_identity, telemetry::TelemetryScope};
 
 const CURSOR_KEY: &str = "device_activity_backfill_cursor";
 const COMPLETE_KEY: &str = "device_activity_backfill_complete";
+const MIGRATED_EVENT_NAME: &str = "migration.application_start";
 
 #[derive(Clone, Debug)]
 struct EventActivity {
@@ -41,7 +42,9 @@ pub async fn run_batch(database: &DatabaseConnection, limit: u64) -> Result<usiz
                 "id",
                 "application_id",
                 "environment_id",
+                "name",
                 "anonymous_id",
+                "attributes",
                 "timestamp",
             ]
             .map(Alias::new),
@@ -66,13 +69,26 @@ pub async fn run_batch(database: &DatabaseConnection, limit: u64) -> Result<usiz
     let raw_rows = database.query_all(&query.to_owned()).await?;
     let mut rows = Vec::with_capacity(raw_rows.len());
     for row in raw_rows {
-        let Some(device_hash) = row.try_get::<Option<String>>("", "anonymous_id")? else {
+        let Some(stored_device_hash) = row.try_get::<Option<String>>("", "anonymous_id")? else {
             continue;
+        };
+        let application_id: String = row.try_get("", "application_id")?;
+        let environment_id: String = row.try_get("", "environment_id")?;
+        let name: String = row.try_get("", "name")?;
+        let device_hash = if name == MIGRATED_EVENT_NAME {
+            migrated_device_hash(
+                &application_id,
+                &environment_id,
+                &row.try_get::<String>("", "attributes")?,
+                &stored_device_hash,
+            )?
+        } else {
+            stored_device_hash
         };
         rows.push(EventActivity {
             id: row.try_get("", "id")?,
-            application_id: row.try_get("", "application_id")?,
-            environment_id: row.try_get("", "environment_id")?,
+            application_id,
+            environment_id,
             device_hash,
             timestamp: row.try_get("", "timestamp")?,
         });
@@ -279,6 +295,27 @@ async fn merge_device_bounds(
         .to_owned();
     database.execute(&update).await?;
     Ok(())
+}
+
+fn migrated_device_hash(
+    application_id: &str,
+    environment_id: &str,
+    attributes: &str,
+    stored_device_hash: &str,
+) -> Result<String, DbErr> {
+    let attributes: serde_json::Value = serde_json::from_str(attributes)
+        .map_err(|error| DbErr::Custom(format!("decode migrated event attributes: {error}")))?;
+    let Some(source_device_id) = attributes
+        .get("migration.source_user_hash")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(stored_device_hash.to_owned());
+    };
+    Ok(device_identity::scoped_hash_parts(
+        application_id,
+        environment_id,
+        source_device_id,
+    ))
 }
 
 async fn read_cursor(database: &impl ConnectionTrait) -> Result<Option<(i64, String)>, DbErr> {
