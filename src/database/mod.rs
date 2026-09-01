@@ -13,6 +13,7 @@ pub mod backup_validation;
 pub mod device_activity;
 pub mod device_activity_backfill;
 pub mod device_history;
+pub mod device_identity;
 pub mod device_query;
 pub mod device_risk;
 pub mod device_state;
