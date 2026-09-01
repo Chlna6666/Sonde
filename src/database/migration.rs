@@ -75,9 +75,9 @@ impl MigratorTrait for Migrator {
             Box::new(MetricHistogramRepair),
             Box::new(AlertDeliveryQueue),
             Box::new(DeviceProfiles),
-            Box::new(DeviceFacts),
             Box::new(IngestNonceReplay),
             Box::new(IngestBootstrapLimits),
+            Box::new(DeviceFacts),
         ]
     }
 }
