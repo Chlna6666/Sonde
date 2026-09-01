@@ -8,7 +8,9 @@ use sha2::{Digest, Sha256};
 
 use super::{query::insert_batch_ignore_conflicts, telemetry::TelemetryScope};
 
-const MAX_CONTIGUOUS_ACTIVITY_MILLIS: i64 = 30 * 60_000;
+pub const MAX_CONTIGUOUS_ACTIVITY_MILLIS: i64 = 30 * 60_000;
+const HOUR_MILLIS: i64 = 60 * 60_000;
+const DAY_MILLIS: i64 = 24 * HOUR_MILLIS;
 
 #[derive(Clone, Debug)]
 pub struct DailyActiveDevices {
@@ -25,6 +27,14 @@ pub struct DeviceGrowthBucket {
     pub active_devices: u64,
 }
 
+#[derive(Clone, Debug)]
+pub struct ActivityBucket {
+    pub bucket: String,
+    pub active_devices: u64,
+    pub active_millis: u64,
+    pub cumulative_active_millis: u64,
+}
+
 #[derive(Clone, Copy)]
 enum ActivityGranularity {
     Hour,
@@ -39,45 +49,71 @@ pub async fn record(
     previous_seen_at: i64,
     received_at: i64,
 ) -> Result<(), DbErr> {
-    record_bucket(
+    touch_request_bucket(
         database,
         "telemetry_device_activity_days",
         "day",
         "sonde:device-activity-day\0",
-        &day_for_timestamp(previous_seen_at),
         &day_for_timestamp(received_at),
         scope,
         device_hash,
-        previous_seen_at,
         received_at,
     )
     .await?;
-    record_bucket(
+    touch_request_bucket(
         database,
         "telemetry_device_activity_hours",
         "hour",
         "sonde:device-activity-hour\0",
-        &hour_for_timestamp(previous_seen_at),
         &hour_for_timestamp(received_at),
+        scope,
+        device_hash,
+        received_at,
+    )
+    .await?;
+
+    let gap = received_at.saturating_sub(previous_seen_at);
+    if gap <= 0 || gap > MAX_CONTIGUOUS_ACTIVITY_MILLIS {
+        return Ok(());
+    }
+
+    add_interval_slices(
+        database,
+        "telemetry_device_activity_days",
+        "day",
+        "sonde:device-activity-day\0",
+        DAY_MILLIS,
         scope,
         device_hash,
         previous_seen_at,
         received_at,
+        day_for_timestamp,
+    )
+    .await?;
+    add_interval_slices(
+        database,
+        "telemetry_device_activity_hours",
+        "hour",
+        "sonde:device-activity-hour\0",
+        HOUR_MILLIS,
+        scope,
+        device_hash,
+        previous_seen_at,
+        received_at,
+        hour_for_timestamp,
     )
     .await
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn record_bucket(
+async fn touch_request_bucket(
     database: &impl ConnectionTrait,
     table: &str,
     bucket_column: &str,
     id_context: &str,
-    previous_bucket: &str,
-    current_bucket: &str,
+    bucket: &str,
     scope: &TelemetryScope,
     device_hash: &str,
-    previous_seen_at: i64,
     received_at: i64,
 ) -> Result<(), DbErr> {
     let id = activity_id(
@@ -85,7 +121,7 @@ async fn record_bucket(
         &scope.application_id,
         &scope.environment_id,
         device_hash,
-        current_bucket,
+        bucket,
     );
     let inserted = insert_batch_ignore_conflicts(
         database,
@@ -107,7 +143,7 @@ async fn record_bucket(
             scope.application_id.clone().into(),
             scope.environment_id.clone().into(),
             device_hash.to_owned().into(),
-            current_bucket.to_owned().into(),
+            bucket.to_owned().into(),
             received_at.into(),
             received_at.into(),
             0_i64.into(),
@@ -122,30 +158,152 @@ async fn record_bucket(
         return Ok(());
     }
 
-    let gap = received_at.saturating_sub(previous_seen_at);
-    let active_delta = if previous_bucket == current_bucket
-        && gap > 0
-        && gap <= MAX_CONTIGUOUS_ACTIVITY_MILLIS
-    {
-        gap
-    } else {
-        0
-    };
     let update = Query::update()
         .table(Alias::new(table))
         .value(
-            Alias::new("last_seen_at"),
-            std::cmp::max(previous_seen_at, received_at),
+            Alias::new("first_seen_at"),
+            Expr::cust_with_values(
+                "CASE WHEN first_seen_at > ? THEN ? ELSE first_seen_at END",
+                [received_at, received_at],
+            ),
         )
         .value(
-            Alias::new("active_millis"),
-            Expr::col(Alias::new("active_millis")).add(active_delta),
+            Alias::new("last_seen_at"),
+            Expr::cust_with_values(
+                "CASE WHEN last_seen_at < ? THEN ? ELSE last_seen_at END",
+                [received_at, received_at],
+            ),
         )
         .value(
             Alias::new("request_count"),
             Expr::col(Alias::new("request_count")).add(1_i64),
         )
         .value(Alias::new("updated_at"), received_at)
+        .and_where(Expr::col(Alias::new("id")).eq(id))
+        .to_owned();
+    database.execute(&update).await?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn add_interval_slices(
+    database: &impl ConnectionTrait,
+    table: &str,
+    bucket_column: &str,
+    id_context: &str,
+    bucket_millis: i64,
+    scope: &TelemetryScope,
+    device_hash: &str,
+    start: i64,
+    end: i64,
+    bucket_name: fn(i64) -> String,
+) -> Result<(), DbErr> {
+    let mut cursor = start;
+    while cursor < end {
+        let boundary = cursor
+            .div_euclid(bucket_millis)
+            .saturating_add(1)
+            .saturating_mul(bucket_millis);
+        let slice_end = std::cmp::min(boundary, end);
+        if slice_end <= cursor {
+            return Err(DbErr::Custom("invalid device activity bucket boundary".into()));
+        }
+        add_activity_slice(
+            database,
+            table,
+            bucket_column,
+            id_context,
+            &bucket_name(cursor),
+            scope,
+            device_hash,
+            cursor,
+            slice_end,
+        )
+        .await?;
+        cursor = slice_end;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn add_activity_slice(
+    database: &impl ConnectionTrait,
+    table: &str,
+    bucket_column: &str,
+    id_context: &str,
+    bucket: &str,
+    scope: &TelemetryScope,
+    device_hash: &str,
+    slice_start: i64,
+    slice_end: i64,
+) -> Result<(), DbErr> {
+    let active_delta = slice_end.saturating_sub(slice_start);
+    if active_delta <= 0 {
+        return Ok(());
+    }
+    let id = activity_id(
+        id_context,
+        &scope.application_id,
+        &scope.environment_id,
+        device_hash,
+        bucket,
+    );
+    let inserted = insert_batch_ignore_conflicts(
+        database,
+        table,
+        &[
+            "id",
+            "application_id",
+            "environment_id",
+            "device_hash",
+            bucket_column,
+            "first_seen_at",
+            "last_seen_at",
+            "active_millis",
+            "request_count",
+            "updated_at",
+        ],
+        vec![vec![
+            id.clone().into(),
+            scope.application_id.clone().into(),
+            scope.environment_id.clone().into(),
+            device_hash.to_owned().into(),
+            bucket.to_owned().into(),
+            slice_start.into(),
+            slice_end.into(),
+            active_delta.into(),
+            0_i64.into(),
+            slice_end.into(),
+        ]],
+        "id",
+        "id",
+    )
+    .await?;
+    if inserted > 0 {
+        return Ok(());
+    }
+
+    let update = Query::update()
+        .table(Alias::new(table))
+        .value(
+            Alias::new("first_seen_at"),
+            Expr::cust_with_values(
+                "CASE WHEN first_seen_at > ? THEN ? ELSE first_seen_at END",
+                [slice_start, slice_start],
+            ),
+        )
+        .value(
+            Alias::new("last_seen_at"),
+            Expr::cust_with_values(
+                "CASE WHEN last_seen_at < ? THEN ? ELSE last_seen_at END",
+                [slice_end, slice_end],
+            ),
+        )
+        .value(
+            Alias::new("active_millis"),
+            Expr::col(Alias::new("active_millis")).add(active_delta),
+        )
+        .value(Alias::new("updated_at"), slice_end)
         .and_where(Expr::col(Alias::new("id")).eq(id))
         .to_owned();
     database.execute(&update).await?;
@@ -211,6 +369,31 @@ pub async fn total_devices(
     positive_count(database, query).await
 }
 
+pub async fn total_active_millis(
+    database: &impl ConnectionTrait,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since: Option<i64>,
+) -> Result<u64, DbErr> {
+    let mut query = Query::select();
+    query
+        .expr_as(
+            Func::sum(Expr::col(Alias::new("active_millis"))),
+            Alias::new("active_millis"),
+        )
+        .from(Alias::new("telemetry_device_activity_days"));
+    apply_scope(&mut query, application_id, environment_id);
+    if let Some(since) = since {
+        query.and_where(Expr::col(Alias::new("last_seen_at")).gte(since));
+    }
+    let value = database
+        .query_one(&query.to_owned())
+        .await?
+        .and_then(|row| row.try_get::<i64>("", "active_millis").ok())
+        .unwrap_or(0);
+    Ok(nonnegative(value))
+}
+
 pub async fn growth_timeline(
     database: &impl ConnectionTrait,
     application_id: Option<&str>,
@@ -218,11 +401,7 @@ pub async fn growth_timeline(
     since: Option<i64>,
     days: Option<u32>,
 ) -> Result<Vec<DeviceGrowthBucket>, DbErr> {
-    let granularity = match days {
-        Some(1) => ActivityGranularity::Hour,
-        Some(365) | None => ActivityGranularity::Month,
-        _ => ActivityGranularity::Day,
-    };
+    let granularity = granularity(days);
     let active = active_buckets(database, application_id, environment_id, since, granularity).await?;
     let new = new_device_buckets(database, application_id, environment_id, since, granularity).await?;
     let baseline = match since {
@@ -248,6 +427,30 @@ pub async fn growth_timeline(
                 new_devices,
                 cumulative_devices: cumulative,
                 active_devices,
+            }
+        })
+        .collect())
+}
+
+pub async fn activity_timeline(
+    database: &impl ConnectionTrait,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since: Option<i64>,
+    days: Option<u32>,
+) -> Result<Vec<ActivityBucket>, DbErr> {
+    let granularity = granularity(days);
+    let rows = activity_buckets(database, application_id, environment_id, since, granularity).await?;
+    let mut cumulative = 0_u64;
+    Ok(rows
+        .into_iter()
+        .map(|(bucket, (active_devices, active_millis))| {
+            cumulative = cumulative.saturating_add(active_millis);
+            ActivityBucket {
+                bucket,
+                active_devices,
+                active_millis,
+                cumulative_active_millis: cumulative,
             }
         })
         .collect())
@@ -298,43 +501,48 @@ async fn active_buckets(
     since: Option<i64>,
     granularity: ActivityGranularity,
 ) -> Result<BTreeMap<String, u64>, DbErr> {
-    if matches!(granularity, ActivityGranularity::Month) {
-        let mut query = Query::select();
-        query
-            .expr_as(Expr::cust("SUBSTR(day, 1, 7)"), Alias::new("bucket"))
-            .expr_as(
-                Expr::cust("COUNT(DISTINCT device_hash)"),
-                Alias::new("devices"),
-            )
-            .from(Alias::new("telemetry_device_activity_days"))
-            .group_by_col(Alias::new("bucket"))
-            .order_by(Alias::new("bucket"), Order::Asc);
-        apply_scope(&mut query, application_id, environment_id);
-        if let Some(since) = since {
-            query.and_where(Expr::col(Alias::new("last_seen_at")).gte(since));
-        }
-        let mut result = BTreeMap::new();
-        for row in database.query_all(&query.to_owned()).await? {
-            result.insert(
-                row.try_get("", "bucket")?,
-                nonnegative(row.try_get::<i64>("", "devices").unwrap_or(0)),
-            );
-        }
-        return Ok(result);
-    }
+    Ok(activity_buckets(database, application_id, environment_id, since, granularity)
+        .await?
+        .into_iter()
+        .map(|(bucket, (devices, _))| (bucket, devices))
+        .collect())
+}
 
-    let (table, column) = match granularity {
-        ActivityGranularity::Hour => ("telemetry_device_activity_hours", "hour"),
-        ActivityGranularity::Day => ("telemetry_device_activity_days", "day"),
-        ActivityGranularity::Month => unreachable!(),
+async fn activity_buckets(
+    database: &impl ConnectionTrait,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since: Option<i64>,
+    granularity: ActivityGranularity,
+) -> Result<BTreeMap<String, (u64, u64)>, DbErr> {
+    let (table, bucket_expr) = match granularity {
+        ActivityGranularity::Hour => (
+            "telemetry_device_activity_hours",
+            "hour".to_owned(),
+        ),
+        ActivityGranularity::Day => (
+            "telemetry_device_activity_days",
+            "day".to_owned(),
+        ),
+        ActivityGranularity::Month => (
+            "telemetry_device_activity_days",
+            "SUBSTR(day, 1, 7)".to_owned(),
+        ),
     };
     let mut query = Query::select();
     query
-        .column(Alias::new(column))
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("devices"))
+        .expr_as(Expr::cust(bucket_expr), Alias::new("bucket"))
+        .expr_as(
+            Expr::cust("COUNT(DISTINCT device_hash)"),
+            Alias::new("devices"),
+        )
+        .expr_as(
+            Func::sum(Expr::col(Alias::new("active_millis"))),
+            Alias::new("active_millis"),
+        )
         .from(Alias::new(table))
-        .group_by_col(Alias::new(column))
-        .order_by(Alias::new(column), Order::Asc);
+        .group_by_col(Alias::new("bucket"))
+        .order_by(Alias::new("bucket"), Order::Asc);
     apply_scope(&mut query, application_id, environment_id);
     if let Some(since) = since {
         query.and_where(Expr::col(Alias::new("last_seen_at")).gte(since));
@@ -343,8 +551,11 @@ async fn active_buckets(
     let mut result = BTreeMap::new();
     for row in database.query_all(&query.to_owned()).await? {
         result.insert(
-            row.try_get("", column)?,
-            nonnegative(row.try_get::<i64>("", "devices").unwrap_or(0)),
+            row.try_get("", "bucket")?,
+            (
+                nonnegative(row.try_get::<i64>("", "devices").unwrap_or(0)),
+                nonnegative(row.try_get::<i64>("", "active_millis").unwrap_or(0)),
+            ),
         );
     }
     Ok(result)
@@ -394,6 +605,14 @@ async fn devices_before(
         .and_where(Expr::col(Alias::new("first_seen_at")).lt(before));
     apply_scope(&mut query, application_id, environment_id);
     positive_count(database, query).await
+}
+
+fn granularity(days: Option<u32>) -> ActivityGranularity {
+    match days {
+        Some(1) => ActivityGranularity::Hour,
+        Some(365) | None => ActivityGranularity::Month,
+        _ => ActivityGranularity::Day,
+    }
 }
 
 fn first_seen_bucket_expr(
@@ -508,7 +727,7 @@ fn nonnegative(value: i64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::activity_id;
+    use super::{activity_id, DAY_MILLIS, HOUR_MILLIS};
 
     #[test]
     fn activity_ids_are_scope_and_bucket_bound() {
@@ -528,5 +747,11 @@ mod tests {
         );
         assert_eq!(one.len(), 64);
         assert_ne!(one, two);
+    }
+
+    #[test]
+    fn utc_bucket_widths_are_exact() {
+        assert_eq!(HOUR_MILLIS, 3_600_000);
+        assert_eq!(DAY_MILLIS, 86_400_000);
     }
 }
