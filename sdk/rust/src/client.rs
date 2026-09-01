@@ -9,6 +9,7 @@ use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::{
+    device_id::validate_device_id,
     error::{Error, Result},
     model::{
         BatchReceipt, BatchRef, DeviceFacts, ErrorEvent, Event, LogEntry, Metric, TokenRequest,
@@ -74,11 +75,7 @@ impl SondeClient {
 
     pub async fn heartbeat(&self) -> Result<()> {
         let facts = self.inner.facts.read().await.clone();
-        if facts.is_empty() {
-            return Err(Error::InvalidConfiguration(
-                "heartbeat requires at least one device fact".into(),
-            ));
-        }
+        validate_device_facts(&facts)?;
         let body = serialize_payload(&facts)?;
         let response = self.signed_post("/heartbeat", body).await?;
         if response.status().is_success() {
@@ -89,11 +86,7 @@ impl SondeClient {
     }
 
     pub async fn set_device_facts(&self, facts: DeviceFacts) -> Result<()> {
-        if facts.is_empty() {
-            return Err(Error::InvalidConfiguration(
-                "device facts must contain at least one value".into(),
-            ));
-        }
+        validate_device_facts(&facts)?;
         *self.inner.facts.write().await = facts;
         self.heartbeat().await
     }
@@ -152,8 +145,8 @@ impl SondeClient {
             return Ok(first);
         }
 
-        self.invalidate_token().await;
-        let refreshed = self.token(true).await?;
+        self.invalidate_token_if(&auth.token).await;
+        let refreshed = self.token(false).await?;
         self.signed_post_once(route, &body, &refreshed).await
     }
 
@@ -225,8 +218,14 @@ impl SondeClient {
         Ok(token)
     }
 
-    async fn invalidate_token(&self) {
-        *self.inner.token.lock().await = None;
+    async fn invalidate_token_if(&self, stale_token: &str) {
+        let mut guard = self.inner.token.lock().await;
+        if guard
+            .as_ref()
+            .is_some_and(|current| current.token == stale_token)
+        {
+            *guard = None;
+        }
     }
 
     fn start_automatic_heartbeat(&self) {
@@ -298,14 +297,22 @@ impl SondeClientBuilder {
     pub async fn connect(self) -> Result<SondeClient> {
         validate_nonempty("base URL", &self.base_url)?;
         validate_nonempty("API key", &self.api_key)?;
-        validate_nonempty("device ID", &self.device_id)?;
-        validate_nonempty("User-Agent", &self.user_agent)?;
+        validate_user_agent(&self.user_agent)?;
+        let device_id = validate_device_id(&self.device_id)
+            .map_err(|message| Error::InvalidConfiguration(message.into()))?
+            .to_owned();
+        validate_device_facts(&self.facts)?;
         if self
             .heartbeat_interval
             .is_some_and(|interval| interval < Duration::from_secs(15))
         {
             return Err(Error::InvalidConfiguration(
                 "automatic heartbeat interval must be at least 15 seconds".into(),
+            ));
+        }
+        if self.request_timeout.is_zero() {
+            return Err(Error::InvalidConfiguration(
+                "request timeout must be greater than zero".into(),
             ));
         }
 
@@ -319,7 +326,7 @@ impl SondeClientBuilder {
                 http,
                 endpoint,
                 api_key: self.api_key,
-                device_id: self.device_id,
+                device_id,
                 facts: RwLock::new(self.facts),
                 token: Mutex::new(None),
                 heartbeat_interval: self.heartbeat_interval,
@@ -345,6 +352,46 @@ fn validate_nonempty(name: &str, value: &str) -> Result<()> {
     if value.trim().is_empty() {
         return Err(Error::InvalidConfiguration(format!(
             "{name} must not be empty"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_user_agent(value: &str) -> Result<()> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 512
+        || value.chars().any(|character| character.is_control())
+    {
+        return Err(Error::InvalidConfiguration(
+            "User-Agent must be 1..512 visible bytes".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_device_facts(facts: &DeviceFacts) -> Result<()> {
+    if facts.is_empty() {
+        return Err(Error::InvalidConfiguration(
+            "heartbeat requires at least one device fact".into(),
+        ));
+    }
+    validate_optional_fact(&facts.app_version, 128, "appVersion")?;
+    validate_optional_fact(&facts.launcher_version, 128, "launcherVersion")?;
+    validate_optional_fact(&facts.os, 256, "os")?;
+    validate_optional_fact(&facts.system_language, 64, "systemLanguage")?;
+    validate_optional_fact(&facts.architecture, 64, "architecture")?;
+    Ok(())
+}
+
+fn validate_optional_fact(value: &Option<String>, max_bytes: usize, name: &str) -> Result<()> {
+    if let Some(value) = value
+        && (value.is_empty()
+            || value.len() > max_bytes
+            || value.chars().any(|character| character.is_control()))
+    {
+        return Err(Error::InvalidConfiguration(format!(
+            "{name} must be 1..{max_bytes} visible bytes when provided"
         )));
     }
     Ok(())
@@ -376,7 +423,8 @@ async fn api_error(response: Response) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_endpoint, INGEST_PATH};
+    use super::{INGEST_PATH, normalize_endpoint, validate_device_facts, validate_user_agent};
+    use crate::model::DeviceFacts;
 
     #[test]
     fn normalizes_server_and_ingest_urls() {
@@ -389,5 +437,13 @@ mod tests {
             "https://sonde.example.com/api/v1/ingest"
         );
         assert_eq!(INGEST_PATH, "/api/v1/ingest");
+    }
+
+    #[test]
+    fn validates_server_owned_device_facts_contract() {
+        assert!(validate_device_facts(&DeviceFacts::with_platform_defaults()).is_ok());
+        assert!(validate_device_facts(&DeviceFacts::default()).is_err());
+        assert!(validate_user_agent("sonde-rust-sdk/test").is_ok());
+        assert!(validate_user_agent("bad\nagent").is_err());
     }
 }
