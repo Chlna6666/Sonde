@@ -31,7 +31,7 @@ docker compose up -d --build
 
 ## 本地开发
 
-依赖：Rust 1.94+、Node.js 22+、pnpm 10+。
+依赖：Rust 1.95+、Node.js 22+、pnpm 10+。
 
 先启动支持热更新的前端：
 
@@ -63,43 +63,65 @@ Debug 构建会跳过内嵌前端的生产打包。若需在 Debug 模式构建�
 | `SONDE_BUILD_WEB` | 在 Debug 构建中打包前端资源 | 未设置 |
 | `RUST_LOG` | 日志过滤规则 | `sonde=info,actix_web=info` |
 
-## 上报遥测数据
+## Rust SDK 接入
 
-在控制台创建应用并一次性复制长期摄入密钥。该密钥只用于启动认证，正式遥测接口必须使用短生命周期的设备 Token。
+官方 Rust SDK 位于仓库的 `sdk/rust`，设置了 `publish = false`，不会发布到 crates.io。Cargo 对 Git dependency 会遍历仓库寻找目标 crate，因此可以直接使用仓库根地址：
 
-客户端应自行生成或读取一个稳定的匿名化/伪匿名设备 ID。不要直接使用 MAC 地址、硬件序列号或其它可直接识别硬件的信息。
-
-首先使用摄入密钥换取设备绑定 Token：
-
-```bash
-curl -X POST http://127.0.0.1:8080/api/v1/ingest/token \
-  -H "Authorization: Bearer <INGEST_KEY>" \
-  -H "Content-Type: application/json" \
-  -H "User-Agent: MyApp/2.0.0" \
-  -d '{"deviceId":"device-pseudonymous-id"}'
+```toml
+[dependencies]
+sonde-sdk = { git = "https://github.com/Chlna6666/Sonde" }
 ```
 
-响应包含 `token`、`signingKey`、`expiresAt` 和 `signatureVersion`。发送每个遥测请求时，JSON body 必须只序列化一次，并对最终发送的原始字节进行签名。`sonde-hmac-sha256-v2` 的 canonical 内容由以下各行以 LF (`\n`) 连接：
+生产构建建议固定 commit：
 
-```text
-sonde-hmac-sha256-v2
-<timestampMillis>
-<nonce>
-<METHOD>
-<PATH>
-<hex(SHA256(rawBody))>
+```toml
+[dependencies]
+sonde-sdk = { git = "https://github.com/Chlna6666/Sonde", rev = "<SONDE_COMMIT_SHA>" }
 ```
 
-计算 `hex(HMAC-SHA256(signingKey, canonical))`，然后携带：
+应用只需要持久化一个高熵、伪匿名的安装/设备 ID。不要直接使用 MAC 地址、硬件序列号、账户名或其它可直接识别用户/硬件的信息。
 
-```text
-Authorization: Bearer <DEVICE_TOKEN>
-x-sonde-timestamp: <timestampMillis>
-x-sonde-nonce: <每次请求全新的随机 nonce>
-x-sonde-signature: <hex hmac>
+```rust
+use sonde_sdk::{Event, SondeClient};
+
+#[tokio::main]
+async fn main() -> sonde_sdk::Result<()> {
+    let sonde = SondeClient::builder(
+        "http://127.0.0.1:8080",
+        "sonde_your_bootstrap_key",
+        load_or_create_installation_id(),
+    )
+    .app_version(env!("CARGO_PKG_VERSION"))
+    .system_language("zh-CN")
+    .connect()
+    .await?;
+
+    sonde
+        .event(Event::new("app_startup").attribute("channel", "stable"))
+        .await?;
+
+    Ok(())
+}
+
+fn load_or_create_installation_id() -> String {
+    // 首次启动生成并持久化；之后复用同一个值。
+    sonde_sdk::generate_device_id()
+}
 ```
 
-签名路径使用 `/api/v1/ingest/events`、`/metrics`、`/logs` 或 `/errors`。长期摄入密钥绝不能直接发送到这些遥测端点。每批支持 1–1000 条数据，大小上限为 1 MiB；无效数据会返回对应索引，同一批中校验通过的数据仍可正常入库。
+`connect()` 会先完成设备 Token 交换和一次可信 heartbeat，随后默认每 60 秒自动 heartbeat。SDK 内部负责：
+
+- 长期 Bootstrap Key 仅调用 `/api/v1/ingest/token`；
+- 缓存并提前刷新短生命周期 `sndt_` 设备 Token；
+- 使用 `sonde-hmac-sha256-v2` 对实际发送的 JSON 原始字节签名；
+- 每个请求生成新的 nonce 和请求签名时间；
+- 自动上报 heartbeat；
+- 批量上报 events / metrics / logs / errors；
+- 在客户端侧限制 1000 条/批和 1 MiB payload 上限。
+
+业务 telemetry 类型**没有** `anonymousId`、`timestamp` 或 `sessionId` 字段。设备身份来自短期 Token；首次/最后出现时间、Session、在线时长、DAU/WAU/MAU 与累计统计全部由 Sonde 服务端根据可信请求推导。
+
+底层签名协议仅用于实现其它语言 SDK 或协议调试，参见服务端 `src/ingest_signature.rs` 与 Rust SDK `sdk/rust/src/signing.rs`，普通应用不应自行重复实现 HMAC 链路。
 
 ## 质量检查
 
@@ -107,6 +129,11 @@ x-sonde-signature: <hex hmac>
 cargo fmt --all --check
 cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --all-targets
+
+cargo fmt --manifest-path sdk/rust/Cargo.toml --check
+cargo clippy --manifest-path sdk/rust/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path sdk/rust/Cargo.toml
+
 cd web
 pnpm typecheck
 pnpm test
