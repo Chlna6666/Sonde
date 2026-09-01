@@ -36,6 +36,16 @@ pub async fn reset_after_full_restore(database: &DatabaseConnection) -> Result<u
         database.execute(&clear).await?;
     }
 
+    // A restored last_session_id is not proof of an active server-observed session after restart.
+    // Force the first post-restore observation to establish a fresh session so downtime is never
+    // counted as online activity merely because it is shorter than the idle threshold.
+    let reset_sessions = Query::update()
+        .table(Alias::new("telemetry_devices"))
+        .value(Alias::new("last_session_id"), Option::<String>::None)
+        .value(Alias::new("last_session_at"), Option::<i64>::None)
+        .to_owned();
+    database.execute(&reset_sessions).await?;
+
     let base_days = rollups::seed_historical_dirty_days_once(database).await?;
     let dimension_days = dimension_rollup::seed_historical_dimension_dirty_days_once(database).await?;
     let user_days = user_rollup::seed_historical_user_dirty_days_once(database).await?;
