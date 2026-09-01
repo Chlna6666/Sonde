@@ -85,12 +85,12 @@ struct SpoolState {
     acknowledged_sequence: u64,
     next_sequence: u64,
     total_bytes: u64,
+    poisoned: bool,
 }
 
 #[derive(Clone, Debug)]
 struct SegmentMeta {
     path: PathBuf,
-    start_sequence: u64,
     max_sequence: Option<u64>,
     size: u64,
 }
@@ -123,9 +123,21 @@ impl Spool {
         let mut previous_sequence = 0_u64;
 
         for (index, (start_sequence, path)) in segment_paths.iter().enumerate() {
-            let allow_truncated_tail = index + 1 == segment_paths.len();
-            let scan = scan_segment(path, options.segment_bytes, allow_truncated_tail).await?;
-            if allow_truncated_tail {
+            let is_last = index + 1 == segment_paths.len();
+            let scan = scan_segment(path, options.segment_bytes, is_last).await?;
+            if scan.records.is_empty() && !is_last {
+                return Err(spool_corrupt(path, "empty non-active spool segment"));
+            }
+            if let Some(first) = scan.records.first()
+                && first.sequence != *start_sequence
+            {
+                return Err(spool_corrupt(
+                    path,
+                    "segment file name does not match its first record sequence",
+                ));
+            }
+
+            if is_last {
                 let current_len = fs::metadata(path)
                     .await
                     .map_err(|source| spool_io(path, source))?
@@ -161,7 +173,6 @@ impl Spool {
             total_bytes = total_bytes.saturating_add(scan.valid_len);
             segments.push(SegmentMeta {
                 path: path.clone(),
-                start_sequence: *start_sequence,
                 max_sequence: scan.max_sequence,
                 size: scan.valid_len,
             });
@@ -188,7 +199,6 @@ impl Spool {
                 .map_err(|source| spool_io(&path, source))?;
             segments.push(SegmentMeta {
                 path,
-                start_sequence: next_sequence,
                 max_sequence: None,
                 size: 0,
             });
@@ -222,34 +232,38 @@ impl Spool {
             .await
             .map_err(|source| spool_io(&ack_path, source))?;
 
+        let mut state = SpoolState {
+            directory,
+            options,
+            segments,
+            active_file,
+            ack_file,
+            acknowledged_sequence,
+            next_sequence,
+            total_bytes,
+            poisoned: false,
+        };
+        cleanup_acknowledged_segments(&mut state).await?;
+
         let spool = Arc::new(Self {
             kind,
-            state: Mutex::new(SpoolState {
-                directory,
-                options,
-                segments,
-                active_file,
-                ack_file,
-                acknowledged_sequence,
-                next_sequence,
-                total_bytes,
-            }),
+            state: Mutex::new(state),
         });
-
         Ok((spool, recovered))
     }
 
     pub(crate) async fn append(&self, payload: Vec<u8>) -> Result<SpoolRecord> {
         let mut state = self.state.lock().await;
+        ensure_not_poisoned(&state)?;
+
         let sequence = state.next_sequence;
         let frame = encode_record(sequence, &payload)?;
         let frame_len = u64::try_from(frame.len()).map_err(|_| Error::PayloadTooLarge)?;
 
-        if state
-            .segments
-            .last()
-            .is_some_and(|segment| segment.size > 0 && segment.size.saturating_add(frame_len) > state.options.segment_bytes)
-        {
+        if state.segments.last().is_some_and(|segment| {
+            segment.size > 0
+                && segment.size.saturating_add(frame_len) > state.options.segment_bytes
+        }) {
             roll_segment(&mut state).await?;
             cleanup_acknowledged_segments(&mut state).await?;
         }
@@ -276,16 +290,14 @@ impl Spool {
             .seek(SeekFrom::End(0))
             .await
             .map_err(|source| spool_io(&active_path, source))?;
-        state
-            .active_file
-            .write_all(&frame)
-            .await
-            .map_err(|source| spool_io(&active_path, source))?;
-        state
-            .active_file
-            .sync_data()
-            .await
-            .map_err(|source| spool_io(&active_path, source))?;
+        if let Err(source) = state.active_file.write_all(&frame).await {
+            state.poisoned = true;
+            return Err(spool_io(&active_path, source));
+        }
+        if let Err(source) = state.active_file.sync_data().await {
+            state.poisoned = true;
+            return Err(spool_io(&active_path, source));
+        }
 
         let active = state
             .segments
@@ -301,6 +313,7 @@ impl Spool {
 
     pub(crate) async fn commit_through(&self, sequence: u64) -> Result<()> {
         let mut state = self.state.lock().await;
+        ensure_not_poisoned(&state)?;
         if sequence <= state.acknowledged_sequence {
             return Ok(());
         }
@@ -318,16 +331,14 @@ impl Spool {
             .seek(SeekFrom::End(0))
             .await
             .map_err(|source| spool_io(&ack_path, source))?;
-        state
-            .ack_file
-            .write_all(&frame)
-            .await
-            .map_err(|source| spool_io(&ack_path, source))?;
-        state
-            .ack_file
-            .sync_data()
-            .await
-            .map_err(|source| spool_io(&ack_path, source))?;
+        if let Err(source) = state.ack_file.write_all(&frame).await {
+            state.poisoned = true;
+            return Err(spool_io(&ack_path, source));
+        }
+        if let Err(source) = state.ack_file.sync_data().await {
+            state.poisoned = true;
+            return Err(spool_io(&ack_path, source));
+        }
         state.acknowledged_sequence = sequence;
 
         let ack_len = state
@@ -337,26 +348,22 @@ impl Spool {
             .map_err(|source| spool_io(&ack_path, source))?
             .len();
         if ack_len >= ACK_COMPACT_THRESHOLD_BYTES {
-            state
-                .ack_file
-                .set_len(0)
-                .await
-                .map_err(|source| spool_io(&ack_path, source))?;
-            state
-                .ack_file
-                .seek(SeekFrom::Start(0))
-                .await
-                .map_err(|source| spool_io(&ack_path, source))?;
-            state
-                .ack_file
-                .write_all(&frame)
-                .await
-                .map_err(|source| spool_io(&ack_path, source))?;
-            state
-                .ack_file
-                .sync_data()
-                .await
-                .map_err(|source| spool_io(&ack_path, source))?;
+            if let Err(source) = state.ack_file.set_len(0).await {
+                state.poisoned = true;
+                return Err(spool_io(&ack_path, source));
+            }
+            if let Err(source) = state.ack_file.seek(SeekFrom::Start(0)).await {
+                state.poisoned = true;
+                return Err(spool_io(&ack_path, source));
+            }
+            if let Err(source) = state.ack_file.write_all(&frame).await {
+                state.poisoned = true;
+                return Err(spool_io(&ack_path, source));
+            }
+            if let Err(source) = state.ack_file.sync_data().await {
+                state.poisoned = true;
+                return Err(spool_io(&ack_path, source));
+            }
         }
 
         cleanup_acknowledged_segments(&mut state).await
@@ -388,7 +395,11 @@ async fn list_segment_paths(directory: &Path) -> Result<Vec<(u64, PathBuf)>> {
     Ok(segments)
 }
 
-async fn scan_segment(path: &Path, segment_limit: u64, allow_truncated_tail: bool) -> Result<SegmentScan> {
+async fn scan_segment(
+    path: &Path,
+    segment_limit: u64,
+    allow_truncated_tail: bool,
+) -> Result<SegmentScan> {
     let bytes = fs::read(path)
         .await
         .map_err(|source| spool_io(path, source))?;
@@ -413,13 +424,17 @@ async fn scan_segment(path: &Path, segment_limit: u64, allow_truncated_tail: boo
                 .try_into()
                 .map_err(|_| spool_corrupt(path, "invalid record sequence"))?,
         );
-        let payload_len = u32::from_le_bytes(
+        let payload_len_u32 = u32::from_le_bytes(
             bytes[offset + 12..offset + 16]
                 .try_into()
                 .map_err(|_| spool_corrupt(path, "invalid record length"))?,
-        ) as usize;
+        );
+        let payload_len = usize::try_from(payload_len_u32)
+            .map_err(|_| spool_corrupt(path, "record length does not fit this platform"))?;
         let frame_len = RECORD_HEADER_BYTES.saturating_add(payload_len);
-        if u64::try_from(frame_len).unwrap_or(u64::MAX) > segment_limit.saturating_add(RECORD_HEADER_BYTES as u64) {
+        let frame_len_u64 = u64::try_from(frame_len)
+            .map_err(|_| spool_corrupt(path, "record frame length overflow"))?;
+        if frame_len_u64 > segment_limit.saturating_add(RECORD_HEADER_BYTES as u64) {
             return Err(spool_corrupt(path, "record length exceeds spool segment limit"));
         }
         if remaining < frame_len {
@@ -432,7 +447,7 @@ async fn scan_segment(path: &Path, segment_limit: u64, allow_truncated_tail: boo
         let expected_hash = &bytes[offset + 16..offset + 48];
         let payload = &bytes[offset + RECORD_HEADER_BYTES..offset + frame_len];
         let actual_hash = Sha256::digest(payload);
-        if expected_hash != actual_hash.as_slice() {
+        if expected_hash != &actual_hash[..] {
             return Err(spool_corrupt(path, "record checksum mismatch"));
         }
 
@@ -446,7 +461,8 @@ async fn scan_segment(path: &Path, segment_limit: u64, allow_truncated_tail: boo
 
     Ok(SegmentScan {
         records,
-        valid_len: offset as u64,
+        valid_len: u64::try_from(offset)
+            .map_err(|_| spool_corrupt(path, "segment length overflow"))?,
         max_sequence,
     })
 }
@@ -467,7 +483,7 @@ async fn read_acknowledged_sequence(path: &Path) -> Result<u64> {
         );
         let expected = &bytes[offset + 8..offset + ACK_RECORD_BYTES];
         let actual = Sha256::digest(sequence.to_le_bytes());
-        if expected != actual.as_slice() {
+        if expected != &actual[..] {
             break;
         }
         acknowledged = acknowledged.max(sequence);
@@ -509,7 +525,6 @@ async fn roll_segment(state: &mut SpoolState) -> Result<()> {
     state.active_file = file;
     state.segments.push(SegmentMeta {
         path,
-        start_sequence,
         max_sequence: None,
         size: 0,
     });
@@ -553,6 +568,17 @@ async fn cleanup_acknowledged_segments(state: &mut SpoolState) -> Result<()> {
     Ok(())
 }
 
+fn ensure_not_poisoned(state: &SpoolState) -> Result<()> {
+    if state.poisoned {
+        Err(spool_corrupt(
+            &state.directory,
+            "spool writer is poisoned after an incomplete durable write; restart to recover",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn segment_path(directory: &Path, start_sequence: u64) -> PathBuf {
     directory.join(format!("{start_sequence:020}.wal"))
 }
@@ -568,5 +594,43 @@ fn spool_corrupt(path: &Path, reason: impl Into<String>) -> Error {
     Error::SpoolCorrupt {
         path: path.to_path_buf(),
         reason: reason.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::{Spool, SpoolOptions};
+
+    #[test]
+    fn replays_only_unacknowledged_records() -> Result<(), Box<dyn std::error::Error>> {
+        let root = std::env::temp_dir().join(format!("sonde-spool-test-{}", uuid::Uuid::new_v4()));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        runtime.block_on(async {
+            let options = SpoolOptions::new(&root)
+                .segment_bytes(64 * 1024)
+                .max_bytes_per_queue(128 * 1024);
+            let (spool, recovered) = Spool::open("events", options.clone()).await?;
+            assert!(recovered.is_empty());
+
+            let first = spool.append(br#"{\"name\":\"first\"}"#.to_vec()).await?;
+            let second = spool.append(br#"{\"name\":\"second\"}"#.to_vec()).await?;
+            spool.commit_through(first.sequence).await?;
+            drop(spool);
+
+            let (reopened, recovered) = Spool::open("events", options).await?;
+            assert_eq!(recovered.len(), 1);
+            assert_eq!(recovered[0].sequence, second.sequence);
+            assert_eq!(recovered[0].payload, second.payload);
+            reopened.commit_through(second.sequence).await?;
+            Ok::<(), crate::Error>(())
+        })?;
+
+        let _ = fs::remove_dir_all(root);
+        Ok(())
     }
 }
