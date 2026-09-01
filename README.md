@@ -99,17 +99,36 @@ async fn main() -> sonde_sdk::Result<()> {
     .connect()
     .await?;
 
+    // This waits for bounded-queue admission, not for an HTTP round trip.
     sonde
         .event(Event::new("app_startup").attribute("channel", "stable"))
         .await?;
 
+    // Perform the final reliable flush in the application's normal exit path.
+    sonde.shutdown().await?;
     Ok(())
 }
 ```
 
 `load_or_create_device_id()` creates the identifier once with no-overwrite file creation and reuses it on future launches. If the existing file is malformed, the SDK reports the problem rather than silently rotating identity and turning the same installation into a new device. Put the file in the application's normal persistent data directory.
 
-`connect()` exchanges the bootstrap key for a short-lived device token, performs an authenticated heartbeat, and starts the default 60-second heartbeat loop. The SDK then handles token refresh, exact-body HMAC signing, nonces, request-signing timestamps, and signed events/metrics/logs/errors internally.
+`connect()` exchanges the bootstrap key for a short-lived device token, performs an authenticated heartbeat, and starts the default 60-second heartbeat loop. The SDK then handles token refresh, exact-body HMAC signing, nonces, request-signing timestamps, and the four background telemetry queues internally.
+
+### Reliable queued delivery
+
+Events, metrics, logs and errors each have an independent bounded queue and background worker. Defaults are 4,096 queued items per telemetry type, 256 items per HTTP batch and a one-second automatic flush delay from the first item in a non-empty batch.
+
+Serialized batches that exceed the 1 MiB ingest limit are split automatically. Connect/time-out failures, HTTP 429 and HTTP 5xx are retried up to five times by default using exponential backoff with roughly ±20% jitter and a 15-second maximum delay. Integer-seconds `Retry-After` values are honored for retryable responses, capped by the configured maximum backoff. Ordinary 4xx responses and server-side per-item rejections are treated as permanent failures and are not retried.
+
+`event().await`, `metric().await`, `log().await` and `error().await` return when the item has entered the bounded queue. When a queue is full, these APIs apply asynchronous backpressure. Latency-sensitive call sites can use `try_event()`, `try_metric()`, `try_log()` and `try_error()` to receive `Error::QueueFull` instead of waiting.
+
+Use `flush().await` as an acknowledgement barrier for items queued before the flush. Use `shutdown().await` during normal application shutdown; it stops new telemetry admission, drains all four queues, applies the configured retry policy and performs the final flush. Shutdown is idempotent.
+
+After retry exhaustion a failed in-memory batch is dropped so memory remains bounded and shutdown cannot block forever. `delivery_stats()` exposes cumulative enqueued, delivered, rejected, dropped, batch and retry counters for every telemetry type.
+
+This is an **in-memory delivery queue, not a crash-persistent disk spool**. It isolates application code from network latency and transient outages, but an abrupt process kill, OS crash or power loss can still lose data that has not reached Sonde.
+
+Retries around ambiguous connect/time-out failures are at-least-once: the server may have received a request before the client observed the failure. Events requiring deduplication should set `Event::idempotency_key()`.
 
 Telemetry types intentionally do **not** expose `anonymousId`, `timestamp`, or `sessionId`. Device identity comes from the short-lived token. First/last seen, sessions, online duration, DAU/WAU/MAU, and cumulative activity are derived by Sonde from trusted server-received requests.
 
