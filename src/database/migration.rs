@@ -8,6 +8,7 @@ mod device_activity_days;
 mod device_activity_hours;
 mod device_facts;
 mod device_profiles;
+mod device_sessions;
 mod dimension_rollups;
 mod dirty_source_mask;
 mod error_model;
@@ -32,6 +33,7 @@ use device_activity_days::DeviceActivityDays;
 use device_activity_hours::DeviceActivityHours;
 use device_facts::DeviceFacts;
 use device_profiles::DeviceProfiles;
+use device_sessions::DeviceSessions;
 use dimension_rollups::DimensionRollups;
 use dirty_source_mask::DirtySourceMask;
 use error_model::ErrorTelemetryModel;
@@ -84,6 +86,7 @@ impl MigratorTrait for Migrator {
             Box::new(DeviceFacts),
             Box::new(DeviceActivityDays),
             Box::new(DeviceActivityHours),
+            Box::new(DeviceSessions),
         ]
     }
 }
@@ -329,6 +332,7 @@ impl MigrationTrait for InitialSchema {
             "ingest_device_enrollments",
             "ingest_rate_windows",
             "ingest_nonce_replay",
+            "telemetry_device_sessions",
             "telemetry_device_activity_hours",
             "telemetry_device_activity_days",
             "telemetry_devices",
