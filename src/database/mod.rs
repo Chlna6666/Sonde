@@ -10,6 +10,7 @@ pub mod backup_archive;
 mod backup_records;
 pub mod backup_restore;
 pub mod backup_validation;
+pub mod device_activity;
 pub mod device_query;
 pub mod device_risk;
 pub mod device_state;
