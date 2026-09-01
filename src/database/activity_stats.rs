@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use sea_orm::{DatabaseConnection, DbErr};
+use sea_orm::{
+    ConnectionTrait, DatabaseConnection, DbErr,
+    sea_query::{Alias, Expr, ExprTrait, Query},
+};
 
 use super::{device_activity, device_session};
 
@@ -10,6 +13,8 @@ pub struct ActivitySummary {
     pub lifetime_active_millis: u64,
     pub sessions: u64,
     pub lifetime_sessions: u64,
+    pub measured_devices: u64,
+    pub measurement_coverage_pct: f64,
     pub average_session_millis: u64,
     pub average_active_millis_per_device: u64,
     pub stickiness_pct: f64,
@@ -76,6 +81,13 @@ pub async fn query(
         environment_id,
         since,
         None,
+    )
+    .await?;
+    let measured_devices = measured_devices(
+        database,
+        application_id,
+        environment_id,
+        since,
     )
     .await?;
     let dau = device_activity::unique_devices(
@@ -165,18 +177,54 @@ pub async fn query(
             lifetime_active_millis,
             sessions: sessions.total_sessions,
             lifetime_sessions: lifetime_sessions.total_sessions,
+            measured_devices,
+            measurement_coverage_pct: percentage(measured_devices, active_devices),
             average_session_millis: sessions.average_session_millis,
-            average_active_millis_per_device: if active_devices == 0 {
+            average_active_millis_per_device: if measured_devices == 0 {
                 0
             } else {
-                active_millis / active_devices
+                active_millis / measured_devices
             },
-            stickiness_pct: if mau == 0 {
-                0.0
-            } else {
-                ((dau as f64 / mau as f64) * 1000.0).round() / 10.0
-            },
+            stickiness_pct: percentage(dau, mau),
         },
         trend: buckets.into_values().collect(),
     })
+}
+
+async fn measured_devices(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since: Option<i64>,
+) -> Result<u64, DbErr> {
+    let mut query = Query::select();
+    query
+        .expr_as(
+            Expr::cust("COUNT(DISTINCT device_hash)"),
+            Alias::new("count"),
+        )
+        .from(Alias::new("telemetry_device_activity_days"))
+        .and_where(Expr::col(Alias::new("active_millis")).gt(0_i64));
+    if let Some(application_id) = application_id {
+        query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
+    }
+    if let Some(environment_id) = environment_id {
+        query.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
+    }
+    if let Some(since) = since {
+        query.and_where(Expr::col(Alias::new("last_seen_at")).gte(since));
+    }
+    let count = database
+        .query_one(&query.to_owned())
+        .await?
+        .and_then(|row| row.try_get::<i64>("", "count").ok())
+        .unwrap_or(0);
+    u64::try_from(count).map_err(|_| DbErr::Custom("negative measured device count".into()))
+}
+
+fn percentage(numerator: u64, denominator: u64) -> f64 {
+    if denominator == 0 {
+        return 0.0;
+    }
+    ((numerator as f64 / denominator as f64) * 1000.0).round() / 10.0
 }
