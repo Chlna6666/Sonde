@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use sea_orm::{DatabaseConnection, DbErr};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -50,7 +50,7 @@ fn spawn_alert_worker(database: DatabaseConnection) {
             .await
             {
                 Ok(Some(evaluated)) if evaluated > 0 => {
-                    info!(evaluated, "leased alert evaluation completed");
+                    debug!(evaluated, "leased alert evaluation completed");
                 }
                 Ok(_) => {}
                 Err(error) => {
@@ -78,7 +78,7 @@ fn spawn_alert_delivery_worker(database: DatabaseConnection) {
             .await
             {
                 Ok(Some(processed)) if processed > 0 => {
-                    info!(processed, "leased alert delivery batch completed");
+                    debug!(processed, "leased alert delivery batch completed");
                 }
                 Ok(_) => {}
                 Err(error) => {
@@ -163,7 +163,7 @@ fn spawn_ingest_security_cleanup_worker(database: DatabaseConnection) {
             .await
             {
                 Ok(Some(pruned)) if pruned > 0 => {
-                    info!(pruned, "pruned expired ingest security records");
+                    debug!(pruned, "pruned expired ingest security records");
                 }
                 Ok(_) => {}
                 Err(error) => {
@@ -191,7 +191,7 @@ fn spawn_first_seen_backfill_worker(database: DatabaseConnection) {
             .await
             {
                 Ok(Some(processed)) if processed > 0 => {
-                    info!(processed, "leased first-seen backfill batch completed");
+                    debug!(processed, "leased first-seen backfill batch completed");
                 }
                 Ok(_) => {}
                 Err(error) => {
