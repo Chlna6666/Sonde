@@ -31,7 +31,7 @@ Open <http://127.0.0.1:8080> and complete the initialization wizard. Docker pers
 
 ## Local development
 
-Requirements: Rust 1.95.0, Node.js 22+, and pnpm 10+.
+Requirements: Rust 1.95.0+, Node.js 22+, and pnpm 10+.
 
 Start the frontend with hot reload:
 
@@ -63,43 +63,57 @@ Debug builds skip the embedded production frontend bundle. Set `SONDE_BUILD_WEB=
 | `SONDE_BUILD_WEB` | Builds frontend assets during debug builds | unset |
 | `RUST_LOG` | Tracing filter | `sonde=info,actix_web=info` |
 
-## Ingest telemetry
+## Rust SDK
 
-Create an application in the console and copy its long-lived ingest key once. That key is a bootstrap credential only: telemetry endpoints require a short-lived device token.
+The official Rust SDK lives in `sdk/rust`. It is intentionally marked `publish = false` and is not published to crates.io. Cargo traverses a Git repository to locate the requested package, so consumers can depend on the repository root directly:
 
-The client should generate or read one stable pseudonymous device identifier. Do not use a raw MAC address, hardware serial number, or another directly identifying hardware value.
-
-First exchange the ingest key for a device-bound token:
-
-```bash
-curl -X POST http://127.0.0.1:8080/api/v1/ingest/token \
-  -H "Authorization: Bearer <INGEST_KEY>" \
-  -H "Content-Type: application/json" \
-  -H "User-Agent: MyApp/2.0.0" \
-  -d '{"deviceId":"device-pseudonymous-id"}'
+```toml
+[dependencies]
+sonde-sdk = { git = "https://github.com/Chlna6666/Sonde" }
 ```
 
-The response contains `token`, `signingKey`, `expiresAt`, and `signatureVersion`. For every telemetry request, serialize the JSON body once and sign those exact raw bytes. For signature version `sonde-hmac-sha256-v2`, join the following lines with LF (`\n`):
+Pin a commit for reproducible production builds:
 
-```text
-sonde-hmac-sha256-v2
-<timestampMillis>
-<nonce>
-<METHOD>
-<PATH>
-<hex(SHA256(rawBody))>
+```toml
+[dependencies]
+sonde-sdk = { git = "https://github.com/Chlna6666/Sonde", rev = "<SONDE_COMMIT_SHA>" }
 ```
 
-Compute `hex(HMAC-SHA256(signingKey, canonical))`, then send the telemetry request with:
+Applications should persist one high-entropy pseudonymous installation/device identifier. Do not derive it from raw MAC addresses, hardware serial numbers, account names, or other directly identifying values.
 
-```text
-Authorization: Bearer <DEVICE_TOKEN>
-x-sonde-timestamp: <timestampMillis>
-x-sonde-nonce: <fresh random nonce>
-x-sonde-signature: <hex hmac>
+```rust
+use sonde_sdk::{Event, SondeClient};
+
+#[tokio::main]
+async fn main() -> sonde_sdk::Result<()> {
+    let sonde = SondeClient::builder(
+        "http://127.0.0.1:8080",
+        "sonde_your_bootstrap_key",
+        load_or_create_installation_id(),
+    )
+    .app_version(env!("CARGO_PKG_VERSION"))
+    .system_language("en-US")
+    .connect()
+    .await?;
+
+    sonde
+        .event(Event::new("app_startup").attribute("channel", "stable"))
+        .await?;
+
+    Ok(())
+}
+
+fn load_or_create_installation_id() -> String {
+    // Persist the first generated value in the application's own data store and reuse it.
+    sonde_sdk::generate_device_id()
+}
 ```
 
-Use `/api/v1/ingest/events`, `/metrics`, `/logs`, or `/errors` as the signed path. Never send the long-lived bootstrap ingest key directly to those telemetry endpoints. Batches accept 1–1000 items and are limited to 1 MiB. Invalid items return their indexes while valid entries in the same request can still be stored.
+`connect()` exchanges the bootstrap key for a short-lived device token, performs an authenticated heartbeat, and starts the default 60-second heartbeat loop. The SDK then handles token refresh, exact-body HMAC signing, nonces, request-signing timestamps, and signed events/metrics/logs/errors internally.
+
+Telemetry types intentionally do **not** expose `anonymousId`, `timestamp`, or `sessionId`. Device identity comes from the short-lived token. First/last seen, sessions, online duration, DAU/WAU/MAU, and cumulative activity are derived by Sonde from trusted server-received requests.
+
+The underlying `sonde-hmac-sha256-v2` protocol remains available as an implementation reference for future SDKs in other languages. Regular application code should use the Rust SDK instead of duplicating the signing protocol.
 
 ## Quality checks
 
@@ -108,6 +122,12 @@ cargo fmt --all --check
 cargo check --all-targets --all-features --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --all-targets --all-features --locked
+
+cargo fmt --manifest-path sdk/rust/Cargo.toml --check
+cargo check --manifest-path sdk/rust/Cargo.toml
+cargo clippy --manifest-path sdk/rust/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path sdk/rust/Cargo.toml
+
 cd web
 pnpm typecheck
 pnpm test
