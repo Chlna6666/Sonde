@@ -12,6 +12,7 @@ use reqwest::{
     header::{CONTENT_TYPE, RETRY_AFTER},
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
@@ -418,6 +419,17 @@ impl Transport {
         }
     }
 
+    pub(crate) fn spool_binding(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"sonde-sdk-spool-v1\0");
+        hasher.update(self.endpoint.as_bytes());
+        hasher.update([0]);
+        hasher.update(self.device_id.as_bytes());
+        hasher.update([0]);
+        hasher.update(self.api_key.as_bytes());
+        hasher.finalize().into()
+    }
+
     pub(crate) async fn send_serialized_batch(
         &self,
         route: &str,
@@ -431,7 +443,14 @@ impl Transport {
         if !response.status().is_success() {
             return Err(api_error(response).await);
         }
-        Ok(response.json::<BatchReceipt>().await?)
+        let response_bytes = response.bytes().await.map_err(|error| {
+            Error::InvalidServerResponse(format!("failed to read delivery response body: {error}"))
+        })?;
+        let receipt: BatchReceipt = serde_json::from_slice(&response_bytes).map_err(|error| {
+            Error::InvalidServerResponse(format!("failed to decode delivery receipt: {error}"))
+        })?;
+        validate_batch_receipt(&receipt, items.len())?;
+        Ok(receipt)
     }
 
     async fn signed_post(&self, route: &str, body: Vec<u8>) -> Result<Response> {
@@ -576,6 +595,35 @@ fn build_serialized_batch_body(items: &[&[u8]]) -> Result<Vec<u8>> {
     Ok(body)
 }
 
+fn validate_batch_receipt(receipt: &BatchReceipt, expected_items: usize) -> Result<()> {
+    if receipt.accepted > expected_items || receipt.rejected.len() > expected_items {
+        return Err(Error::InvalidServerResponse(
+            "delivery receipt counts exceed the request batch size".into(),
+        ));
+    }
+    if receipt.accepted.saturating_add(receipt.rejected.len()) != expected_items {
+        return Err(Error::InvalidServerResponse(
+            "delivery receipt does not account for every request item".into(),
+        ));
+    }
+
+    let mut seen = vec![false; expected_items];
+    for rejected in &receipt.rejected {
+        if rejected.index >= expected_items {
+            return Err(Error::InvalidServerResponse(
+                "delivery receipt contains an out-of-range rejected item index".into(),
+            ));
+        }
+        if seen[rejected.index] {
+            return Err(Error::InvalidServerResponse(
+                "delivery receipt contains a duplicate rejected item index".into(),
+            ));
+        }
+        seen[rejected.index] = true;
+    }
+    Ok(())
+}
+
 fn normalize_endpoint(base_url: &str) -> String {
     let trimmed = base_url.trim().trim_end_matches('/');
     if trimmed.ends_with(INGEST_PATH) {
@@ -671,10 +719,10 @@ async fn api_error(response: Response) -> Error {
 #[cfg(test)]
 mod tests {
     use super::{
-        INGEST_PATH, build_serialized_batch_body, normalize_endpoint, validate_device_facts,
-        validate_user_agent,
+        INGEST_PATH, build_serialized_batch_body, normalize_endpoint, validate_batch_receipt,
+        validate_device_facts, validate_user_agent,
     };
-    use crate::model::DeviceFacts;
+    use crate::model::{BatchReceipt, DeviceFacts, RejectedItem};
 
     #[test]
     fn normalizes_server_and_ingest_urls() {
@@ -691,11 +739,35 @@ mod tests {
 
     #[test]
     fn rebuilds_batch_from_serialized_items_without_reserializing() -> crate::Result<()> {
-        let first = br#"{\"name\":\"a\"}"#;
-        let second = br#"{\"name\":\"b\"}"#;
+        let first = br#"{"name":"a"}"#;
+        let second = br#"{"name":"b"}"#;
         let body = build_serialized_batch_body(&[first.as_slice(), second.as_slice()])?;
-        assert_eq!(body, br#"{\"items\":[{\"name\":\"a\"},{\"name\":\"b\"}]}"#);
+        assert_eq!(body, br#"{"items":[{"name":"a"},{"name":"b"}]}"#);
         Ok(())
+    }
+
+    #[test]
+    fn rejects_incomplete_or_duplicate_delivery_receipts() {
+        let incomplete = BatchReceipt {
+            accepted: 1,
+            rejected: Vec::new(),
+        };
+        assert!(validate_batch_receipt(&incomplete, 2).is_err());
+
+        let duplicate = BatchReceipt {
+            accepted: 0,
+            rejected: vec![
+                RejectedItem {
+                    index: 0,
+                    reason: "a".into(),
+                },
+                RejectedItem {
+                    index: 0,
+                    reason: "b".into(),
+                },
+            ],
+        };
+        assert!(validate_batch_receipt(&duplicate, 2).is_err());
     }
 
     #[test]
