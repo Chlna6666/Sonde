@@ -12,10 +12,7 @@ fn observation(received_at: i64, telemetry_at: i64, os: &str) -> DeviceObservati
         received_at,
         telemetry_at,
         item_count: 1,
-        session_id: Some(TimedDimension {
-            value: "session-risk".into(),
-            timestamp: telemetry_at,
-        }),
+        session_id: None,
         app_version: Some(TimedDimension {
             value: "1.0.0".into(),
             timestamp: telemetry_at,
@@ -25,6 +22,8 @@ fn observation(received_at: i64, telemetry_at: i64, os: &str) -> DeviceObservati
             value: os.into(),
             timestamp: telemetry_at,
         }),
+        system_language: None,
+        architecture: None,
     }
 }
 
