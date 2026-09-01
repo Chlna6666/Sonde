@@ -20,6 +20,37 @@ pub struct UserGrowthPoint {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ActivitySummary {
+    pub active_millis: u64,
+    pub lifetime_active_millis: u64,
+    pub sessions: u64,
+    pub lifetime_sessions: u64,
+    pub average_session_millis: u64,
+    pub average_active_millis_per_device: u64,
+    pub stickiness_pct: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityTrendPoint {
+    pub bucket: String,
+    pub active_users: u64,
+    pub active_millis: u64,
+    pub sessions: u64,
+    pub average_session_millis: u64,
+    pub cumulative_active_millis: u64,
+    pub cumulative_sessions: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityStats {
+    pub summary: ActivitySummary,
+    pub trend: Vec<ActivityTrendPoint>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VersionShare {
     pub version: String,
     pub count: u64,
@@ -91,6 +122,7 @@ pub struct Overview {
     pub dau: u64,
     pub wau: u64,
     pub mau: u64,
+    pub activity: ActivityStats,
     pub growth: GrowthMetrics,
     pub trend: Vec<DailyTrendPoint>,
     pub user_growth: Vec<UserGrowthPoint>,
@@ -105,6 +137,7 @@ pub struct Overview {
 #[serde(rename_all = "camelCase")]
 pub struct AppTelemetryStats {
     pub overview: AppStatsOverview,
+    pub activity: ActivityStats,
     pub growth: GrowthMetrics,
     pub trend: Vec<DailyTrendPoint>,
     pub user_growth: Vec<UserGrowthPoint>,
