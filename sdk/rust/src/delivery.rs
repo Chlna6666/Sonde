@@ -341,6 +341,14 @@ async fn flush_batch<T: QueuedTelemetry>(
     work.push_back(std::mem::take(batch));
 
     while let Some(mut items) = work.pop_front() {
+        if items.len() > options.max_batch_items {
+            let remainder = items.split_off(options.max_batch_items);
+            work.push_front(remainder);
+            work.push_front(items);
+            continue;
+        }
+
+        counters.batches.fetch_add(1, Ordering::Relaxed);
         match send_with_retry(transport, options, counters, T::ROUTE, &items).await {
             Ok(receipt) => record_receipt::<T>(counters, pending_error, receipt),
             Err(Error::PayloadTooLarge) if items.len() > 1 => {
@@ -387,7 +395,6 @@ async fn send_with_retry<T: Serialize>(
 ) -> Result<BatchReceipt> {
     let mut retries = 0_u32;
     loop {
-        counters.batches.fetch_add(1, Ordering::Relaxed);
         match transport.send_batch(route, items).await {
             Ok(receipt) => return Ok(receipt),
             Err(error) if error.is_retryable() && retries < options.retry.max_retries => {
