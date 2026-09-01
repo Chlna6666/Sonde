@@ -9,6 +9,7 @@ Cargo traverses Git repositories to locate the requested crate, so the repositor
 ```toml
 [dependencies]
 sonde-sdk = { git = "https://github.com/Chlna6666/Sonde" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 For reproducible production builds, pin a commit:
@@ -16,19 +17,21 @@ For reproducible production builds, pin a commit:
 ```toml
 [dependencies]
 sonde-sdk = { git = "https://github.com/Chlna6666/Sonde", rev = "<SONDE_COMMIT_SHA>" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ## Connect
 
 ```rust
-use sonde_sdk::{Event, SondeClient};
+use sonde_sdk::{Event, SondeClient, load_or_create_device_id};
 
 #[tokio::main]
 async fn main() -> sonde_sdk::Result<()> {
+    let device_id = load_or_create_device_id("data/sonde-device-id")?;
     let sonde = SondeClient::builder(
         "https://telemetry.example.com",
         "sonde_your_bootstrap_key",
-        load_or_create_installation_id(),
+        device_id,
     )
     .app_version(env!("CARGO_PKG_VERSION"))
     .system_language("zh-CN")
@@ -41,13 +44,11 @@ async fn main() -> sonde_sdk::Result<()> {
 
     Ok(())
 }
-
-fn load_or_create_installation_id() -> String {
-    // On the first launch, persist this value in the application's own config/data store.
-    // Reuse it on later launches. Do not derive it from hardware serials or account names.
-    sonde_sdk::generate_device_id()
-}
 ```
+
+`load_or_create_device_id()` creates a high-entropy pseudonymous installation ID once and reuses it on later launches. Creation is no-overwrite; concurrent first launches converge on the same persisted ID. A malformed existing identity file is reported instead of silently generating a replacement, because rotating it would make the same installation appear as a new device.
+
+Store this file in the application's normal persistent data/config directory. Do not derive device identity from hardware serials, MAC addresses, account names, or other directly identifying values.
 
 `connect()` performs an initial authenticated heartbeat and starts the default 60-second heartbeat loop. Sonde derives server-side first/last seen, session boundaries, online duration, DAU/WAU/MAU and cumulative activity from these trusted requests.
 
@@ -105,12 +106,15 @@ sonde
     .await?;
 ```
 
+The SDK validates device IDs, User-Agent values and device facts locally using the same limits as the Sonde live-ingest contract before sending requests.
+
 ## Protocol behavior
 
 The SDK handles the Sonde ingest protocol internally:
 
 - Exchanges the long-lived bootstrap API key only at `/api/v1/ingest/token`.
 - Caches and refreshes short-lived `sndt_` device tokens before expiration.
+- Coalesces concurrent refreshes through a single token lock and avoids redundant refreshes after a stale-token 401.
 - Signs the exact serialized request bytes with `sonde-hmac-sha256-v2`.
 - Generates a fresh nonce and request-signing timestamp per request.
 - Retries once with a fresh token after an HTTP 401.
