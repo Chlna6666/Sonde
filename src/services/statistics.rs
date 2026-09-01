@@ -1,13 +1,14 @@
 use crate::{
-    database::{device_activity, stats},
+    database::{activity_stats, device_activity, stats},
     error::AppError,
     services::authentication::AuthenticatedUser,
     state::InstalledState,
 };
 
 pub use super::statistics_models::{
-    AppStatsOverview, AppTelemetryStats, DailyTrendPoint, DistributionItem, GrowthMetrics, Overview,
-    UserGrowthPoint, VersionSeries, VersionSeriesPoint, VersionShare, VersionTimelinePoint,
+    ActivityStats, ActivitySummary, ActivityTrendPoint, AppStatsOverview, AppTelemetryStats,
+    DailyTrendPoint, DistributionItem, GrowthMetrics, Overview, UserGrowthPoint, VersionSeries,
+    VersionSeriesPoint, VersionShare, VersionTimelinePoint,
 };
 
 const MAX_STATISTICS_DAYS: u32 = 730;
@@ -31,7 +32,16 @@ pub async fn overview(
 ) -> Result<Overview, AppError> {
     user.require("telemetry.read", None)?;
     let days = validate_days(days)?;
-    Ok(map_overview(stats::overview(&installed.database, days).await?))
+    let record = stats::overview(&installed.database, days).await?;
+    let activity = activity_stats::query(
+        &installed.database,
+        None,
+        None,
+        statistics_since(days),
+        days,
+    )
+    .await?;
+    Ok(map_overview(record, activity))
 }
 
 pub async fn application_stats(
@@ -70,7 +80,23 @@ async fn query_application_stats(
     )
     .await?;
     record.overview.avg_daily_events = record.overview.total_events / calendar_days;
-    Ok(map_application_stats(record))
+    let activity = activity_stats::query(
+        &installed.database,
+        Some(application_id),
+        environment_id,
+        statistics_since(days),
+        days,
+    )
+    .await?;
+    Ok(map_application_stats(record, activity))
+}
+
+fn statistics_since(days: Option<u32>) -> Option<i64> {
+    days.map(|days| {
+        chrono::Utc::now()
+            .timestamp_millis()
+            .saturating_sub(i64::from(days).saturating_mul(86_400_000))
+    })
 }
 
 async fn statistics_calendar_days(
@@ -105,7 +131,7 @@ async fn statistics_calendar_days(
         .map_err(|error| AppError::internal("convert statistics calendar day span", error))
 }
 
-fn map_overview(record: stats::Overview) -> Overview {
+fn map_overview(record: stats::Overview, activity: activity_stats::ActivityStats) -> Overview {
     Overview {
         applications: record.applications,
         events_24h: record.events_24h,
@@ -117,6 +143,7 @@ fn map_overview(record: stats::Overview) -> Overview {
         dau: record.dau,
         wau: record.wau,
         mau: record.mau,
+        activity: map_activity(activity),
         growth: map_growth(record.growth),
         trend: record.trend.into_iter().map(map_trend).collect(),
         user_growth: record
@@ -152,9 +179,13 @@ fn map_overview(record: stats::Overview) -> Overview {
     }
 }
 
-fn map_application_stats(record: stats::AppTelemetryStats) -> AppTelemetryStats {
+fn map_application_stats(
+    record: stats::AppTelemetryStats,
+    activity: activity_stats::ActivityStats,
+) -> AppTelemetryStats {
     AppTelemetryStats {
         overview: map_app_overview(record.overview),
+        activity: map_activity(activity),
         growth: map_growth(record.growth),
         trend: record.trend.into_iter().map(map_trend).collect(),
         user_growth: record
@@ -196,6 +227,33 @@ fn map_application_stats(record: stats::AppTelemetryStats) -> AppTelemetryStats 
             .build_distribution
             .into_iter()
             .map(map_distribution)
+            .collect(),
+    }
+}
+
+fn map_activity(record: activity_stats::ActivityStats) -> ActivityStats {
+    ActivityStats {
+        summary: ActivitySummary {
+            active_millis: record.summary.active_millis,
+            lifetime_active_millis: record.summary.lifetime_active_millis,
+            sessions: record.summary.sessions,
+            lifetime_sessions: record.summary.lifetime_sessions,
+            average_session_millis: record.summary.average_session_millis,
+            average_active_millis_per_device: record.summary.average_active_millis_per_device,
+            stickiness_pct: record.summary.stickiness_pct,
+        },
+        trend: record
+            .trend
+            .into_iter()
+            .map(|point| ActivityTrendPoint {
+                bucket: point.bucket,
+                active_users: point.active_users,
+                active_millis: point.active_millis,
+                sessions: point.sessions,
+                average_session_millis: point.average_session_millis,
+                cumulative_active_millis: point.cumulative_active_millis,
+                cumulative_sessions: point.cumulative_sessions,
+            })
             .collect(),
     }
 }
@@ -284,12 +342,17 @@ fn map_distribution(record: stats::DistributionItem) -> DistributionItem {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_days;
+    use super::{statistics_since, validate_days};
 
     #[test]
     fn statistics_window_is_bounded() {
         assert!(validate_days(Some(0)).is_err());
         assert!(validate_days(Some(731)).is_err());
         assert_eq!(validate_days(Some(365)).ok().flatten(), Some(365));
+    }
+
+    #[test]
+    fn all_time_activity_has_no_lower_bound() {
+        assert_eq!(statistics_since(None), None);
     }
 }
