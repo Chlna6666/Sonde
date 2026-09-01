@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::{
-    database::{imports, telemetry},
+    database::{device_history, imports, telemetry},
     domain::telemetry::EventInput,
     error::AppError,
     services::authentication::AuthenticatedUser,
@@ -88,6 +88,8 @@ pub(super) async fn import_rows(
     let mut inserted = 0_i64;
     let mut deduped = initial_duplicates;
     for row in rows {
+        let timestamp = row.ts;
+        let device_hash = row.user_hash.clone();
         let dedupe_key = format!("d1:{application_id}:{}:{}", row.day, row.user_hash);
         let event = migrated_event(row);
         if telemetry::insert_migrated_event(&installed.database, scope, &event, &dedupe_key).await? {
@@ -95,6 +97,11 @@ pub(super) async fn import_rows(
         } else {
             deduped += 1;
         }
+
+        // Projection is intentionally idempotent and runs even when the event was already present.
+        // If a previous attempt stored the event but failed before updating derived device activity,
+        // retrying the import repairs the projection without duplicating online-time estimates.
+        device_history::project_event(&installed.database, scope, &device_hash, timestamp).await?;
     }
     Ok((inserted, deduped))
 }
