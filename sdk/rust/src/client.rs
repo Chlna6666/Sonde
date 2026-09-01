@@ -1,6 +1,9 @@
-use std::{sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
-use reqwest::{Client as HttpClient, Response, StatusCode, header::CONTENT_TYPE};
+use reqwest::{header::CONTENT_TYPE, Client as HttpClient, Response, StatusCode};
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
@@ -18,6 +21,7 @@ const MAX_BATCH_ITEMS: usize = 1_000;
 const MAX_INGEST_BODY_BYTES: usize = 1_048_576;
 const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 const TOKEN_REFRESH_MARGIN_MS: i64 = 10_000;
+const INGEST_PATH: &str = "/api/v1/ingest";
 
 #[derive(Clone)]
 pub struct SondeClient {
@@ -76,7 +80,7 @@ impl SondeClient {
             ));
         }
         let body = serialize_payload(&facts)?;
-        let response = self.signed_post("/api/v1/ingest/heartbeat", body).await?;
+        let response = self.signed_post("/heartbeat", body).await?;
         if response.status().is_success() {
             Ok(())
         } else {
@@ -99,7 +103,7 @@ impl SondeClient {
     }
 
     pub async fn events(&self, events: &[Event]) -> Result<BatchReceipt> {
-        self.send_batch("/api/v1/ingest/events", events).await
+        self.send_batch("/events", events).await
     }
 
     pub async fn metric(&self, metric: Metric) -> Result<BatchReceipt> {
@@ -107,7 +111,7 @@ impl SondeClient {
     }
 
     pub async fn metrics(&self, metrics: &[Metric]) -> Result<BatchReceipt> {
-        self.send_batch("/api/v1/ingest/metrics", metrics).await
+        self.send_batch("/metrics", metrics).await
     }
 
     pub async fn log(&self, entry: LogEntry) -> Result<BatchReceipt> {
@@ -115,7 +119,7 @@ impl SondeClient {
     }
 
     pub async fn logs(&self, entries: &[LogEntry]) -> Result<BatchReceipt> {
-        self.send_batch("/api/v1/ingest/logs", entries).await
+        self.send_batch("/logs", entries).await
     }
 
     pub async fn error(&self, error: ErrorEvent) -> Result<BatchReceipt> {
@@ -123,10 +127,10 @@ impl SondeClient {
     }
 
     pub async fn errors(&self, errors: &[ErrorEvent]) -> Result<BatchReceipt> {
-        self.send_batch("/api/v1/ingest/errors", errors).await
+        self.send_batch("/errors", errors).await
     }
 
-    async fn send_batch<T: Serialize>(&self, path: &str, items: &[T]) -> Result<BatchReceipt> {
+    async fn send_batch<T: Serialize>(&self, route: &str, items: &[T]) -> Result<BatchReceipt> {
         if items.is_empty() || items.len() > MAX_BATCH_ITEMS {
             return Err(Error::InvalidBatchSize);
         }
@@ -134,46 +138,47 @@ impl SondeClient {
         if body.len() > MAX_INGEST_BODY_BYTES {
             return Err(Error::PayloadTooLarge);
         }
-        let response = self.signed_post(path, body).await?;
+        let response = self.signed_post(route, body).await?;
         if !response.status().is_success() {
             return Err(api_error(response).await);
         }
         Ok(response.json::<BatchReceipt>().await?)
     }
 
-    async fn signed_post(&self, path: &str, body: Vec<u8>) -> Result<Response> {
+    async fn signed_post(&self, route: &str, body: Vec<u8>) -> Result<Response> {
         let auth = self.token(false).await?;
-        let first = self.signed_post_once(path, &body, &auth).await?;
+        let first = self.signed_post_once(route, &body, &auth).await?;
         if first.status() != StatusCode::UNAUTHORIZED {
             return Ok(first);
         }
 
         self.invalidate_token().await;
         let refreshed = self.token(true).await?;
-        self.signed_post_once(path, &body, &refreshed).await
+        self.signed_post_once(route, &body, &refreshed).await
     }
 
     async fn signed_post_once(
         &self,
-        path: &str,
+        route: &str,
         body: &[u8],
         auth: &TokenState,
     ) -> Result<Response> {
         let timestamp = unix_millis()?;
         let nonce = Uuid::now_v7().to_string();
+        let canonical_path = format!("{INGEST_PATH}{route}");
         let signature = signing::sign(
             &auth.signing_key,
             timestamp,
             &nonce,
             "POST",
-            path,
+            &canonical_path,
             body,
         )?;
 
         Ok(self
             .inner
             .http
-            .post(format!("{}{}", self.inner.endpoint, path))
+            .post(format!("{}{}", self.inner.endpoint, route))
             .bearer_auth(&auth.token)
             .header(CONTENT_TYPE, "application/json")
             .header("x-sonde-timestamp", timestamp.to_string())
@@ -230,7 +235,8 @@ impl SondeClient {
         };
         let weak = Arc::downgrade(&self.inner);
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+            let mut interval =
+                tokio::time::interval_at(tokio::time::Instant::now() + period, period);
             loop {
                 interval.tick().await;
                 let Some(inner) = weak.upgrade() else {
@@ -294,7 +300,10 @@ impl SondeClientBuilder {
         validate_nonempty("API key", &self.api_key)?;
         validate_nonempty("device ID", &self.device_id)?;
         validate_nonempty("User-Agent", &self.user_agent)?;
-        if self.heartbeat_interval.is_some_and(|interval| interval < Duration::from_secs(15)) {
+        if self
+            .heartbeat_interval
+            .is_some_and(|interval| interval < Duration::from_secs(15))
+        {
             return Err(Error::InvalidConfiguration(
                 "automatic heartbeat interval must be at least 15 seconds".into(),
             ));
@@ -325,16 +334,18 @@ impl SondeClientBuilder {
 
 fn normalize_endpoint(base_url: &str) -> String {
     let trimmed = base_url.trim().trim_end_matches('/');
-    if trimmed.ends_with("/api/v1/ingest") {
+    if trimmed.ends_with(INGEST_PATH) {
         trimmed.to_owned()
     } else {
-        format!("{trimmed}/api/v1/ingest")
+        format!("{trimmed}{INGEST_PATH}")
     }
 }
 
 fn validate_nonempty(name: &str, value: &str) -> Result<()> {
     if value.trim().is_empty() {
-        return Err(Error::InvalidConfiguration(format!("{name} must not be empty")));
+        return Err(Error::InvalidConfiguration(format!(
+            "{name} must not be empty"
+        )));
     }
     Ok(())
 }
@@ -354,7 +365,10 @@ async fn api_error(response: Response) -> Error {
     let status = response.status();
     let body = match response.text().await {
         Ok(body) if !body.is_empty() => body,
-        Ok(_) => status.canonical_reason().unwrap_or("Sonde request failed").to_owned(),
+        Ok(_) => status
+            .canonical_reason()
+            .unwrap_or("Sonde request failed")
+            .to_owned(),
         Err(error) => format!("failed to read error response: {error}"),
     };
     Error::Api { status, body }
@@ -362,11 +376,18 @@ async fn api_error(response: Response) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_endpoint;
+    use super::{normalize_endpoint, INGEST_PATH};
 
     #[test]
     fn normalizes_server_and_ingest_urls() {
-        assert_eq!(normalize_endpoint("https://sonde.example.com/"), "https://sonde.example.com/api/v1/ingest");
-        assert_eq!(normalize_endpoint("https://sonde.example.com/api/v1/ingest"), "https://sonde.example.com/api/v1/ingest");
+        assert_eq!(
+            normalize_endpoint("https://sonde.example.com/"),
+            "https://sonde.example.com/api/v1/ingest"
+        );
+        assert_eq!(
+            normalize_endpoint("https://sonde.example.com/api/v1/ingest"),
+            "https://sonde.example.com/api/v1/ingest"
+        );
+        assert_eq!(INGEST_PATH, "/api/v1/ingest");
     }
 }
