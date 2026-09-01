@@ -63,24 +63,20 @@ pub async fn run_batch(database: &DatabaseConnection, limit: u64) -> Result<usiz
         );
     }
 
-    let rows = database
-        .query_all(&query.to_owned())
-        .await?
-        .into_iter()
-        .filter_map(|row| {
-            let device_hash = row
-                .try_get::<Option<String>>("", "anonymous_id")
-                .ok()
-                .flatten()?;
-            Some(Ok(EventActivity {
-                id: row.try_get("", "id").ok()?,
-                application_id: row.try_get("", "application_id").ok()?,
-                environment_id: row.try_get("", "environment_id").ok()?,
-                device_hash,
-                timestamp: row.try_get("", "timestamp").ok()?,
-            }))
-        })
-        .collect::<Result<Vec<_>, DbErr>>()?;
+    let raw_rows = database.query_all(&query.to_owned()).await?;
+    let mut rows = Vec::with_capacity(raw_rows.len());
+    for row in raw_rows {
+        let Some(device_hash) = row.try_get::<Option<String>>("", "anonymous_id")? else {
+            continue;
+        };
+        rows.push(EventActivity {
+            id: row.try_get("", "id")?,
+            application_id: row.try_get("", "application_id")?,
+            environment_id: row.try_get("", "environment_id")?,
+            device_hash,
+            timestamp: row.try_get("", "timestamp")?,
+        });
+    }
 
     if rows.is_empty() {
         set_state(database, COMPLETE_KEY, "complete").await?;
@@ -171,48 +167,47 @@ async fn merge_device_bounds(
 ) -> Result<(), DbErr> {
     let now = chrono::Utc::now().timestamp_millis();
     let mut insert = Query::insert();
+    insert.into_table(Alias::new("telemetry_devices")).columns(
+        [
+            "id",
+            "application_id",
+            "environment_id",
+            "device_hash",
+            "first_seen_at",
+            "last_seen_at",
+            "last_event_at",
+            "last_metric_at",
+            "last_log_at",
+            "last_error_at",
+            "last_session_id",
+            "last_session_at",
+            "last_app_version",
+            "last_app_version_at",
+            "last_launcher_version",
+            "last_launcher_version_at",
+            "last_os",
+            "last_os_at",
+            "last_system_language",
+            "last_system_language_at",
+            "last_architecture",
+            "last_architecture_at",
+            "event_items",
+            "metric_items",
+            "log_items",
+            "error_items",
+            "session_changes",
+            "app_version_changes",
+            "launcher_version_changes",
+            "os_changes",
+            "risk_score",
+            "last_anomaly",
+            "last_anomaly_at",
+            "updated_at",
+        ]
+        .map(Alias::new),
+    );
     insert
-        .into_table(Alias::new("telemetry_devices"))
-        .columns(
-            [
-                "id",
-                "application_id",
-                "environment_id",
-                "device_hash",
-                "first_seen_at",
-                "last_seen_at",
-                "last_event_at",
-                "last_metric_at",
-                "last_log_at",
-                "last_error_at",
-                "last_session_id",
-                "last_session_at",
-                "last_app_version",
-                "last_app_version_at",
-                "last_launcher_version",
-                "last_launcher_version_at",
-                "last_os",
-                "last_os_at",
-                "last_system_language",
-                "last_system_language_at",
-                "last_architecture",
-                "last_architecture_at",
-                "event_items",
-                "metric_items",
-                "log_items",
-                "error_items",
-                "session_changes",
-                "app_version_changes",
-                "launcher_version_changes",
-                "os_changes",
-                "risk_score",
-                "last_anomaly",
-                "last_anomaly_at",
-                "updated_at",
-            ]
-            .map(Alias::new),
-        )
-        .values_panic([
+        .values([
             Value::from(bounds.device_hash.clone()),
             Value::from(bounds.application_id.clone()),
             Value::from(bounds.environment_id.clone()),
@@ -248,11 +243,12 @@ async fn merge_device_bounds(
             Value::BigInt(None),
             Value::from(now),
         ])
-        .on_conflict(
-            OnConflict::column(Alias::new("id"))
-                .do_nothing()
-                .to_owned(),
-        );
+        .map_err(|error| DbErr::Custom(format!("build device backfill insert: {error}")))?;
+    insert.on_conflict(
+        OnConflict::column(Alias::new("id"))
+            .do_nothing()
+            .to_owned(),
+    );
     database.execute(&insert).await?;
 
     let update = Query::update()
@@ -321,13 +317,15 @@ async fn set_state(
     let mut query = Query::insert();
     query
         .into_table(Alias::new("system_state"))
-        .columns([Alias::new("key"), Alias::new("value")])
-        .values_panic([Value::from(key), Value::from(value)])
-        .on_conflict(
-            OnConflict::column(Alias::new("key"))
-                .update_column(Alias::new("value"))
-                .to_owned(),
-        );
+        .columns([Alias::new("key"), Alias::new("value")]);
+    query
+        .values([Value::from(key), Value::from(value)])
+        .map_err(|error| DbErr::Custom(format!("build system state upsert: {error}")))?;
+    query.on_conflict(
+        OnConflict::column(Alias::new("key"))
+            .update_column(Alias::new("value"))
+            .to_owned(),
+    );
     database.execute(&query).await?;
     Ok(())
 }
