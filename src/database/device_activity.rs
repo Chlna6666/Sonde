@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
+
 use sea_orm::{
-    ConnectionTrait, DbErr,
+    ConnectionTrait, DbBackend, DbErr,
     sea_query::{Alias, Expr, ExprTrait, Func, Order, Query},
 };
 use sha2::{Digest, Sha256};
@@ -15,6 +17,21 @@ pub struct DailyActiveDevices {
     pub active_millis: u64,
 }
 
+#[derive(Clone, Debug)]
+pub struct DeviceGrowthBucket {
+    pub bucket: String,
+    pub new_devices: u64,
+    pub cumulative_devices: u64,
+    pub active_devices: u64,
+}
+
+#[derive(Clone, Copy)]
+enum ActivityGranularity {
+    Hour,
+    Day,
+    Month,
+}
+
 pub async fn record(
     database: &impl ConnectionTrait,
     scope: &TelemetryScope,
@@ -22,22 +39,63 @@ pub async fn record(
     previous_seen_at: i64,
     received_at: i64,
 ) -> Result<(), DbErr> {
-    let day = day_for_timestamp(received_at);
+    record_bucket(
+        database,
+        "telemetry_device_activity_days",
+        "day",
+        "sonde:device-activity-day\0",
+        &day_for_timestamp(previous_seen_at),
+        &day_for_timestamp(received_at),
+        scope,
+        device_hash,
+        previous_seen_at,
+        received_at,
+    )
+    .await?;
+    record_bucket(
+        database,
+        "telemetry_device_activity_hours",
+        "hour",
+        "sonde:device-activity-hour\0",
+        &hour_for_timestamp(previous_seen_at),
+        &hour_for_timestamp(received_at),
+        scope,
+        device_hash,
+        previous_seen_at,
+        received_at,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_bucket(
+    database: &impl ConnectionTrait,
+    table: &str,
+    bucket_column: &str,
+    id_context: &str,
+    previous_bucket: &str,
+    current_bucket: &str,
+    scope: &TelemetryScope,
+    device_hash: &str,
+    previous_seen_at: i64,
+    received_at: i64,
+) -> Result<(), DbErr> {
     let id = activity_id(
+        id_context,
         &scope.application_id,
         &scope.environment_id,
         device_hash,
-        &day,
+        current_bucket,
     );
     let inserted = insert_batch_ignore_conflicts(
         database,
-        "telemetry_device_activity_days",
+        table,
         &[
             "id",
             "application_id",
             "environment_id",
             "device_hash",
-            "day",
+            bucket_column,
             "first_seen_at",
             "last_seen_at",
             "active_millis",
@@ -49,7 +107,7 @@ pub async fn record(
             scope.application_id.clone().into(),
             scope.environment_id.clone().into(),
             device_hash.to_owned().into(),
-            day.clone().into(),
+            current_bucket.to_owned().into(),
             received_at.into(),
             received_at.into(),
             0_i64.into(),
@@ -64,9 +122,8 @@ pub async fn record(
         return Ok(());
     }
 
-    let previous_day = day_for_timestamp(previous_seen_at);
     let gap = received_at.saturating_sub(previous_seen_at);
-    let active_delta = if previous_day == day
+    let active_delta = if previous_bucket == current_bucket
         && gap > 0
         && gap <= MAX_CONTIGUOUS_ACTIVITY_MILLIS
     {
@@ -74,14 +131,12 @@ pub async fn record(
     } else {
         0
     };
-    let last_seen_at = if previous_day == day {
-        std::cmp::max(previous_seen_at, received_at)
-    } else {
-        received_at
-    };
     let update = Query::update()
-        .table(Alias::new("telemetry_device_activity_days"))
-        .value(Alias::new("last_seen_at"), last_seen_at)
+        .table(Alias::new(table))
+        .value(
+            Alias::new("last_seen_at"),
+            std::cmp::max(previous_seen_at, received_at),
+        )
         .value(
             Alias::new("active_millis"),
             Expr::col(Alias::new("active_millis")).add(active_delta),
@@ -121,12 +176,7 @@ pub async fn unique_devices(
         since,
         until,
     );
-    let count = database
-        .query_one(&query.to_owned())
-        .await?
-        .and_then(|row| row.try_get::<i64>("", "count").ok())
-        .unwrap_or(0);
-    u64::try_from(count).map_err(|_| DbErr::Custom("negative unique device count".into()))
+    positive_count(database, query).await
 }
 
 pub async fn new_devices(
@@ -144,18 +194,63 @@ pub async fn new_devices(
     if let Some(until) = until {
         query.and_where(Expr::col(Alias::new("first_seen_at")).lt(until));
     }
-    if let Some(application_id) = application_id {
-        query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
+    apply_scope(&mut query, application_id, environment_id);
+    positive_count(database, query).await
+}
+
+pub async fn total_devices(
+    database: &impl ConnectionTrait,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+) -> Result<u64, DbErr> {
+    let mut query = Query::select();
+    query
+        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("count"))
+        .from(Alias::new("telemetry_devices"));
+    apply_scope(&mut query, application_id, environment_id);
+    positive_count(database, query).await
+}
+
+pub async fn growth_timeline(
+    database: &impl ConnectionTrait,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since: Option<i64>,
+    days: Option<u32>,
+) -> Result<Vec<DeviceGrowthBucket>, DbErr> {
+    let granularity = match days {
+        Some(1) => ActivityGranularity::Hour,
+        Some(365) | None => ActivityGranularity::Month,
+        _ => ActivityGranularity::Day,
+    };
+    let active = active_buckets(database, application_id, environment_id, since, granularity).await?;
+    let new = new_device_buckets(database, application_id, environment_id, since, granularity).await?;
+    let baseline = match since {
+        Some(since) => devices_before(database, application_id, environment_id, since).await?,
+        None => 0,
+    };
+
+    let mut buckets = BTreeMap::<String, (u64, u64)>::new();
+    for (bucket, active_devices) in active {
+        buckets.entry(bucket).or_default().0 = active_devices;
     }
-    if let Some(environment_id) = environment_id {
-        query.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
+    for (bucket, new_devices) in new {
+        buckets.entry(bucket).or_default().1 = new_devices;
     }
-    let count = database
-        .query_one(&query.to_owned())
-        .await?
-        .and_then(|row| row.try_get::<i64>("", "count").ok())
-        .unwrap_or(0);
-    u64::try_from(count).map_err(|_| DbErr::Custom("negative new device count".into()))
+
+    let mut cumulative = baseline;
+    Ok(buckets
+        .into_iter()
+        .map(|(bucket, (active_devices, new_devices))| {
+            cumulative = cumulative.saturating_add(new_devices);
+            DeviceGrowthBucket {
+                bucket,
+                new_devices,
+                cumulative_devices: cumulative,
+                active_devices,
+            }
+        })
+        .collect())
 }
 
 pub async fn daily_activity(
@@ -175,12 +270,7 @@ pub async fn daily_activity(
         .from(Alias::new("telemetry_device_activity_days"))
         .group_by_col(Alias::new("day"))
         .order_by(Alias::new("day"), Order::Asc);
-    if let Some(application_id) = application_id {
-        query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
-    }
-    if let Some(environment_id) = environment_id {
-        query.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
-    }
+    apply_scope(&mut query, application_id, environment_id);
     if let Some(since) = since {
         query.and_where(Expr::col(Alias::new("last_seen_at")).gte(since));
     }
@@ -190,15 +280,167 @@ pub async fn daily_activity(
         .await?
         .into_iter()
         .map(|row| {
-            let devices = row.try_get::<i64>("", "devices").unwrap_or(0);
-            let active_millis = row.try_get::<i64>("", "active_millis").unwrap_or(0);
             Ok(DailyActiveDevices {
                 day: row.try_get("", "day")?,
-                devices: u64::try_from(std::cmp::max(devices, 0)).unwrap_or(0),
-                active_millis: u64::try_from(std::cmp::max(active_millis, 0)).unwrap_or(0),
+                devices: nonnegative(row.try_get::<i64>("", "devices").unwrap_or(0)),
+                active_millis: nonnegative(
+                    row.try_get::<i64>("", "active_millis").unwrap_or(0),
+                ),
             })
         })
         .collect()
+}
+
+async fn active_buckets(
+    database: &impl ConnectionTrait,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since: Option<i64>,
+    granularity: ActivityGranularity,
+) -> Result<BTreeMap<String, u64>, DbErr> {
+    let (table, column) = match granularity {
+        ActivityGranularity::Hour => ("telemetry_device_activity_hours", "hour"),
+        ActivityGranularity::Day | ActivityGranularity::Month => {
+            ("telemetry_device_activity_days", "day")
+        }
+    };
+    let mut query = Query::select();
+    query
+        .column(Alias::new(column))
+        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("devices"))
+        .from(Alias::new(table))
+        .group_by_col(Alias::new(column))
+        .order_by(Alias::new(column), Order::Asc);
+    apply_scope(&mut query, application_id, environment_id);
+    if let Some(since) = since {
+        query.and_where(Expr::col(Alias::new("last_seen_at")).gte(since));
+    }
+
+    let mut result = BTreeMap::new();
+    for row in database.query_all(&query.to_owned()).await? {
+        let raw_bucket: String = row.try_get("", column)?;
+        let bucket = match granularity {
+            ActivityGranularity::Month => raw_bucket
+                .get(..7)
+                .ok_or_else(|| DbErr::Custom("invalid device activity day bucket".into()))?
+                .to_owned(),
+            _ => raw_bucket,
+        };
+        let devices = nonnegative(row.try_get::<i64>("", "devices").unwrap_or(0));
+        result
+            .entry(bucket)
+            .and_modify(|value: &mut u64| *value = value.saturating_add(devices))
+            .or_insert(devices);
+    }
+    Ok(result)
+}
+
+async fn new_device_buckets(
+    database: &impl ConnectionTrait,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since: Option<i64>,
+    granularity: ActivityGranularity,
+) -> Result<BTreeMap<String, u64>, DbErr> {
+    let bucket_expr = first_seen_bucket_expr(database.get_database_backend(), granularity)?;
+    let mut query = Query::select();
+    query
+        .expr_as(Expr::cust(bucket_expr), Alias::new("bucket"))
+        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("devices"))
+        .from(Alias::new("telemetry_devices"))
+        .and_where(Expr::col(Alias::new("first_seen_at")).is_not_null())
+        .group_by_col(Alias::new("bucket"))
+        .order_by(Alias::new("bucket"), Order::Asc);
+    apply_scope(&mut query, application_id, environment_id);
+    if let Some(since) = since {
+        query.and_where(Expr::col(Alias::new("first_seen_at")).gte(since));
+    }
+
+    let mut result = BTreeMap::new();
+    for row in database.query_all(&query.to_owned()).await? {
+        result.insert(
+            row.try_get("", "bucket")?,
+            nonnegative(row.try_get::<i64>("", "devices").unwrap_or(0)),
+        );
+    }
+    Ok(result)
+}
+
+async fn devices_before(
+    database: &impl ConnectionTrait,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    before: i64,
+) -> Result<u64, DbErr> {
+    let mut query = Query::select();
+    query
+        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("count"))
+        .from(Alias::new("telemetry_devices"))
+        .and_where(Expr::col(Alias::new("first_seen_at")).lt(before));
+    apply_scope(&mut query, application_id, environment_id);
+    positive_count(database, query).await
+}
+
+fn first_seen_bucket_expr(
+    backend: DbBackend,
+    granularity: ActivityGranularity,
+) -> Result<String, DbErr> {
+    let expression = match (backend, granularity) {
+        (DbBackend::Postgres, ActivityGranularity::Hour) => {
+            "to_char(to_timestamp(first_seen_at / 1000.0), 'YYYY-MM-DD HH24:00')"
+        }
+        (DbBackend::Postgres, ActivityGranularity::Day) => {
+            "to_char(to_timestamp(first_seen_at / 1000.0), 'YYYY-MM-DD')"
+        }
+        (DbBackend::Postgres, ActivityGranularity::Month) => {
+            "to_char(to_timestamp(first_seen_at / 1000.0), 'YYYY-MM')"
+        }
+        (DbBackend::MySql, ActivityGranularity::Hour) => {
+            "DATE_FORMAT(FROM_UNIXTIME(first_seen_at / 1000), '%Y-%m-%d %H:00')"
+        }
+        (DbBackend::MySql, ActivityGranularity::Day) => {
+            "DATE_FORMAT(FROM_UNIXTIME(first_seen_at / 1000), '%Y-%m-%d')"
+        }
+        (DbBackend::MySql, ActivityGranularity::Month) => {
+            "DATE_FORMAT(FROM_UNIXTIME(first_seen_at / 1000), '%Y-%m')"
+        }
+        (DbBackend::Sqlite, ActivityGranularity::Hour) => {
+            "strftime('%Y-%m-%d %H:00', first_seen_at / 1000, 'unixepoch')"
+        }
+        (DbBackend::Sqlite, ActivityGranularity::Day) => {
+            "strftime('%Y-%m-%d', first_seen_at / 1000, 'unixepoch')"
+        }
+        (DbBackend::Sqlite, ActivityGranularity::Month) => {
+            "strftime('%Y-%m', first_seen_at / 1000, 'unixepoch')"
+        }
+        _ => return Err(DbErr::Custom("unsupported database backend for device activity".into())),
+    };
+    Ok(expression.to_owned())
+}
+
+async fn positive_count(
+    database: &impl ConnectionTrait,
+    query: sea_orm::sea_query::SelectStatement,
+) -> Result<u64, DbErr> {
+    let count = database
+        .query_one(&query)
+        .await?
+        .and_then(|row| row.try_get::<i64>("", "count").ok())
+        .unwrap_or(0);
+    u64::try_from(count).map_err(|_| DbErr::Custom("negative device count".into()))
+}
+
+fn apply_scope(
+    query: &mut sea_orm::sea_query::SelectStatement,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+) {
+    if let Some(application_id) = application_id {
+        query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
+    }
+    if let Some(environment_id) = environment_id {
+        query.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
+    }
 }
 
 fn apply_scope_and_window(
@@ -208,12 +450,7 @@ fn apply_scope_and_window(
     since: Option<i64>,
     until: Option<i64>,
 ) {
-    if let Some(application_id) = application_id {
-        query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
-    }
-    if let Some(environment_id) = environment_id {
-        query.and_where(Expr::col(Alias::new("environment_id")).eq(environment_id));
-    }
+    apply_scope(query, application_id, environment_id);
     if let Some(since) = since {
         query.and_where(Expr::col(Alias::new("last_seen_at")).gte(since));
     }
@@ -228,14 +465,30 @@ fn day_for_timestamp(timestamp: i64) -> String {
         .unwrap_or_else(|| "1970-01-01".into())
 }
 
-fn activity_id(application_id: &str, environment_id: &str, device_hash: &str, day: &str) -> String {
+fn hour_for_timestamp(timestamp: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(timestamp)
+        .map(|value| value.format("%Y-%m-%d %H:00").to_string())
+        .unwrap_or_else(|| "1970-01-01 00:00".into())
+}
+
+fn activity_id(
+    context: &str,
+    application_id: &str,
+    environment_id: &str,
+    device_hash: &str,
+    bucket: &str,
+) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"sonde:device-activity-day\0");
-    for value in [application_id, environment_id, device_hash, day] {
+    hasher.update(context.as_bytes());
+    for value in [application_id, environment_id, device_hash, bucket] {
         hasher.update(value.as_bytes());
         hasher.update(b"\0");
     }
     hex::encode(hasher.finalize())
+}
+
+fn nonnegative(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -243,9 +496,21 @@ mod tests {
     use super::activity_id;
 
     #[test]
-    fn activity_ids_are_scope_and_day_bound() {
-        let one = activity_id("app", "prod", "device", "2026-09-01");
-        let two = activity_id("app", "prod", "device", "2026-09-02");
+    fn activity_ids_are_scope_and_bucket_bound() {
+        let one = activity_id(
+            "sonde:device-activity-day\0",
+            "app",
+            "prod",
+            "device",
+            "2026-09-01",
+        );
+        let two = activity_id(
+            "sonde:device-activity-day\0",
+            "app",
+            "prod",
+            "device",
+            "2026-09-02",
+        );
         assert_eq!(one.len(), 64);
         assert_ne!(one, two);
     }
