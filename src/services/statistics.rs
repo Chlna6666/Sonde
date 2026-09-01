@@ -238,6 +238,8 @@ fn map_activity(record: activity_stats::ActivityStats) -> ActivityStats {
             lifetime_active_millis: record.summary.lifetime_active_millis,
             sessions: record.summary.sessions,
             lifetime_sessions: record.summary.lifetime_sessions,
+            measured_devices: record.summary.measured_devices,
+            measurement_coverage_pct: record.summary.measurement_coverage_pct,
             average_session_millis: record.summary.average_session_millis,
             average_active_millis_per_device: record.summary.average_active_millis_per_device,
             stickiness_pct: record.summary.stickiness_pct,
