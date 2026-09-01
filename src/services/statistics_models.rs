@@ -42,6 +42,8 @@ pub struct ActivityTrendPoint {
     pub average_session_millis: u64,
     pub cumulative_active_millis: u64,
     pub cumulative_sessions: u64,
+    pub lifetime_cumulative_active_millis: u64,
+    pub lifetime_cumulative_sessions: u64,
 }
 
 #[derive(Debug, Serialize)]
