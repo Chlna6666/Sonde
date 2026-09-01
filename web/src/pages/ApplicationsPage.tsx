@@ -552,7 +552,7 @@ function ManageAppModal({ application, onClose, onExport }: {
   };
 
   const dependency = `sonde-sdk = { git = "https://github.com/Chlna6666/Sonde" }\ntokio = { version = "1", features = ["macros", "rt-multi-thread"] }`;
-  const example = `use sonde_sdk::{Event, SondeClient, load_or_create_device_id};\n\n#[tokio::main]\nasync fn main() -> sonde_sdk::Result<()> {\n    let device_id = load_or_create_device_id("data/sonde-device-id")?;\n    let sonde = SondeClient::builder(\n        "${window.location.origin}",\n        std::env::var("SONDE_BOOTSTRAP_KEY").expect("missing SONDE_BOOTSTRAP_KEY"),\n        device_id,\n    )\n    .app_version(env!("CARGO_PKG_VERSION"))\n    .system_language("zh-CN")\n    .connect()\n    .await?;\n\n    sonde.event(\n        Event::new("app_startup").attribute("channel", "stable")\n    ).await?;\n\n    Ok(())\n}`;
+  const example = `use sonde_sdk::{Event, SondeClient, load_or_create_device_id};\n\n#[tokio::main]\nasync fn main() -> sonde_sdk::Result<()> {\n    let device_id = load_or_create_device_id("data/sonde-device-id")?;\n    let sonde = SondeClient::builder(\n        "${window.location.origin}",\n        std::env::var("SONDE_BOOTSTRAP_KEY").expect("missing SONDE_BOOTSTRAP_KEY"),\n        device_id,\n    )\n    .app_version(env!("CARGO_PKG_VERSION"))\n    .system_language("zh-CN")\n    .disk_spool("data/sonde-spool")\n    .connect()\n    .await?;\n\n    sonde.event(\n        Event::new("app_startup").attribute("channel", "stable")\n    ).await?;\n\n    sonde.shutdown().await?;\n    Ok(())\n}`;
 
   return (
     <Modal
@@ -581,7 +581,7 @@ function ManageAppModal({ application, onClose, onExport }: {
               <div>
                 <strong className="text-sm text-[var(--text)]">官方 Rust SDK · Git 分发</strong>
                 <p className="text-xs text-[var(--muted)] mt-1 mb-0 leading-relaxed">
-                  SDK 位于 Sonde 仓库的 <code>sdk/rust</code>，设置了 <code>publish = false</code>，不会发布到 crates.io。Token 刷新、HMAC、nonce、heartbeat 和平台字段所有权全部由 SDK 内部处理。
+                  SDK 位于 Sonde 仓库的 <code>sdk/rust</code>，设置了 <code>publish = false</code>，不会发布到 crates.io。Token 刷新、HMAC、nonce、heartbeat、后台批处理和可选 crash-persistent WAL 全部由 SDK 内部处理。
                 </p>
               </div>
             </div>
@@ -601,7 +601,7 @@ function ManageAppModal({ application, onClose, onExport }: {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
             <SdkFact title="设备身份" text="SDK 首次创建并持久化高熵 installation/device ID；业务 telemetry 不发送 anonymousId。" />
             <SdkFact title="时间与 Session" text="客户端不上传 timestamp/sessionId。Sonde 使用服务端接收时间、heartbeat 和活动间隔推导。" />
-            <SdkFact title="安全链路" text="Bootstrap Key 只换短期 sndt_ Token；实际上报自动签名 sonde-hmac-sha256-v2。" />
+            <SdkFact title="可靠上报" text="可选 WAL 会在 async enqueue 成功前 append + fsync；服务端 ACK 前崩溃的数据会在下次启动恢复。" />
           </div>
 
           <SdkCodeBlock
@@ -616,7 +616,7 @@ function ManageAppModal({ application, onClose, onExport }: {
           />
 
           <div className="p-3.5 rounded-2xl bg-[var(--panel-strong)] border border-[var(--border-soft)] text-xs text-[var(--muted)] leading-relaxed">
-            将 <code>sonde-device-id</code> 放在应用自己的持久化数据目录。已有身份文件损坏时 SDK 会报错而不是自动换 ID。生产环境建议在 Git 依赖中增加 <code>rev = "&lt;commit sha&gt;"</code> 固定 SDK 版本。新建 Ingest Key 统一使用 <code>ingest</code> scope。
+            将 <code>sonde-device-id</code> 与 <code>sonde-spool</code> 放在应用自己的持久化数据目录。WAL 使用 at-least-once 语义，关键业务 Event 应设置稳定 <code>idempotency_key</code>。已有身份文件损坏时 SDK 会报错而不是自动换 ID。生产环境建议在 Git 依赖中增加 <code>rev = "&lt;commit sha&gt;"</code> 固定 SDK 版本。新建 Ingest Key 统一使用 <code>ingest</code> scope。
           </div>
         </div>
       ) : null}
