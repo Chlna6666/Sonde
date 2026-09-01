@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   Activity,
   Clock3,
@@ -103,7 +104,7 @@ export function ActivityStatsPanel({ activity }: Props) {
         />
       </div>
 
-      {summary.measurementCoveragePct < 100 ? (
+      {summary.measuredDevices > 0 && summary.measurementCoveragePct < 100 ? (
         <div
           className="text-[11px] text-[var(--muted)]"
           style={{
@@ -128,6 +129,7 @@ export function ActivityStatsPanel({ activity }: Props) {
           title="累计在线时长"
           data={activeTrend}
           formatter={formatDuration}
+          axisFormatter={compactDuration}
           windowLabel="窗口累计"
           lifetimeLabel="生命周期累计"
         />
@@ -135,6 +137,7 @@ export function ActivityStatsPanel({ activity }: Props) {
           title="累计 Session"
           data={sessionTrend}
           formatter={formatCount}
+          axisFormatter={compactNumber}
           windowLabel="窗口累计"
           lifetimeLabel="生命周期累计"
         />
@@ -149,7 +152,7 @@ function MetricCard({
   value,
   detail,
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   label: string;
   value: string;
   detail?: string;
@@ -196,12 +199,14 @@ function CumulativeChart({
   title,
   data,
   formatter,
+  axisFormatter,
   windowLabel,
   lifetimeLabel,
 }: {
   title: string;
   data: Array<{ bucket: string; window: number; lifetime: number }>;
   formatter: (value: number) => string;
+  axisFormatter: (value: number) => string;
   windowLabel: string;
   lifetimeLabel: string;
 }) {
@@ -227,7 +232,7 @@ function CumulativeChart({
       ) : (
         <div style={{ width: "100%", height: 190 }}>
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data} margin={{ top: 8, right: 10, left: -16, bottom: 0 }}>
+            <LineChart data={data} margin={{ top: 8, right: 10, left: -8, bottom: 0 }}>
               <CartesianGrid stroke="var(--border-soft)" strokeDasharray="3 3" vertical={false} />
               <XAxis
                 dataKey="bucket"
@@ -239,12 +244,12 @@ function CumulativeChart({
                 minTickGap={24}
               />
               <YAxis
-                tickFormatter={(value) => compactNumber(Number(value))}
+                tickFormatter={(value) => axisFormatter(Number(value))}
                 tickLine={false}
                 axisLine={false}
                 stroke="var(--muted)"
                 fontSize={9}
-                width={42}
+                width={48}
               />
               <Tooltip
                 content={({ active, payload, label }) => {
@@ -298,6 +303,14 @@ function formatDuration(milliseconds: number): string {
   if (totalHours < 24) return `${totalHours}h ${totalMinutes % 60}m`;
   const days = Math.floor(totalHours / 24);
   return `${days}d ${totalHours % 24}h`;
+}
+
+function compactDuration(milliseconds: number): string {
+  const value = Math.max(0, Number.isFinite(milliseconds) ? milliseconds : 0);
+  if (value < 60_000) return `${Math.round(value / 1000)}s`;
+  if (value < 3_600_000) return `${Math.round(value / 60_000)}m`;
+  if (value < 86_400_000) return `${(value / 3_600_000).toFixed(value < 36_000_000 ? 1 : 0)}h`;
+  return `${(value / 86_400_000).toFixed(value < 864_000_000 ? 1 : 0)}d`;
 }
 
 function formatCount(value: number): string {
