@@ -1,5 +1,5 @@
 use crate::{
-    database::stats,
+    database::{device_activity, stats},
     error::AppError,
     services::authentication::AuthenticatedUser,
     state::InstalledState,
@@ -60,9 +60,49 @@ async fn query_application_stats(
     days: Option<u32>,
 ) -> Result<AppTelemetryStats, AppError> {
     let days = validate_days(days)?;
-    Ok(map_application_stats(
-        stats::application_stats(&installed.database, application_id, environment_id, days).await?,
-    ))
+    let mut record =
+        stats::application_stats(&installed.database, application_id, environment_id, days).await?;
+    let calendar_days = statistics_calendar_days(
+        installed,
+        application_id,
+        environment_id,
+        days,
+    )
+    .await?;
+    record.overview.avg_daily_events = record.overview.total_events / calendar_days;
+    Ok(map_application_stats(record))
+}
+
+async fn statistics_calendar_days(
+    installed: &InstalledState,
+    application_id: &str,
+    environment_id: Option<&str>,
+    days: Option<u32>,
+) -> Result<u64, AppError> {
+    if let Some(days) = days {
+        return Ok(u64::from(std::cmp::max(days, 1)));
+    }
+
+    let activity = device_activity::daily_activity(
+        &installed.database,
+        Some(application_id),
+        environment_id,
+        None,
+    )
+    .await?;
+    let Some(first) = activity.first() else {
+        return Ok(1);
+    };
+    let Some(last) = activity.last() else {
+        return Ok(1);
+    };
+    let first = chrono::NaiveDate::parse_from_str(&first.day, "%Y-%m-%d")
+        .map_err(|error| AppError::internal("parse first device activity day", error))?;
+    let last = chrono::NaiveDate::parse_from_str(&last.day, "%Y-%m-%d")
+        .map_err(|error| AppError::internal("parse last device activity day", error))?;
+    let span = last.signed_duration_since(first).num_days().saturating_add(1);
+    u64::try_from(std::cmp::max(span, 1))
+        .map_err(|error| AppError::internal("convert statistics calendar day span", error))
 }
 
 fn map_overview(record: stats::Overview) -> Overview {
