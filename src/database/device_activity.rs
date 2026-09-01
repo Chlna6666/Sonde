@@ -298,11 +298,35 @@ async fn active_buckets(
     since: Option<i64>,
     granularity: ActivityGranularity,
 ) -> Result<BTreeMap<String, u64>, DbErr> {
+    if matches!(granularity, ActivityGranularity::Month) {
+        let mut query = Query::select();
+        query
+            .expr_as(Expr::cust("SUBSTR(day, 1, 7)"), Alias::new("bucket"))
+            .expr_as(
+                Expr::cust("COUNT(DISTINCT device_hash)"),
+                Alias::new("devices"),
+            )
+            .from(Alias::new("telemetry_device_activity_days"))
+            .group_by_col(Alias::new("bucket"))
+            .order_by(Alias::new("bucket"), Order::Asc);
+        apply_scope(&mut query, application_id, environment_id);
+        if let Some(since) = since {
+            query.and_where(Expr::col(Alias::new("last_seen_at")).gte(since));
+        }
+        let mut result = BTreeMap::new();
+        for row in database.query_all(&query.to_owned()).await? {
+            result.insert(
+                row.try_get("", "bucket")?,
+                nonnegative(row.try_get::<i64>("", "devices").unwrap_or(0)),
+            );
+        }
+        return Ok(result);
+    }
+
     let (table, column) = match granularity {
         ActivityGranularity::Hour => ("telemetry_device_activity_hours", "hour"),
-        ActivityGranularity::Day | ActivityGranularity::Month => {
-            ("telemetry_device_activity_days", "day")
-        }
+        ActivityGranularity::Day => ("telemetry_device_activity_days", "day"),
+        ActivityGranularity::Month => unreachable!(),
     };
     let mut query = Query::select();
     query
@@ -318,19 +342,10 @@ async fn active_buckets(
 
     let mut result = BTreeMap::new();
     for row in database.query_all(&query.to_owned()).await? {
-        let raw_bucket: String = row.try_get("", column)?;
-        let bucket = match granularity {
-            ActivityGranularity::Month => raw_bucket
-                .get(..7)
-                .ok_or_else(|| DbErr::Custom("invalid device activity day bucket".into()))?
-                .to_owned(),
-            _ => raw_bucket,
-        };
-        let devices = nonnegative(row.try_get::<i64>("", "devices").unwrap_or(0));
-        result
-            .entry(bucket)
-            .and_modify(|value: &mut u64| *value = value.saturating_add(devices))
-            .or_insert(devices);
+        result.insert(
+            row.try_get("", column)?,
+            nonnegative(row.try_get::<i64>("", "devices").unwrap_or(0)),
+        );
     }
     Ok(result)
 }
