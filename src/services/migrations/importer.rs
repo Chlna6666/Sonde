@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::{
-    database::{device_history, imports, telemetry},
+    database::{device_history, device_identity, imports, telemetry},
     domain::telemetry::EventInput,
     error::AppError,
     services::authentication::AuthenticatedUser,
@@ -89,9 +89,11 @@ pub(super) async fn import_rows(
     let mut deduped = initial_duplicates;
     for row in rows {
         let timestamp = row.ts;
-        let device_hash = row.user_hash.clone();
+        let source_device_id = row.user_hash.clone();
+        let device_hash = device_identity::scoped_hash(scope, &source_device_id);
         let dedupe_key = format!("d1:{application_id}:{}:{}", row.day, row.user_hash);
-        let event = migrated_event(row);
+        let mut event = migrated_event(row);
+        event.anonymous_id = Some(device_hash.clone());
         if telemetry::insert_migrated_event(&installed.database, scope, &event, &dedupe_key).await? {
             inserted += 1;
         } else {
