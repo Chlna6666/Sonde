@@ -58,7 +58,7 @@ export function IntegrationDocsModal({
             <div className="min-w-0">
               <h4 className="m-0 text-sm font-bold text-[var(--text)]">{app.name}</h4>
               <p className="m-0 mt-1 text-xs leading-relaxed text-[var(--muted)]">
-                API Key 只用于换取短期设备 Token。正式 telemetry 必须使用 device-bound Token、timestamp、nonce 和 HMAC-SHA256 签名；平台从可信 telemetry 自行维护设备状态与历史。
+                API Key 只用于换取短期设备 Token。设备身份来自 Token，活动时间、会话边界、在线状态和统计周期由 Sonde 使用服务端接收时间维护；客户端只报告当前事实与业务遥测。
               </p>
               <p className="m-0 mt-2 break-all font-mono text-[10px] text-[var(--faint)]">
                 {origin}/api/v1/ingest · slug={app.slug}
@@ -68,21 +68,24 @@ export function IntegrationDocsModal({
         </div>
 
         <div className="grid gap-3 md:grid-cols-4">
-          <Step number="1" title="Bootstrap" text="API Key + 当前稳定 pseudonymous deviceId → /ingest/token" />
-          <Step number="2" title="Short-lived token" text="保存 token、signingKey、expiresAt；到期后重新交换。" />
-          <Step number="3" title="Canonical request" text="对原始 body 做 SHA-256，并绑定 timestamp / nonce / method / path。" />
-          <Step number="4" title="Signed ingest" text="Authorization: Bearer sndt_… + HMAC headers → events / metrics / logs / errors" />
+          <Step number="1" title="Bootstrap" text="API Key + 稳定 pseudonymous deviceId → /ingest/token" />
+          <Step number="2" title="Device heartbeat" text="用短期 Token 报告 appVersion / OS / language / architecture 等当前事实。" />
+          <Step number="3" title="Canonical request" text="签名请求头使用当前时间、nonce、method、path 和原始 body；它不属于 telemetry payload。" />
+          <Step number="4" title="Business telemetry" text="events / metrics / logs / errors 只提交业务数据，身份、时间和 session 由平台注入。" />
         </div>
 
         <div className="rounded-2xl border border-[var(--amber)]/30 bg-[var(--amber-subtle)] p-3.5 text-xs leading-relaxed text-[var(--text)]">
           <div className="flex items-center gap-2 font-bold">
             <KeyRound size={15} className="text-[var(--amber)]" />
-            长期 API Key 不允许直接写入 telemetry
+            长期 API Key 和平台字段都不能写进 telemetry
           </div>
           <p className="m-0 mt-1.5 text-[var(--muted)]">
-            将 API Key 直接发送到 /events、/metrics、/logs 或 /errors 会返回
-            <code className="mx-1 rounded bg-[var(--input-bg)] px-1.5 py-0.5">ingest_token_required</code>。
-            客户端也不应把 Session、版本或 OS 历史放进 Token 请求；这些状态由平台从 telemetry 推导。
+            API Key 只能调用 /token。live telemetry item 不接受
+            <code className="mx-1 rounded bg-[var(--input-bg)] px-1.5 py-0.5">timestamp</code>
+            <code className="mx-1 rounded bg-[var(--input-bg)] px-1.5 py-0.5">sessionId</code>
+            <code className="mx-1 rounded bg-[var(--input-bg)] px-1.5 py-0.5">anonymousId</code>；这些字段由平台维护。请求头
+            <code className="mx-1 rounded bg-[var(--input-bg)] px-1.5 py-0.5">x-sonde-timestamp</code>
+            仅用于 HMAC 防重放，不参与在线时间或 DAU/WAU/MAU 统计。
           </p>
         </div>
 
@@ -130,7 +133,7 @@ export function IntegrationDocsModal({
 timestampMillis\n
 nonce\n
 HTTP_METHOD_UPPERCASE\n
-/api/v1/ingest/events\n
+/api/v1/ingest/heartbeat\n
 hex(sha256(rawBodyBytes))`}</pre>
           <p className="m-0 mt-2">
             签名为 <code>hex(HMAC-SHA256(signingKey, canonicalBytes))</code>。必须签名与实际发送完全相同的原始 body bytes；不要签名后再次格式化 JSON。
@@ -174,36 +177,37 @@ function buildSnippet(lang: LanguageTab, origin: string, apiKey: string): string
 
 function protocolSnippet(comment: string, origin: string, apiKey: string, cryptoHint: string): string {
   return `${comment} ${cryptoHint}
-${comment} 1) Bootstrap only: exchange API Key for a device token.
+${comment} 1) Bootstrap only: exchange API Key for a device-bound short-lived token.
 POST ${origin}/api/v1/ingest/token
 Authorization: Bearer ${apiKey}
 Content-Type: application/json
 
 {"deviceId":"stable-pseudonymous-device-id"}
 
-${comment} Response fields used by the SDK:
-${comment} token, signingKey, expiresAt, signatureVersion
+${comment} Response: token, signingKey, expiresAt, signatureVersion.
+${comment} The request-signing timestamp below is NOT telemetry event time.
 
-${comment} 2) Serialize telemetry exactly once to rawBodyBytes.
-${comment} 3) timestamp = current Unix epoch milliseconds.
-${comment} 4) nonce = cryptographically random 16+ byte printable identifier.
-${comment} 5) bodyHash = lowercaseHex(SHA256(rawBodyBytes)).
-${comment} 6) canonical =
-${comment}    "sonde-hmac-sha256-v2\\n" +
-${comment}    timestamp + "\\n" + nonce + "\\n" +
-${comment}    "POST\\n/api/v1/ingest/events\\n" + bodyHash
-${comment} 7) signature = lowercaseHex(HMAC-SHA256(signingKey, UTF8(canonical))).
-
-POST ${origin}/api/v1/ingest/events
+${comment} 2) Report current device/application facts. Sonde owns lastSeen/session/time statistics.
+POST ${origin}/api/v1/ingest/heartbeat
 Authorization: Bearer <sndt_device_token>
-x-sonde-timestamp: <timestamp>
-x-sonde-nonce: <nonce>
-x-sonde-signature: <signature>
+x-sonde-timestamp: <request-signing-unix-ms>
+x-sonde-nonce: <random-nonce>
+x-sonde-signature: <signature-for-heartbeat-body>
 Content-Type: application/json
 
-{"items":[{"name":"app_startup","appVersion":"1.0.0","os":"windows","timestamp":<timestamp>}]}
+{"appVersion":"1.0.0","os":"Windows 11 24H2","systemLanguage":"zh-CN","architecture":"x86_64"}
 
-${comment} Do not send the bootstrap API Key to telemetry endpoints.`;
+${comment} 3) Business telemetry does not carry timestamp/sessionId/anonymousId.
+POST ${origin}/api/v1/ingest/events
+Authorization: Bearer <sndt_device_token>
+x-sonde-timestamp: <request-signing-unix-ms>
+x-sonde-nonce: <random-nonce>
+x-sonde-signature: <signature-for-event-body>
+Content-Type: application/json
+
+{"items":[{"name":"app_startup","attributes":{"channel":"stable"}}]}
+
+${comment} API Key never goes to heartbeat/events/metrics/logs/errors.`;
 }
 
 function rustSnippet(origin: string, apiKey: string): string {
@@ -241,29 +245,40 @@ fn sign(signing_key: &str, timestamp: i64, nonce: &str, path: &str, body: &[u8])
     hex::encode(mac.finalize().into_bytes())
 }
 
-async fn send_event(client: &Client, auth: &TokenResponse) -> reqwest::Result<()> {
-    let timestamp = chrono::Utc::now().timestamp_millis();
+async fn send_signed(
+    client: &Client,
+    auth: &TokenResponse,
+    path: &str,
+    body: Vec<u8>,
+) -> reqwest::Result<()> {
+    let request_timestamp = chrono::Utc::now().timestamp_millis();
     let nonce = uuid::Uuid::now_v7().to_string();
-    let path = "/api/v1/ingest/events";
-    let body = serde_json::to_vec(&serde_json::json!({
-        "items": [{
-            "name": "app_startup",
-            "appVersion": "1.0.0",
-            "os": std::env::consts::OS,
-            "timestamp": timestamp
-        }]
-    })).unwrap();
-    let signature = sign(&auth.signing_key, timestamp, &nonce, path, &body);
-
+    let signature = sign(&auth.signing_key, request_timestamp, &nonce, path, &body);
     client.post(format!("${origin}{}", path))
         .bearer_auth(&auth.token)
         .header("content-type", "application/json")
-        .header("x-sonde-timestamp", timestamp.to_string())
+        .header("x-sonde-timestamp", request_timestamp.to_string())
         .header("x-sonde-nonce", nonce)
         .header("x-sonde-signature", signature)
         .body(body)
         .send().await?.error_for_status()?;
     Ok(())
+}
+
+async fn report(client: &Client, auth: &TokenResponse) -> reqwest::Result<()> {
+    let heartbeat = serde_json::to_vec(&serde_json::json!({
+        "appVersion": "1.0.0",
+        "os": "Windows 11 24H2",
+        "systemLanguage": "zh-CN",
+        "architecture": std::env::consts::ARCH
+    })).unwrap();
+    send_signed(client, auth, "/api/v1/ingest/heartbeat", heartbeat).await?;
+
+    // No timestamp, sessionId or anonymousId in live telemetry items.
+    let event = serde_json::to_vec(&serde_json::json!({
+        "items": [{ "name": "app_startup" }]
+    })).unwrap();
+    send_signed(client, auth, "/api/v1/ingest/events", event).await
 }`;
 }
 
@@ -275,49 +290,48 @@ const encoder = new TextEncoder();
 
 const tokenResponse = await fetch(endpoint + "/token", {
   method: "POST",
-  headers: {
-    authorization: "Bearer " + apiKey,
-    "content-type": "application/json",
-  },
+  headers: { authorization: "Bearer " + apiKey, "content-type": "application/json" },
   body: JSON.stringify({ deviceId }),
 });
 const auth = await tokenResponse.json();
 
 function hex(bytes: ArrayBuffer) {
-  return [...new Uint8Array(bytes)]
-    .map((value) => value.toString(16).padStart(2, "0"))
-    .join("");
+  return [...new Uint8Array(bytes)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
-async function sendEvent() {
-  const timestamp = Date.now();
+async function sendSigned(path: string, payload: unknown) {
+  const requestTimestamp = Date.now(); // HMAC replay protection only.
   const nonce = crypto.randomUUID();
-  const path = "/events";
-  const canonicalPath = "/api/v1/ingest/events";
-  const rawBody = JSON.stringify({
-    items: [{ name: "app_startup", appVersion: "1.0.0", timestamp }],
-  });
+  const rawBody = JSON.stringify(payload);
+  const canonicalPath = "/api/v1/ingest" + path;
   const bodyHash = hex(await crypto.subtle.digest("SHA-256", encoder.encode(rawBody)));
   const canonical =
-    "sonde-hmac-sha256-v2\\n" + timestamp + "\\n" + nonce +
+    "sonde-hmac-sha256-v2\\n" + requestTimestamp + "\\n" + nonce +
     "\\nPOST\\n" + canonicalPath + "\\n" + bodyHash;
   const key = await crypto.subtle.importKey(
     "raw", encoder.encode(auth.signingKey), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
   );
   const signature = hex(await crypto.subtle.sign("HMAC", key, encoder.encode(canonical)));
-
   await fetch(endpoint + path, {
     method: "POST",
     headers: {
       authorization: "Bearer " + auth.token,
       "content-type": "application/json",
-      "x-sonde-timestamp": String(timestamp),
+      "x-sonde-timestamp": String(requestTimestamp),
       "x-sonde-nonce": nonce,
       "x-sonde-signature": signature,
     },
     body: rawBody,
   });
-}`;
+}
+
+await sendSigned("/heartbeat", {
+  appVersion: "1.0.0",
+  os: "Windows 11 24H2",
+  systemLanguage: navigator.language,
+  architecture: "x86_64",
+});
+await sendSigned("/events", { items: [{ name: "app_startup" }] });`;
 }
 
 function pythonSnippet(origin: string, apiKey: string): string {
@@ -339,31 +353,37 @@ auth = requests.post(
     timeout=5,
 ).json()
 
-timestamp = int(time.time() * 1000)
-nonce = str(uuid.uuid4())
-path = "/api/v1/ingest/events"
-raw_body = json.dumps({
-    "items": [{"name": "app_startup", "appVersion": "1.0.0", "timestamp": timestamp}]
-}, separators=(",", ":")).encode()
-body_hash = hashlib.sha256(raw_body).hexdigest()
-canonical = (
-    "sonde-hmac-sha256-v2\\n"
-    + str(timestamp) + "\\n" + nonce + "\\nPOST\\n" + path + "\\n" + body_hash
-).encode()
-signature = hmac.new(auth["signingKey"].encode(), canonical, hashlib.sha256).hexdigest()
+def send_signed(path, payload):
+    request_timestamp = int(time.time() * 1000)  # signing/replay protection only
+    nonce = str(uuid.uuid4())
+    raw_body = json.dumps(payload, separators=(",", ":")).encode()
+    canonical_path = "/api/v1/ingest" + path
+    body_hash = hashlib.sha256(raw_body).hexdigest()
+    canonical = (
+        "sonde-hmac-sha256-v2\\n" + str(request_timestamp) + "\\n" + nonce
+        + "\\nPOST\\n" + canonical_path + "\\n" + body_hash
+    ).encode()
+    signature = hmac.new(auth["signingKey"].encode(), canonical, hashlib.sha256).hexdigest()
+    requests.post(
+        ENDPOINT + path,
+        data=raw_body,
+        headers={
+            "Authorization": "Bearer " + auth["token"],
+            "Content-Type": "application/json",
+            "x-sonde-timestamp": str(request_timestamp),
+            "x-sonde-nonce": nonce,
+            "x-sonde-signature": signature,
+        },
+        timeout=5,
+    ).raise_for_status()
 
-requests.post(
-    "${origin}" + path,
-    data=raw_body,
-    headers={
-        "Authorization": "Bearer " + auth["token"],
-        "Content-Type": "application/json",
-        "x-sonde-timestamp": str(timestamp),
-        "x-sonde-nonce": nonce,
-        "x-sonde-signature": signature,
-    },
-    timeout=5,
-).raise_for_status()`;
+send_signed("/heartbeat", {
+    "appVersion": "1.0.0",
+    "os": "Windows 11 24H2",
+    "systemLanguage": "zh-CN",
+    "architecture": "x86_64",
+})
+send_signed("/events", {"items": [{"name": "app_startup"}]})`;
 }
 
 function shellSnippet(origin: string, apiKey: string): string {
@@ -378,21 +398,20 @@ curl -sS -X POST "$BASE/api/v1/ingest/token" \\
   --data "{\\"deviceId\\":\\"$DEVICE_ID\\"}"
 
 # Read token + signingKey from the JSON response.
-# For each telemetry request:
-#   timestamp = Unix milliseconds
-#   nonce = cryptographically random unique value
-#   body_hash = lowercase hex SHA-256 of the EXACT raw body bytes
-#   canonical = sonde-hmac-sha256-v2 + newline + timestamp + newline + nonce
-#               + newline + POST + newline + /api/v1/ingest/events
-#               + newline + body_hash
-#   signature = lowercase hex HMAC-SHA256(signingKey, canonical)
+# Sign the EXACT raw body with the request timestamp / nonce / method / canonical path.
+# x-sonde-timestamp is for HMAC replay protection only; it is not telemetry time.
 #
-# Then send:
-curl -X POST "$BASE/api/v1/ingest/events" \\
+# heartbeat.json example:
+# {"appVersion":"1.0.0","os":"Windows 11 24H2","systemLanguage":"zh-CN","architecture":"x86_64"}
+#
+# event.json example (no timestamp/sessionId/anonymousId):
+# {"items":[{"name":"app_startup"}]}
+
+curl -X POST "$BASE/api/v1/ingest/heartbeat" \\
   -H 'Authorization: Bearer <sndt_device_token>' \\
   -H 'Content-Type: application/json' \\
-  -H 'x-sonde-timestamp: <timestamp>' \\
+  -H 'x-sonde-timestamp: <request-signing-timestamp>' \\
   -H 'x-sonde-nonce: <nonce>' \\
   -H 'x-sonde-signature: <signature>' \\
-  --data-binary @telemetry.json`;
+  --data-binary @heartbeat.json`;
 }
