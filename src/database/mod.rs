@@ -16,6 +16,7 @@ pub mod device_history;
 pub mod device_identity;
 pub mod device_query;
 pub mod device_risk;
+pub mod device_session;
 pub mod device_state;
 pub mod dimension_restore;
 pub mod dimension_rollup;
