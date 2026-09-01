@@ -43,6 +43,7 @@ import { SplineAreaChart } from "../components/SplineAreaChart";
 import { DonutChart } from "../components/DonutChart";
 import { MultiLineChart, VersionSeriesData } from "../components/MultiLineChart";
 import { BuildBarChart } from "../components/BuildBarChart";
+import { ActivityStatsPanel, type ActivityStats } from "../components/ActivityStatsPanel";
 import { PlatformIcon, detectPlatform } from "../components/PlatformIcon";
 import { api } from "../lib/api";
 
@@ -133,6 +134,7 @@ type AppTelemetryStats = {
     wau?: number;
     mau?: number;
   };
+  activity: ActivityStats;
   growth: GrowthMetrics;
   trend: Array<{ day: string; events: number; users: number }>;
   userGrowth: UserGrowthPoint[];
@@ -2504,6 +2506,8 @@ function AppStatsModal({
                 height={200}
               />
             </div>
+
+            <ActivityStatsPanel activity={stats.activity} />
 
             {/* Bottom Grid: 3 Visual Analytic Cards */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "14px" }}>
