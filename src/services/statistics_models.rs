@@ -25,6 +25,8 @@ pub struct ActivitySummary {
     pub lifetime_active_millis: u64,
     pub sessions: u64,
     pub lifetime_sessions: u64,
+    pub measured_devices: u64,
+    pub measurement_coverage_pct: f64,
     pub average_session_millis: u64,
     pub average_active_millis_per_device: u64,
     pub stickiness_pct: f64,
