@@ -1,5 +1,6 @@
 use std::{
     collections::VecDeque,
+    marker::PhantomData,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -18,9 +19,11 @@ use crate::{
     client::Transport,
     error::{Error, Result},
     model::{BatchReceipt, ErrorEvent, Event, LogEntry, Metric},
+    spool::{Spool, SpoolOptions, SpoolRecord},
 };
 
 const SERVER_MAX_BATCH_ITEMS: usize = 1_000;
+const SERVER_MAX_BODY_BYTES: usize = 1_048_576;
 
 #[derive(Clone, Debug)]
 pub struct RetryPolicy {
@@ -45,6 +48,7 @@ pub struct DeliveryOptions {
     pub max_batch_items: usize,
     pub flush_interval: Duration,
     pub retry: RetryPolicy,
+    pub spool: Option<SpoolOptions>,
 }
 
 impl Default for DeliveryOptions {
@@ -54,6 +58,7 @@ impl Default for DeliveryOptions {
             max_batch_items: 256,
             flush_interval: Duration::from_secs(1),
             retry: RetryPolicy::default(),
+            spool: None,
         }
     }
 }
@@ -90,6 +95,9 @@ impl DeliveryOptions {
                 "retry max_retries must not exceed 20".into(),
             ));
         }
+        if let Some(spool) = &self.spool {
+            spool.validate()?;
+        }
         Ok(())
     }
 }
@@ -97,9 +105,12 @@ impl DeliveryOptions {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct QueueDeliveryStats {
     pub enqueued: u64,
+    pub persisted: u64,
+    pub recovered: u64,
     pub delivered: u64,
     pub rejected: u64,
     pub dropped: u64,
+    pub deferred: u64,
     pub batches: u64,
     pub retries: u64,
 }
@@ -115,9 +126,12 @@ pub struct DeliveryStats {
 #[derive(Default)]
 struct QueueCounters {
     enqueued: AtomicU64,
+    persisted: AtomicU64,
+    recovered: AtomicU64,
     delivered: AtomicU64,
     rejected: AtomicU64,
     dropped: AtomicU64,
+    deferred: AtomicU64,
     batches: AtomicU64,
     retries: AtomicU64,
 }
@@ -126,9 +140,12 @@ impl QueueCounters {
     fn snapshot(&self) -> QueueDeliveryStats {
         QueueDeliveryStats {
             enqueued: self.enqueued.load(Ordering::Relaxed),
+            persisted: self.persisted.load(Ordering::Relaxed),
+            recovered: self.recovered.load(Ordering::Relaxed),
             delivered: self.delivered.load(Ordering::Relaxed),
             rejected: self.rejected.load(Ordering::Relaxed),
             dropped: self.dropped.load(Ordering::Relaxed),
+            deferred: self.deferred.load(Ordering::Relaxed),
             batches: self.batches.load(Ordering::Relaxed),
             retries: self.retries.load(Ordering::Relaxed),
         }
@@ -160,33 +177,90 @@ impl QueuedTelemetry for ErrorEvent {
     const ROUTE: &'static str = "/errors";
 }
 
-enum QueueCommand<T> {
-    Item(T),
+#[derive(Debug)]
+struct QueuedItem {
+    sequence: Option<u64>,
+    payload: Vec<u8>,
+}
+
+impl From<SpoolRecord> for QueuedItem {
+    fn from(record: SpoolRecord) -> Self {
+        Self {
+            sequence: Some(record.sequence),
+            payload: record.payload,
+        }
+    }
+}
+
+enum QueueCommand {
+    Item(QueuedItem),
     Flush(oneshot::Sender<Result<()>>),
     Shutdown(oneshot::Sender<Result<()>>),
 }
 
 pub(crate) struct DeliveryQueue<T: QueuedTelemetry> {
-    sender: mpsc::Sender<QueueCommand<T>>,
+    sender: mpsc::Sender<QueueCommand>,
     counters: Arc<QueueCounters>,
+    spool: Option<Arc<Spool>>,
+    marker: PhantomData<fn() -> T>,
 }
 
 impl<T: QueuedTelemetry> DeliveryQueue<T> {
-    pub(crate) fn spawn(transport: Arc<Transport>, options: DeliveryOptions) -> Self {
+    pub(crate) async fn spawn(transport: Arc<Transport>, options: DeliveryOptions) -> Result<Self> {
+        let (spool, recovered) = match options.spool.clone() {
+            Some(spool_options) => {
+                let (spool, recovered) = Spool::open(T::KIND, spool_options).await?;
+                (Some(spool), recovered)
+            }
+            None => (None, Vec::new()),
+        };
+        let recovered_items: Vec<QueuedItem> = recovered.into_iter().map(QueuedItem::from).collect();
+
         let (sender, receiver) = mpsc::channel(options.queue_capacity);
         let counters = Arc::new(QueueCounters::default());
+        counters
+            .recovered
+            .store(recovered_items.len() as u64, Ordering::Relaxed);
         tokio::spawn(run_worker::<T>(
             receiver,
             transport,
             options,
             counters.clone(),
+            spool.clone(),
+            recovered_items,
         ));
-        Self { sender, counters }
+        Ok(Self {
+            sender,
+            counters,
+            spool,
+            marker: PhantomData,
+        })
     }
 
     pub(crate) async fn enqueue(&self, item: T) -> Result<()> {
+        let payload = serialize_item(&item)?;
+        let queued = if let Some(spool) = &self.spool {
+            let permit = self
+                .sender
+                .clone()
+                .reserve_owned()
+                .await
+                .map_err(|_| Error::QueueClosed { kind: T::KIND })?;
+            let record = spool.append(payload).await?;
+            self.counters.persisted.fetch_add(1, Ordering::Relaxed);
+            let queued = QueuedItem::from(record);
+            permit.send(QueueCommand::Item(queued));
+            self.counters.enqueued.fetch_add(1, Ordering::Relaxed);
+            return Ok(());
+        } else {
+            QueuedItem {
+                sequence: None,
+                payload,
+            }
+        };
+
         self.sender
-            .send(QueueCommand::Item(item))
+            .send(QueueCommand::Item(queued))
             .await
             .map_err(|_| Error::QueueClosed { kind: T::KIND })?;
         self.counters.enqueued.fetch_add(1, Ordering::Relaxed);
@@ -194,7 +268,14 @@ impl<T: QueuedTelemetry> DeliveryQueue<T> {
     }
 
     pub(crate) fn try_enqueue(&self, item: T) -> Result<()> {
-        match self.sender.try_send(QueueCommand::Item(item)) {
+        if self.spool.is_some() {
+            return Err(Error::DurableEnqueueRequiresAsync { kind: T::KIND });
+        }
+        let payload = serialize_item(&item)?;
+        match self.sender.try_send(QueueCommand::Item(QueuedItem {
+            sequence: None,
+            payload,
+        })) {
             Ok(()) => {
                 self.counters.enqueued.fetch_add(1, Ordering::Relaxed);
                 Ok(())
@@ -228,29 +309,45 @@ impl<T: QueuedTelemetry> DeliveryQueue<T> {
 }
 
 async fn run_worker<T: QueuedTelemetry>(
-    mut receiver: mpsc::Receiver<QueueCommand<T>>,
+    mut receiver: mpsc::Receiver<QueueCommand>,
     transport: Arc<Transport>,
     options: DeliveryOptions,
     counters: Arc<QueueCounters>,
+    spool: Option<Arc<Spool>>,
+    recovered: Vec<QueuedItem>,
 ) {
-    let mut batch = Vec::with_capacity(options.max_batch_items);
-    let mut deadline: Option<Instant> = None;
+    let mut batch = recovered;
     let mut pending_error: Option<Error> = None;
+    let mut deadline = if batch.is_empty() {
+        None
+    } else {
+        let retained = flush_batch::<T>(
+            &transport,
+            &options,
+            &counters,
+            spool.as_ref(),
+            &mut batch,
+            &mut pending_error,
+        )
+        .await;
+        retry_deadline(retained, &options)
+    };
 
     loop {
         let command = match deadline {
             Some(deadline_at) => match timeout_at(deadline_at, receiver.recv()).await {
                 Ok(command) => command,
                 Err(_) => {
-                    flush_batch(
+                    let retained = flush_batch::<T>(
                         &transport,
                         &options,
                         &counters,
+                        spool.as_ref(),
                         &mut batch,
                         &mut pending_error,
                     )
                     .await;
-                    deadline = None;
+                    deadline = retry_deadline(retained, &options);
                     continue;
                 }
             },
@@ -264,27 +361,29 @@ async fn run_worker<T: QueuedTelemetry>(
                 }
                 batch.push(item);
                 if batch.len() >= options.max_batch_items {
-                    flush_batch(
+                    let retained = flush_batch::<T>(
                         &transport,
                         &options,
                         &counters,
+                        spool.as_ref(),
                         &mut batch,
                         &mut pending_error,
                     )
                     .await;
-                    deadline = None;
+                    deadline = retry_deadline(retained, &options);
                 }
             }
             Some(QueueCommand::Flush(reply)) => {
-                flush_batch(
+                let retained = flush_batch::<T>(
                     &transport,
                     &options,
                     &counters,
+                    spool.as_ref(),
                     &mut batch,
                     &mut pending_error,
                 )
                 .await;
-                deadline = None;
+                deadline = retry_deadline(retained, &options);
                 let _ = reply.send(take_worker_result(&mut pending_error));
             }
             Some(QueueCommand::Shutdown(reply)) => {
@@ -300,10 +399,11 @@ async fn run_worker<T: QueuedTelemetry>(
                         }
                     }
                 }
-                flush_batch(
+                let _ = flush_batch::<T>(
                     &transport,
                     &options,
                     &counters,
+                    spool.as_ref(),
                     &mut batch,
                     &mut pending_error,
                 )
@@ -312,10 +412,11 @@ async fn run_worker<T: QueuedTelemetry>(
                 break;
             }
             None => {
-                flush_batch(
+                let _ = flush_batch::<T>(
                     &transport,
                     &options,
                     &counters,
+                    spool.as_ref(),
                     &mut batch,
                     &mut pending_error,
                 )
@@ -330,11 +431,12 @@ async fn flush_batch<T: QueuedTelemetry>(
     transport: &Arc<Transport>,
     options: &DeliveryOptions,
     counters: &Arc<QueueCounters>,
-    batch: &mut Vec<T>,
+    spool: Option<&Arc<Spool>>,
+    batch: &mut Vec<QueuedItem>,
     pending_error: &mut Option<Error>,
-) {
+) -> bool {
     if batch.is_empty() {
-        return;
+        return false;
     }
 
     let mut work = VecDeque::new();
@@ -350,28 +452,49 @@ async fn flush_batch<T: QueuedTelemetry>(
 
         counters.batches.fetch_add(1, Ordering::Relaxed);
         match send_with_retry(transport, options, counters, T::ROUTE, &items).await {
-            Ok(receipt) => record_receipt::<T>(counters, pending_error, receipt),
+            Ok(receipt) => {
+                record_receipt::<T>(counters, pending_error, &receipt);
+                if let Err(error) = commit_terminal(spool, &items).await {
+                    *pending_error = Some(error);
+                }
+            }
             Err(Error::PayloadTooLarge) if items.len() > 1 => {
                 let right = items.split_off(items.len() / 2);
                 work.push_front(right);
                 work.push_front(items);
+            }
+            Err(error) if error.is_retryable() && spool.is_some() => {
+                counters
+                    .deferred
+                    .fetch_add(items.len() as u64, Ordering::Relaxed);
+                *pending_error = Some(error);
+                let mut retained = items;
+                while let Some(remaining) = work.pop_front() {
+                    retained.extend(remaining);
+                }
+                *batch = retained;
+                return true;
             }
             Err(error) => {
                 counters
                     .dropped
                     .fetch_add(items.len() as u64, Ordering::Relaxed);
                 *pending_error = Some(error);
+                if let Err(commit_error) = commit_terminal(spool, &items).await {
+                    *pending_error = Some(commit_error);
+                }
             }
         }
     }
 
     *batch = Vec::with_capacity(options.max_batch_items);
+    false
 }
 
 fn record_receipt<T: QueuedTelemetry>(
     counters: &QueueCounters,
     pending_error: &mut Option<Error>,
-    receipt: BatchReceipt,
+    receipt: &BatchReceipt,
 ) {
     counters
         .delivered
@@ -386,16 +509,29 @@ fn record_receipt<T: QueuedTelemetry>(
     }
 }
 
-async fn send_with_retry<T: Serialize>(
+async fn commit_terminal(spool: Option<&Arc<Spool>>, items: &[QueuedItem]) -> Result<()> {
+    let Some(spool) = spool else {
+        return Ok(());
+    };
+    let Some(sequence) = items.last().and_then(|item| item.sequence) else {
+        return Err(Error::InvalidConfiguration(
+            "durable delivery item is missing its spool sequence".into(),
+        ));
+    };
+    spool.commit_through(sequence).await
+}
+
+async fn send_with_retry(
     transport: &Arc<Transport>,
     options: &DeliveryOptions,
     counters: &QueueCounters,
     route: &str,
-    items: &[T],
+    items: &[QueuedItem],
 ) -> Result<BatchReceipt> {
+    let payloads: Vec<&[u8]> = items.iter().map(|item| item.payload.as_slice()).collect();
     let mut retries = 0_u32;
     loop {
-        match transport.send_batch(route, items).await {
+        match transport.send_serialized_batch(route, &payloads).await {
             Ok(receipt) => return Ok(receipt),
             Err(error) if error.is_retryable() && retries < options.retry.max_retries => {
                 let delay = error
@@ -409,6 +545,18 @@ async fn send_with_retry<T: Serialize>(
             Err(error) => return Err(error),
         }
     }
+}
+
+fn serialize_item<T: Serialize>(item: &T) -> Result<Vec<u8>> {
+    let payload = serde_json::to_vec(item)?;
+    if payload.len().saturating_add(12) > SERVER_MAX_BODY_BYTES {
+        return Err(Error::PayloadTooLarge);
+    }
+    Ok(payload)
+}
+
+fn retry_deadline(retained: bool, options: &DeliveryOptions) -> Option<Instant> {
+    retained.then(|| Instant::now() + options.retry.max_backoff)
 }
 
 fn retry_delay(policy: &RetryPolicy, retry_index: u32) -> Duration {
@@ -445,6 +593,7 @@ mod tests {
     use std::time::Duration;
 
     use super::{DeliveryOptions, RetryPolicy, retry_delay};
+    use crate::spool::SpoolOptions;
 
     #[test]
     fn validates_delivery_configuration() {
@@ -454,6 +603,9 @@ mod tests {
         assert!(invalid.validate().is_err());
         invalid = DeliveryOptions::default();
         invalid.max_batch_items = 1_001;
+        assert!(invalid.validate().is_err());
+        invalid = DeliveryOptions::default();
+        invalid.spool = Some(SpoolOptions::new("data/spool").segment_bytes(1024));
         assert!(invalid.validate().is_err());
     }
 
