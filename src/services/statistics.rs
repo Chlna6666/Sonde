@@ -255,6 +255,8 @@ fn map_activity(record: activity_stats::ActivityStats) -> ActivityStats {
                 average_session_millis: point.average_session_millis,
                 cumulative_active_millis: point.cumulative_active_millis,
                 cumulative_sessions: point.cumulative_sessions,
+                lifetime_cumulative_active_millis: point.lifetime_cumulative_active_millis,
+                lifetime_cumulative_sessions: point.lifetime_cumulative_sessions,
             })
             .collect(),
     }
