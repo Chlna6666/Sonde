@@ -431,10 +431,7 @@ pub async fn metrics(
 ) -> Result<BatchReceipt, AppError> {
     ensure_batch_size(items.len())?;
     charge_item_budget(installed, scope, items.len()).await?;
-    let (accepted, rejected) = validate_with(&mut items, |item| {
-        item.timestamp = None;
-        Ok(())
-    });
+    let (accepted, rejected) = validate_with(&mut items, reject_live_timestamp);
     let valid = select_valid(items, &rejected);
     let observation = simple_observation(DeviceTelemetryKind::Metric, valid.len());
     let storage_scope = scope.storage_scope();
@@ -453,10 +450,7 @@ pub async fn logs(
 ) -> Result<BatchReceipt, AppError> {
     ensure_batch_size(items.len())?;
     charge_item_budget(installed, scope, items.len()).await?;
-    let (accepted, rejected) = validate_with(&mut items, |item| {
-        item.timestamp = None;
-        Ok(())
-    });
+    let (accepted, rejected) = validate_with(&mut items, reject_live_timestamp);
     let valid = select_valid(items, &rejected);
     let observation = simple_observation(DeviceTelemetryKind::Log, valid.len());
     let storage_scope = scope.storage_scope();
@@ -718,30 +712,57 @@ fn normalize_live_event(
     scope: &IngestScope,
     item: &mut EventInput,
 ) -> Result<(), &'static str> {
-    item.timestamp = None;
-    item.session_id = None;
-    bind_device_id(&scope.device_id, &mut item.anonymous_id)
+    reject_server_owned_live_fields(item.timestamp, item.session_id.as_deref(), item.anonymous_id.as_deref())?;
+    item.anonymous_id = Some(scope.device_id.clone());
+    Ok(())
 }
 
 fn normalize_live_error(
     scope: &IngestScope,
     item: &mut ErrorInput,
 ) -> Result<(), &'static str> {
-    item.timestamp = None;
-    item.session_id = None;
-    bind_device_id(&scope.device_id, &mut item.anonymous_id)
+    reject_server_owned_live_fields(item.timestamp, item.session_id.as_deref(), item.anonymous_id.as_deref())?;
+    item.anonymous_id = Some(scope.device_id.clone());
+    Ok(())
 }
 
-fn bind_device_id(bound: &str, value: &mut Option<String>) -> Result<(), &'static str> {
-    match value.as_deref() {
-        Some(current) if current != bound => {
-            Err("anonymous_id must match deviceId used to issue the ingest token")
-        }
-        Some(_) => Ok(()),
-        None => {
-            *value = Some(bound.to_owned());
-            Ok(())
-        }
+fn reject_server_owned_live_fields(
+    timestamp: Option<i64>,
+    session_id: Option<&str>,
+    anonymous_id: Option<&str>,
+) -> Result<(), &'static str> {
+    if timestamp.is_some() {
+        return Err("timestamp is server-owned for live ingest");
+    }
+    if session_id.is_some() {
+        return Err("sessionId is server-owned for live ingest");
+    }
+    if anonymous_id.is_some() {
+        return Err("anonymousId is derived from the signed device token for live ingest");
+    }
+    Ok(())
+}
+
+fn reject_live_timestamp<T: LiveTimestamp>(item: &mut T) -> Result<(), &'static str> {
+    if item.live_timestamp().is_some() {
+        return Err("timestamp is server-owned for live ingest");
+    }
+    Ok(())
+}
+
+trait LiveTimestamp {
+    fn live_timestamp(&self) -> Option<i64>;
+}
+
+impl LiveTimestamp for MetricInput {
+    fn live_timestamp(&self) -> Option<i64> {
+        self.timestamp
+    }
+}
+
+impl LiveTimestamp for LogInput {
+    fn live_timestamp(&self) -> Option<i64> {
+        self.timestamp
     }
 }
 
@@ -821,9 +842,9 @@ mod tests {
     fn event() -> EventInput {
         EventInput {
             name: "startup".into(),
-            timestamp: Some(100),
+            timestamp: None,
             anonymous_id: None,
-            session_id: Some("client-session".into()),
+            session_id: None,
             app_version: Some("2.0.0".into()),
             launcher_version: Some("1.5.0".into()),
             os: Some("windows".into()),
@@ -833,15 +854,24 @@ mod tests {
     }
 
     #[test]
-    fn signed_token_device_binding_blocks_identity_spoofing() {
+    fn live_ingest_rejects_client_owned_identity_and_time_fields() {
         let scope = scope();
-        let mut forged = event();
-        forged.anonymous_id = Some("device-9999".into());
-        assert!(normalize_live_event(&scope, &mut forged).is_err());
+
+        let mut with_timestamp = event();
+        with_timestamp.timestamp = Some(100);
+        assert!(normalize_live_event(&scope, &mut with_timestamp).is_err());
+
+        let mut with_session = event();
+        with_session.session_id = Some("client-session".into());
+        assert!(normalize_live_event(&scope, &mut with_session).is_err());
+
+        let mut with_identity = event();
+        with_identity.anonymous_id = Some("device-1234".into());
+        assert!(normalize_live_event(&scope, &mut with_identity).is_err());
     }
 
     #[test]
-    fn live_ingest_uses_token_identity_and_server_time_semantics() {
+    fn live_ingest_injects_identity_from_signed_token() {
         let scope = scope();
         let mut event = event();
         assert!(normalize_live_event(&scope, &mut event).is_ok());
