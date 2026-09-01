@@ -551,9 +551,8 @@ function ManageAppModal({ application, onClose, onExport }: {
     onClose();
   };
 
-  const dependency = `sonde-sdk = { git = "https://github.com/Chlna6666/Sonde", package = "sonde-sdk" }`;
-  const keyPlaceholder = revealedKey || activeKey?.keyPrefix ? "SONDE_BOOTSTRAP_KEY" : "SONDE_BOOTSTRAP_KEY";
-  const example = `use sonde_sdk::{Event, SondeClient};\n\n#[tokio::main]\nasync fn main() -> sonde_sdk::Result<()> {\n    let sonde = SondeClient::builder(\n        "${window.location.origin}",\n        std::env::var("${keyPlaceholder}").expect("missing Sonde key"),\n        load_or_create_installation_id(),\n    )\n    .app_version(env!("CARGO_PKG_VERSION"))\n    .system_language("zh-CN")\n    .connect()\n    .await?;\n\n    sonde.event(\n        Event::new("app_startup").attribute("channel", "stable")\n    ).await?;\n\n    Ok(())\n}`;
+  const dependency = `sonde-sdk = { git = "https://github.com/Chlna6666/Sonde" }\ntokio = { version = "1", features = ["macros", "rt-multi-thread"] }`;
+  const example = `use sonde_sdk::{Event, SondeClient, load_or_create_device_id};\n\n#[tokio::main]\nasync fn main() -> sonde_sdk::Result<()> {\n    let device_id = load_or_create_device_id("data/sonde-device-id")?;\n    let sonde = SondeClient::builder(\n        "${window.location.origin}",\n        std::env::var("SONDE_BOOTSTRAP_KEY").expect("missing SONDE_BOOTSTRAP_KEY"),\n        device_id,\n    )\n    .app_version(env!("CARGO_PKG_VERSION"))\n    .system_language("zh-CN")\n    .connect()\n    .await?;\n\n    sonde.event(\n        Event::new("app_startup").attribute("channel", "stable")\n    ).await?;\n\n    Ok(())\n}`;
 
   return (
     <Modal
@@ -600,7 +599,7 @@ function ManageAppModal({ application, onClose, onExport }: {
           />
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-            <SdkFact title="设备身份" text="应用只持久化一个高熵 installation/device ID；业务 telemetry 不发送 anonymousId。" />
+            <SdkFact title="设备身份" text="SDK 首次创建并持久化高熵 installation/device ID；业务 telemetry 不发送 anonymousId。" />
             <SdkFact title="时间与 Session" text="客户端不上传 timestamp/sessionId。Sonde 使用服务端接收时间、heartbeat 和活动间隔推导。" />
             <SdkFact title="安全链路" text="Bootstrap Key 只换短期 sndt_ Token；实际上报自动签名 sonde-hmac-sha256-v2。" />
           </div>
@@ -617,7 +616,7 @@ function ManageAppModal({ application, onClose, onExport }: {
           />
 
           <div className="p-3.5 rounded-2xl bg-[var(--panel-strong)] border border-[var(--border-soft)] text-xs text-[var(--muted)] leading-relaxed">
-            生产环境建议在依赖里增加 <code>rev = "&lt;commit sha&gt;"</code> 固定 SDK 版本。新建 Ingest Key 统一使用 <code>ingest</code> scope，它覆盖 heartbeat、events、metrics、logs 和 errors。
+            将 <code>sonde-device-id</code> 放在应用自己的持久化数据目录。已有身份文件损坏时 SDK 会报错而不是自动换 ID。生产环境建议在 Git 依赖中增加 <code>rev = "&lt;commit sha&gt;"</code> 固定 SDK 版本。新建 Ingest Key 统一使用 <code>ingest</code> scope。
           </div>
         </div>
       ) : null}
