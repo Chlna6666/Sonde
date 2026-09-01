@@ -281,8 +281,3 @@ pub(crate) struct TokenRequest<'a> {
     #[serde(rename = "deviceId")]
     pub device_id: &'a str,
 }
-
-#[derive(Serialize)]
-pub(crate) struct BatchRef<'a, T> {
-    pub items: &'a [T],
-}
