@@ -29,6 +29,8 @@ pub struct ActivityTrendPoint {
     pub average_session_millis: u64,
     pub cumulative_active_millis: u64,
     pub cumulative_sessions: u64,
+    pub lifetime_cumulative_active_millis: u64,
+    pub lifetime_cumulative_sessions: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -134,8 +136,10 @@ pub async fn query(
                 active_millis: point.active_millis,
                 sessions: 0,
                 average_session_millis: 0,
-                cumulative_active_millis: point.cumulative_active_millis,
+                cumulative_active_millis: 0,
                 cumulative_sessions: 0,
+                lifetime_cumulative_active_millis: 0,
+                lifetime_cumulative_sessions: 0,
             },
         );
     }
@@ -159,16 +163,29 @@ pub async fn query(
                 average_session_millis,
                 cumulative_active_millis: 0,
                 cumulative_sessions: 0,
+                lifetime_cumulative_active_millis: 0,
+                lifetime_cumulative_sessions: 0,
             });
     }
 
+    let active_baseline = lifetime_active_millis.saturating_sub(active_millis);
+    let session_baseline = lifetime_sessions
+        .total_sessions
+        .saturating_sub(sessions.total_sessions);
     let mut cumulative_active_millis = 0_u64;
     let mut cumulative_sessions = 0_u64;
+    let mut lifetime_cumulative_active_millis = active_baseline;
+    let mut lifetime_cumulative_sessions = session_baseline;
     for point in buckets.values_mut() {
         cumulative_active_millis = cumulative_active_millis.saturating_add(point.active_millis);
         cumulative_sessions = cumulative_sessions.saturating_add(point.sessions);
+        lifetime_cumulative_active_millis =
+            lifetime_cumulative_active_millis.saturating_add(point.active_millis);
+        lifetime_cumulative_sessions = lifetime_cumulative_sessions.saturating_add(point.sessions);
         point.cumulative_active_millis = cumulative_active_millis;
         point.cumulative_sessions = cumulative_sessions;
+        point.lifetime_cumulative_active_millis = lifetime_cumulative_active_millis;
+        point.lifetime_cumulative_sessions = lifetime_cumulative_sessions;
     }
 
     Ok(ActivityStats {
