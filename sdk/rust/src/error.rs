@@ -18,6 +18,21 @@ pub enum Error {
     QueueFull { kind: &'static str },
     #[error("telemetry {kind} queue is closed")]
     QueueClosed { kind: &'static str },
+    #[error("non-blocking enqueue is unavailable for durable {kind} delivery; use the async enqueue API")]
+    DurableEnqueueRequiresAsync { kind: &'static str },
+    #[error("telemetry {kind} spool reached its {max_bytes} byte capacity")]
+    SpoolFull {
+        kind: &'static str,
+        max_bytes: u64,
+    },
+    #[error("failed to access telemetry spool at {path:?}: {source}")]
+    SpoolIo {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("telemetry spool at {path:?} is corrupt: {reason}")]
+    SpoolCorrupt { path: PathBuf, reason: String },
     #[error("Sonde client is shutting down")]
     ShuttingDown,
     #[error("Sonde rejected {rejected} item(s) from the {kind} delivery queue")]
