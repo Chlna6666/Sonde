@@ -2,11 +2,12 @@ use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbBackend, DbErr, TransactionTrait,
     sea_query::{Alias, Expr, ExprTrait, LockType, Query},
 };
+use uuid::Uuid;
 
 use super::{query::insert_batch_ignore_conflicts, telemetry::TelemetryScope};
 
 const DAY_MILLIS: i64 = 86_400_000;
-const RAPID_SESSION_MILLIS: i64 = 30_000;
+const SESSION_IDLE_MILLIS: i64 = 30 * 60_000;
 const RAPID_VERSION_MILLIS: i64 = 5 * 60_000;
 const RAPID_OS_MILLIS: i64 = 60 * 60_000;
 
@@ -73,6 +74,13 @@ struct DimensionMerge {
 }
 
 #[derive(Debug)]
+struct SessionState {
+    id: String,
+    last_activity_at: i64,
+    started_new: bool,
+}
+
+#[derive(Debug)]
 struct TelemetryCounters {
     last_event_at: Option<i64>,
     last_metric_at: Option<i64>,
@@ -87,7 +95,8 @@ struct TelemetryCounters {
 /// Update the derived, server-owned device profile after authoritative telemetry has been stored.
 ///
 /// Raw telemetry remains the source of truth. This profile is an operational index for current
-/// state, activity and abuse signals. It is deliberately safe to rebuild from retained telemetry.
+/// state, activity and abuse signals. Session boundaries are derived exclusively from server receive
+/// time so a client cannot inflate session counts or durations by supplying arbitrary session IDs.
 pub async fn observe(
     database: &DatabaseConnection,
     scope: &TelemetryScope,
@@ -107,11 +116,10 @@ pub async fn observe(
         .await?
         .ok_or_else(|| DbErr::Custom("device profile row disappeared during update".into()))?;
     let counters = update_counters(&current, observation);
-
-    let session = merge_dimension(
+    let session = derive_session(
         current.last_session_id,
-        current.last_session_at,
-        observation.session_id.as_ref(),
+        current.last_seen_at,
+        observation.received_at,
     );
     let app_version = merge_dimension(
         current.last_app_version,
@@ -148,18 +156,6 @@ pub async fn observe(
     }
     if observation.telemetry_at > observation.received_at.saturating_add(60_000) {
         add_risk(&mut risk_score, 3, &mut anomaly_flags, "clock_ahead");
-    }
-    if session.changed
-        && session
-            .change_interval
-            .is_some_and(|interval| interval <= RAPID_SESSION_MILLIS)
-    {
-        add_risk(
-            &mut risk_score,
-            3,
-            &mut anomaly_flags,
-            "rapid_session_change",
-        );
     }
     if app_version.changed
         && app_version
@@ -211,8 +207,8 @@ pub async fn observe(
         .value(Alias::new("last_metric_at"), counters.last_metric_at)
         .value(Alias::new("last_log_at"), counters.last_log_at)
         .value(Alias::new("last_error_at"), counters.last_error_at)
-        .value(Alias::new("last_session_id"), session.value)
-        .value(Alias::new("last_session_at"), session.timestamp)
+        .value(Alias::new("last_session_id"), session.id)
+        .value(Alias::new("last_session_at"), session.last_activity_at)
         .value(Alias::new("last_app_version"), app_version.value)
         .value(Alias::new("last_app_version_at"), app_version.timestamp)
         .value(
@@ -233,7 +229,7 @@ pub async fn observe(
             Alias::new("session_changes"),
             current
                 .session_changes
-                .saturating_add(change_increment(session.changed)),
+                .saturating_add(change_increment(session.started_new)),
         )
         .value(
             Alias::new("app_version_changes"),
@@ -450,6 +446,29 @@ fn update_counters(current: &DeviceRow, observation: &DeviceObservation) -> Tele
     counters
 }
 
+fn derive_session(
+    current_id: Option<String>,
+    last_seen_at: i64,
+    received_at: i64,
+) -> SessionState {
+    let gap = received_at.saturating_sub(last_seen_at);
+    if let Some(id) = current_id
+        && gap <= SESSION_IDLE_MILLIS
+    {
+        return SessionState {
+            id,
+            last_activity_at: received_at,
+            started_new: false,
+        };
+    }
+
+    SessionState {
+        id: Uuid::now_v7().to_string(),
+        last_activity_at: received_at,
+        started_new: current_id.is_some(),
+    }
+}
+
 fn merge_dimension(
     current_value: Option<String>,
     current_timestamp: Option<i64>,
@@ -511,8 +530,8 @@ fn add_risk(
 #[cfg(test)]
 mod tests {
     use super::{
-        DeviceObservation, DeviceRow, DeviceTelemetryKind, TimedDimension, merge_dimension,
-        update_counters,
+        DeviceObservation, DeviceRow, DeviceTelemetryKind, SESSION_IDLE_MILLIS, TimedDimension,
+        derive_session, merge_dimension, update_counters,
     };
 
     #[test]
@@ -543,6 +562,22 @@ mod tests {
         assert_eq!(merged.value.as_deref(), Some("linux"));
         assert_eq!(merged.change_interval, Some(150));
         assert!(merged.changed);
+    }
+
+    #[test]
+    fn server_session_continues_until_idle_timeout() {
+        let current = "server-session".to_string();
+        let active = derive_session(Some(current.clone()), 1_000, 1_000 + SESSION_IDLE_MILLIS);
+        assert_eq!(active.id, current);
+        assert!(!active.started_new);
+
+        let idle = derive_session(
+            Some("server-session".into()),
+            1_000,
+            1_001 + SESSION_IDLE_MILLIS,
+        );
+        assert_ne!(idle.id, "server-session");
+        assert!(idle.started_new);
     }
 
     #[test]
