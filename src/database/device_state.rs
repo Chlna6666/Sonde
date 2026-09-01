@@ -4,10 +4,12 @@ use sea_orm::{
 };
 use uuid::Uuid;
 
-use super::{device_activity, query::insert_batch_ignore_conflicts, telemetry::TelemetryScope};
+use super::{
+    device_activity, device_session, query::insert_batch_ignore_conflicts,
+    telemetry::TelemetryScope,
+};
 
 const DAY_MILLIS: i64 = 86_400_000;
-const SESSION_IDLE_MILLIS: i64 = 30 * 60_000;
 const RAPID_VERSION_MILLIS: i64 = 5 * 60_000;
 const RAPID_OS_MILLIS: i64 = 60 * 60_000;
 
@@ -84,7 +86,8 @@ struct DimensionMerge {
 struct SessionState {
     id: String,
     last_activity_at: i64,
-    started_new: bool,
+    created_new: bool,
+    transitioned: bool,
 }
 
 #[derive(Debug)]
@@ -123,6 +126,11 @@ pub async fn observe(
         .await?
         .ok_or_else(|| DbErr::Custom("device profile row disappeared during update".into()))?;
     let counters = update_counters(&current, observation);
+    let session = derive_session(
+        current.last_session_id,
+        current.last_seen_at,
+        observation.received_at,
+    );
     device_activity::record(
         &transaction,
         scope,
@@ -131,11 +139,16 @@ pub async fn observe(
         observation.received_at,
     )
     .await?;
-    let session = derive_session(
-        current.last_session_id,
+    device_session::record(
+        &transaction,
+        scope,
+        device_hash,
+        &session.id,
         current.last_seen_at,
         observation.received_at,
-    );
+        session.created_new,
+    )
+    .await?;
     let app_version = merge_dimension(
         current.last_app_version,
         current.last_app_version_at,
@@ -267,7 +280,7 @@ pub async fn observe(
             Alias::new("session_changes"),
             current
                 .session_changes
-                .saturating_add(change_increment(session.started_new)),
+                .saturating_add(change_increment(session.transitioned)),
         )
         .value(
             Alias::new("app_version_changes"),
@@ -511,19 +524,21 @@ fn derive_session(
     let gap = received_at.saturating_sub(last_seen_at);
     let had_current = current_id.is_some();
     if let Some(id) = current_id
-        && gap <= SESSION_IDLE_MILLIS
+        && gap <= device_session::SESSION_IDLE_MILLIS
     {
         return SessionState {
             id,
             last_activity_at: received_at,
-            started_new: false,
+            created_new: false,
+            transitioned: false,
         };
     }
 
     SessionState {
         id: Uuid::now_v7().to_string(),
         last_activity_at: received_at,
-        started_new: had_current,
+        created_new: true,
+        transitioned: had_current,
     }
 }
 
@@ -588,9 +603,10 @@ fn add_risk(
 #[cfg(test)]
 mod tests {
     use super::{
-        DeviceObservation, DeviceRow, DeviceTelemetryKind, SESSION_IDLE_MILLIS, TimedDimension,
-        derive_session, merge_dimension, update_counters,
+        DeviceObservation, DeviceRow, DeviceTelemetryKind, TimedDimension, derive_session,
+        merge_dimension, update_counters,
     };
+    use crate::database::device_session::SESSION_IDLE_MILLIS;
 
     #[test]
     fn older_dimension_observation_cannot_roll_back_current_state() {
@@ -627,7 +643,8 @@ mod tests {
         let current = "server-session".to_string();
         let active = derive_session(Some(current.clone()), 1_000, 1_000 + SESSION_IDLE_MILLIS);
         assert_eq!(active.id, current);
-        assert!(!active.started_new);
+        assert!(!active.created_new);
+        assert!(!active.transitioned);
 
         let idle = derive_session(
             Some("server-session".into()),
@@ -635,7 +652,15 @@ mod tests {
             1_001 + SESSION_IDLE_MILLIS,
         );
         assert_ne!(idle.id, "server-session");
-        assert!(idle.started_new);
+        assert!(idle.created_new);
+        assert!(idle.transitioned);
+    }
+
+    #[test]
+    fn first_server_session_is_created_without_counting_a_transition() {
+        let session = derive_session(None, 1_000, 1_000);
+        assert!(session.created_new);
+        assert!(!session.transitioned);
     }
 
     #[test]
