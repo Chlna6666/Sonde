@@ -811,9 +811,8 @@ async fn dispatch_to_channel(
             let chat_id = channel
                 .config
                 .get("chatId")
-                .and_then(|value| !value.as_str().unwrap_or_default().trim().is_empty())
-                .and_then(|_| channel.config.get("chatId"))
                 .and_then(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
                 .ok_or("Missing 'chatId' in channel config")?;
             let url = format!("https://api.telegram.org/bot{bot_token}/sendMessage");
             let body = serde_json::json!({
