@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use sea_orm::{
     ConnectionTrait, DbBackend, DbErr,
@@ -42,6 +42,10 @@ enum ActivityGranularity {
     Month,
 }
 
+/// Record an authoritative live device observation.
+///
+/// Only a contiguous server-observed gap of at most 30 minutes contributes active time. The gap is
+/// split across UTC day/hour boundaries so every bucket receives the exact interval it owns.
 pub async fn record(
     database: &impl ConnectionTrait,
     scope: &TelemetryScope,
@@ -105,6 +109,38 @@ pub async fn record(
     .await
 }
 
+/// Project a historical observation into active-device presence without fabricating online time.
+/// Historical events do not prove that a device stayed online between two event timestamps.
+pub async fn record_historical_presence(
+    database: &impl ConnectionTrait,
+    scope: &TelemetryScope,
+    device_hash: &str,
+    timestamp: i64,
+) -> Result<(), DbErr> {
+    touch_presence_bucket(
+        database,
+        "telemetry_device_activity_days",
+        "day",
+        "sonde:device-activity-day\0",
+        &day_for_timestamp(timestamp),
+        scope,
+        device_hash,
+        timestamp,
+    )
+    .await?;
+    touch_presence_bucket(
+        database,
+        "telemetry_device_activity_hours",
+        "hour",
+        "sonde:device-activity-hour\0",
+        &hour_for_timestamp(timestamp),
+        scope,
+        device_hash,
+        timestamp,
+    )
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn touch_request_bucket(
     database: &impl ConnectionTrait,
@@ -115,6 +151,57 @@ async fn touch_request_bucket(
     scope: &TelemetryScope,
     device_hash: &str,
     received_at: i64,
+) -> Result<(), DbErr> {
+    touch_bucket(
+        database,
+        table,
+        bucket_column,
+        id_context,
+        bucket,
+        scope,
+        device_hash,
+        received_at,
+        1,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn touch_presence_bucket(
+    database: &impl ConnectionTrait,
+    table: &str,
+    bucket_column: &str,
+    id_context: &str,
+    bucket: &str,
+    scope: &TelemetryScope,
+    device_hash: &str,
+    timestamp: i64,
+) -> Result<(), DbErr> {
+    touch_bucket(
+        database,
+        table,
+        bucket_column,
+        id_context,
+        bucket,
+        scope,
+        device_hash,
+        timestamp,
+        0,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn touch_bucket(
+    database: &impl ConnectionTrait,
+    table: &str,
+    bucket_column: &str,
+    id_context: &str,
+    bucket: &str,
+    scope: &TelemetryScope,
+    device_hash: &str,
+    timestamp: i64,
+    request_increment: i64,
 ) -> Result<(), DbErr> {
     let id = activity_id(
         id_context,
@@ -144,11 +231,11 @@ async fn touch_request_bucket(
             scope.environment_id.clone().into(),
             device_hash.to_owned().into(),
             bucket.to_owned().into(),
-            received_at.into(),
-            received_at.into(),
+            timestamp.into(),
+            timestamp.into(),
             0_i64.into(),
-            1_i64.into(),
-            received_at.into(),
+            request_increment.into(),
+            timestamp.into(),
         ]],
         "id",
         "id",
@@ -158,30 +245,32 @@ async fn touch_request_bucket(
         return Ok(());
     }
 
-    let update = Query::update()
+    let mut update = Query::update();
+    update
         .table(Alias::new(table))
         .value(
             Alias::new("first_seen_at"),
             Expr::cust_with_values(
                 "CASE WHEN first_seen_at > ? THEN ? ELSE first_seen_at END",
-                [received_at, received_at],
+                [timestamp, timestamp],
             ),
         )
         .value(
             Alias::new("last_seen_at"),
             Expr::cust_with_values(
                 "CASE WHEN last_seen_at < ? THEN ? ELSE last_seen_at END",
-                [received_at, received_at],
+                [timestamp, timestamp],
             ),
         )
-        .value(
+        .value(Alias::new("updated_at"), timestamp)
+        .and_where(Expr::col(Alias::new("id")).eq(id));
+    if request_increment > 0 {
+        update.value(
             Alias::new("request_count"),
-            Expr::col(Alias::new("request_count")).add(1_i64),
-        )
-        .value(Alias::new("updated_at"), received_at)
-        .and_where(Expr::col(Alias::new("id")).eq(id))
-        .to_owned();
-    database.execute(&update).await?;
+            Expr::col(Alias::new("request_count")).add(request_increment),
+        );
+    }
+    database.execute(&update.to_owned()).await?;
     Ok(())
 }
 
@@ -377,21 +466,19 @@ pub async fn total_active_millis(
 ) -> Result<u64, DbErr> {
     let mut query = Query::select();
     query
-        .expr_as(
-            Func::sum(Expr::col(Alias::new("active_millis"))),
-            Alias::new("active_millis"),
-        )
+        .column(Alias::new("active_millis"))
         .from(Alias::new("telemetry_device_activity_days"));
     apply_scope(&mut query, application_id, environment_id);
     if let Some(since) = since {
         query.and_where(Expr::col(Alias::new("last_seen_at")).gte(since));
     }
-    let value = database
-        .query_one(&query.to_owned())
-        .await?
-        .and_then(|row| row.try_get::<i64>("", "active_millis").ok())
-        .unwrap_or(0);
-    Ok(nonnegative(value))
+    let mut total = 0_u64;
+    for row in database.query_all(&query.to_owned()).await? {
+        total = total.saturating_add(nonnegative(
+            row.try_get::<i64>("", "active_millis").unwrap_or(0),
+        ));
+    }
+    Ok(total)
 }
 
 pub async fn growth_timeline(
@@ -464,34 +551,34 @@ pub async fn daily_activity(
 ) -> Result<Vec<DailyActiveDevices>, DbErr> {
     let mut query = Query::select();
     query
-        .column(Alias::new("day"))
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("devices"))
-        .expr_as(
-            Func::sum(Expr::col(Alias::new("active_millis"))),
-            Alias::new("active_millis"),
-        )
+        .columns(["day", "active_millis"].map(Alias::new))
         .from(Alias::new("telemetry_device_activity_days"))
-        .group_by_col(Alias::new("day"))
         .order_by(Alias::new("day"), Order::Asc);
     apply_scope(&mut query, application_id, environment_id);
     if let Some(since) = since {
         query.and_where(Expr::col(Alias::new("last_seen_at")).gte(since));
     }
 
-    database
-        .query_all(&query.to_owned())
-        .await?
-        .into_iter()
-        .map(|row| {
-            Ok(DailyActiveDevices {
-                day: row.try_get("", "day")?,
-                devices: nonnegative(row.try_get::<i64>("", "devices").unwrap_or(0)),
-                active_millis: nonnegative(
-                    row.try_get::<i64>("", "active_millis").unwrap_or(0),
-                ),
+    let mut buckets = BTreeMap::<String, (u64, u64)>::new();
+    for row in database.query_all(&query.to_owned()).await? {
+        let day: String = row.try_get("", "day")?;
+        let active_millis = nonnegative(row.try_get::<i64>("", "active_millis").unwrap_or(0));
+        buckets
+            .entry(day)
+            .and_modify(|value| {
+                value.0 = value.0.saturating_add(1);
+                value.1 = value.1.saturating_add(active_millis);
             })
+            .or_insert((1, active_millis));
+    }
+    Ok(buckets
+        .into_iter()
+        .map(|(day, (devices, active_millis))| DailyActiveDevices {
+            day,
+            devices,
+            active_millis,
         })
-        .collect()
+        .collect())
 }
 
 async fn active_buckets(
@@ -515,50 +602,55 @@ async fn activity_buckets(
     since: Option<i64>,
     granularity: ActivityGranularity,
 ) -> Result<BTreeMap<String, (u64, u64)>, DbErr> {
-    let (table, bucket_expr) = match granularity {
-        ActivityGranularity::Hour => (
-            "telemetry_device_activity_hours",
-            "hour".to_owned(),
-        ),
-        ActivityGranularity::Day => (
-            "telemetry_device_activity_days",
-            "day".to_owned(),
-        ),
-        ActivityGranularity::Month => (
-            "telemetry_device_activity_days",
-            "SUBSTR(day, 1, 7)".to_owned(),
-        ),
+    let (table, bucket_column) = match granularity {
+        ActivityGranularity::Hour => ("telemetry_device_activity_hours", "hour"),
+        ActivityGranularity::Day | ActivityGranularity::Month => {
+            ("telemetry_device_activity_days", "day")
+        }
     };
     let mut query = Query::select();
     query
-        .expr_as(Expr::cust(bucket_expr), Alias::new("bucket"))
-        .expr_as(
-            Expr::cust("COUNT(DISTINCT device_hash)"),
-            Alias::new("devices"),
-        )
-        .expr_as(
-            Func::sum(Expr::col(Alias::new("active_millis"))),
-            Alias::new("active_millis"),
-        )
+        .columns([bucket_column, "device_hash", "active_millis"].map(Alias::new))
         .from(Alias::new(table))
-        .group_by_col(Alias::new("bucket"))
-        .order_by(Alias::new("bucket"), Order::Asc);
+        .order_by(Alias::new(bucket_column), Order::Asc);
     apply_scope(&mut query, application_id, environment_id);
     if let Some(since) = since {
         query.and_where(Expr::col(Alias::new("last_seen_at")).gte(since));
     }
 
-    let mut result = BTreeMap::new();
+    let mut buckets = BTreeMap::<String, (HashSet<String>, u64)>::new();
     for row in database.query_all(&query.to_owned()).await? {
-        result.insert(
-            row.try_get("", "bucket")?,
-            (
-                nonnegative(row.try_get::<i64>("", "devices").unwrap_or(0)),
-                nonnegative(row.try_get::<i64>("", "active_millis").unwrap_or(0)),
-            ),
-        );
+        let raw_bucket: String = row.try_get("", bucket_column)?;
+        let bucket = match granularity {
+            ActivityGranularity::Month => raw_bucket
+                .get(..7)
+                .ok_or_else(|| DbErr::Custom("invalid device activity day bucket".into()))?
+                .to_owned(),
+            _ => raw_bucket,
+        };
+        let device_hash: String = row.try_get("", "device_hash")?;
+        let active_millis = nonnegative(row.try_get::<i64>("", "active_millis").unwrap_or(0));
+        buckets
+            .entry(bucket)
+            .and_modify(|value| {
+                value.0.insert(device_hash.clone());
+                value.1 = value.1.saturating_add(active_millis);
+            })
+            .or_insert_with(|| {
+                let mut devices = HashSet::new();
+                devices.insert(device_hash);
+                (devices, active_millis)
+            });
     }
-    Ok(result)
+    Ok(buckets
+        .into_iter()
+        .map(|(bucket, (devices, active_millis))| {
+            (
+                bucket,
+                (u64::try_from(devices.len()).unwrap_or(u64::MAX), active_millis),
+            )
+        })
+        .collect())
 }
 
 async fn new_device_buckets(
