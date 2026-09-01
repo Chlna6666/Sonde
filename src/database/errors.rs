@@ -66,7 +66,7 @@ pub async fn insert_error_index(
             last_launcher_version: error.launcher_version.clone(),
             last_os: error.os.clone(),
         });
-        group.first_seen = group.first_seen.min(timestamp);
+        group.first_seen = std::cmp::min(group.first_seen, timestamp);
         if timestamp >= group.last_seen {
             group.last_seen = timestamp;
             group.message_sample.clone_from(&error.message);
