@@ -21,6 +21,7 @@ pub struct RetentionReport {
     pub error_occurrences_deleted: u64,
     pub error_groups_deleted: u64,
     pub device_profiles_deleted: u64,
+    pub device_sessions_deleted: u64,
     pub device_activity_days_deleted: u64,
     pub device_activity_hours_deleted: u64,
     pub rollups_deleted: u64,
@@ -71,6 +72,14 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             cutoff,
         )
         .await?;
+        let device_sessions_deleted = delete_in_batches(
+            database,
+            "telemetry_device_sessions",
+            "last_seen_at",
+            &app_id,
+            cutoff,
+        )
+        .await?;
         let device_activity_hours_deleted = delete_in_batches(
             database,
             "telemetry_device_activity_hours",
@@ -102,6 +111,9 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
         report.error_occurrences_deleted = report
             .error_occurrences_deleted
             .saturating_add(error_occurrences_deleted);
+        report.device_sessions_deleted = report
+            .device_sessions_deleted
+            .saturating_add(device_sessions_deleted);
         report.device_activity_hours_deleted = report
             .device_activity_hours_deleted
             .saturating_add(device_activity_hours_deleted);
@@ -173,8 +185,6 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             source_mask |= rollups::DIRTY_SOURCE_METRIC;
         }
         if logs_deleted > 0 {
-            // Retention deletes logs without decoding severity first. The deleted subset may contain
-            // error/fatal rows, so conservatively repair both the total-log and ErrorLogs rollups.
             source_mask |= rollups::DIRTY_SOURCE_LOG | log_error_rollup::DIRTY_SOURCE_LOG_ERROR;
         }
         if error_occurrences_deleted > 0 {
@@ -189,16 +199,13 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             app_name = %app_name,
             retention_days = %retention_days,
             device_profiles_pruned = device_profiles_deleted,
+            device_sessions_pruned = device_sessions_deleted,
             device_activity_days_pruned = device_activity_days_deleted,
             device_activity_hours_pruned = device_activity_hours_deleted,
             "retention sweep completed for application"
         );
     }
 
-    // First-seen is a derived index over retained events. Deleting an old event can move a user's
-    // first retained occurrence forward, so a monotonic MIN-only incremental update is insufficient.
-    // Rebuild asynchronously from the remaining authoritative rows instead of preserving deleted
-    // user history past the configured retention boundary.
     if first_seen_needs_rebuild {
         first_seen::invalidate(database).await?;
     }
@@ -214,6 +221,7 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             error_occurrences_pruned = report.error_occurrences_deleted,
             error_groups_pruned = report.error_groups_deleted,
             device_profiles_pruned = report.device_profiles_deleted,
+            device_sessions_pruned = report.device_sessions_deleted,
             device_activity_days_pruned = report.device_activity_days_deleted,
             device_activity_hours_pruned = report.device_activity_hours_deleted,
             rollups_pruned = report.rollups_deleted,
