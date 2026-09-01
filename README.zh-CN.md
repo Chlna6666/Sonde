@@ -31,7 +31,7 @@ docker compose up -d --build
 
 ## 本地开发
 
-依赖：Rust 1.95+、Node.js 22+、pnpm 10+。
+依赖：Rust 1.95.0+、Node.js 22+、pnpm 10+。
 
 先启动支持热更新的前端：
 
@@ -70,6 +70,7 @@ Debug 构建会跳过内嵌前端的生产打包。若需在 Debug 模式构建�
 ```toml
 [dependencies]
 sonde-sdk = { git = "https://github.com/Chlna6666/Sonde" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 生产构建建议固定 commit：
@@ -77,19 +78,21 @@ sonde-sdk = { git = "https://github.com/Chlna6666/Sonde" }
 ```toml
 [dependencies]
 sonde-sdk = { git = "https://github.com/Chlna6666/Sonde", rev = "<SONDE_COMMIT_SHA>" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 应用只需要持久化一个高熵、伪匿名的安装/设备 ID。不要直接使用 MAC 地址、硬件序列号、账户名或其它可直接识别用户/硬件的信息。
 
 ```rust
-use sonde_sdk::{Event, SondeClient};
+use sonde_sdk::{Event, SondeClient, load_or_create_device_id};
 
 #[tokio::main]
 async fn main() -> sonde_sdk::Result<()> {
+    let device_id = load_or_create_device_id("data/sonde-device-id")?;
     let sonde = SondeClient::builder(
         "http://127.0.0.1:8080",
         "sonde_your_bootstrap_key",
-        load_or_create_installation_id(),
+        device_id,
     )
     .app_version(env!("CARGO_PKG_VERSION"))
     .system_language("zh-CN")
@@ -102,12 +105,9 @@ async fn main() -> sonde_sdk::Result<()> {
 
     Ok(())
 }
-
-fn load_or_create_installation_id() -> String {
-    // 首次启动生成并持久化；之后复用同一个值。
-    sonde_sdk::generate_device_id()
-}
 ```
+
+`load_or_create_device_id()` 首次启动时使用不覆盖已有文件的方式创建设备 ID，之后始终复用同一值。若已有身份文件损坏，SDK 会明确报错而不是自动生成新 ID，避免把同一次安装错误统计成新设备。该文件应放在应用自己的持久化数据目录中。
 
 `connect()` 会先完成设备 Token 交换和一次可信 heartbeat，随后默认每 60 秒自动 heartbeat。SDK 内部负责：
 
@@ -117,7 +117,8 @@ fn load_or_create_installation_id() -> String {
 - 每个请求生成新的 nonce 和请求签名时间；
 - 自动上报 heartbeat；
 - 批量上报 events / metrics / logs / errors；
-- 在客户端侧限制 1000 条/批和 1 MiB payload 上限。
+- 在客户端侧限制 1000 条/批和 1 MiB payload 上限；
+- 在发请求前按服务端相同规则校验 device ID、User-Agent 和设备 facts。
 
 业务 telemetry 类型**没有** `anonymousId`、`timestamp` 或 `sessionId` 字段。设备身份来自短期 Token；首次/最后出现时间、Session、在线时长、DAU/WAU/MAU 与累计统计全部由 Sonde 服务端根据可信请求推导。
 
@@ -131,6 +132,7 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --all-targets
 
 cargo fmt --manifest-path sdk/rust/Cargo.toml --check
+cargo check --manifest-path sdk/rust/Cargo.toml
 cargo clippy --manifest-path sdk/rust/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path sdk/rust/Cargo.toml
 
