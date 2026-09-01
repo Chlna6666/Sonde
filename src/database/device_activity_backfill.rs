@@ -126,22 +126,14 @@ pub async fn run_batch(database: &DatabaseConnection, limit: u64) -> Result<usiz
         merge_device_bounds(&transaction, bounds).await?;
     }
 
-    let mut previous = HashMap::<(String, String, String), i64>::new();
     for row in &rows {
-        let key = (
-            row.application_id.clone(),
-            row.environment_id.clone(),
-            row.device_hash.clone(),
-        );
-        let previous_seen_at = previous.insert(key, row.timestamp).unwrap_or(row.timestamp);
-        device_activity::record(
+        device_activity::record_historical_presence(
             &transaction,
             &TelemetryScope {
                 application_id: row.application_id.clone(),
                 environment_id: row.environment_id.clone(),
             },
             &row.device_hash,
-            previous_seen_at,
             row.timestamp,
         )
         .await?;
