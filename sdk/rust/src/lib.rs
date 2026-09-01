@@ -10,6 +10,6 @@ pub use delivery::{DeliveryOptions, DeliveryStats, QueueDeliveryStats, RetryPoli
 pub use device_id::{generate_device_id, load_or_create_device_id};
 pub use error::{Error, Result};
 pub use model::{
-    Attributes, BatchReceipt, DeviceFacts, ErrorEvent, ErrorSeverity, Event, Histogram, LogEntry,
-    LogLevel, Metric, MetricType, RejectedItem,
+    Attributes, DeviceFacts, ErrorEvent, ErrorSeverity, Event, Histogram, LogEntry, LogLevel, Metric,
+    MetricType,
 };
