@@ -37,7 +37,11 @@ fn rejects_binding_mismatch() -> Result<(), Box<dyn std::error::Error>> {
         drop(spool);
 
         let error = match Spool::open("events", options(&root), [2_u8; 32]).await {
-            Ok(_) => return Err(crate::Error::InvalidConfiguration("expected binding mismatch".into())),
+            Ok(_) => {
+                return Err(crate::Error::InvalidConfiguration(
+                    "expected spool binding mismatch".into(),
+                ));
+            }
             Err(error) => error,
         };
         assert!(matches!(error, Error::SpoolBindingMismatch { .. }));
@@ -53,7 +57,11 @@ fn rejects_second_live_writer() -> Result<(), Box<dyn std::error::Error>> {
     runtime()?.block_on(async {
         let (first, _) = Spool::open("events", options(&root), [3_u8; 32]).await?;
         let error = match Spool::open("events", options(&root), [3_u8; 32]).await {
-            Ok(_) => return Err(crate::Error::InvalidConfiguration("expected spool lock".into())),
+            Ok(_) => {
+                return Err(crate::Error::InvalidConfiguration(
+                    "expected spool lock conflict".into(),
+                ));
+            }
             Err(error) => error,
         };
         assert!(matches!(error, Error::SpoolLocked { .. }));
@@ -96,10 +104,10 @@ fn repairs_truncated_active_segment_tail() -> Result<(), Box<dyn std::error::Err
         assert_eq!(recovered.len(), 2);
         assert_eq!(recovered[0].payload, first_payload);
         assert_eq!(recovered[1].payload, second_payload);
-        assert_eq!(fs::metadata(&segment).await?.len(), valid_len);
         drop(spool);
         Ok::<(), crate::Error>(())
     })?;
+    assert_eq!(fs::metadata(&segment)?.len(), valid_len);
 
     let _ = fs::remove_dir_all(root);
     Ok(())
@@ -115,7 +123,14 @@ fn enforces_per_queue_spool_capacity() -> Result<(), Box<dyn std::error::Error>>
         let (spool, _) = Spool::open("logs", constrained, [5_u8; 32]).await?;
 
         spool.append(vec![b'a'; 40 * 1024]).await?;
-        let error = spool.append(vec![b'b'; 40 * 1024]).await.expect_err("second record must exceed spool capacity");
+        let error = match spool.append(vec![b'b'; 40 * 1024]).await {
+            Ok(_) => {
+                return Err(crate::Error::InvalidConfiguration(
+                    "expected spool capacity rejection".into(),
+                ));
+            }
+            Err(error) => error,
+        };
         assert!(matches!(
             error,
             Error::SpoolFull {
