@@ -74,7 +74,7 @@ async fn insert_batch_inner(
         return Err(DbErr::Custom("batch insert column/value count mismatch".into()));
     }
 
-    let rows_per_statement = (SAFE_MAX_BIND_PARAMS / columns.len()).max(1);
+    let rows_per_statement = std::cmp::max(SAFE_MAX_BIND_PARAMS / columns.len(), 1);
     let mut rows = rows.into_iter();
     let mut affected = 0_u64;
 
