@@ -21,6 +21,8 @@ pub struct RetentionReport {
     pub error_occurrences_deleted: u64,
     pub error_groups_deleted: u64,
     pub device_profiles_deleted: u64,
+    pub device_activity_days_deleted: u64,
+    pub device_activity_hours_deleted: u64,
     pub rollups_deleted: u64,
     pub dimension_rollups_deleted: u64,
     pub user_rollups_deleted: u64,
@@ -69,6 +71,22 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             cutoff,
         )
         .await?;
+        let device_activity_hours_deleted = delete_in_batches(
+            database,
+            "telemetry_device_activity_hours",
+            "last_seen_at",
+            &app_id,
+            cutoff,
+        )
+        .await?;
+        let device_activity_days_deleted = delete_in_batches(
+            database,
+            "telemetry_device_activity_days",
+            "last_seen_at",
+            &app_id,
+            cutoff,
+        )
+        .await?;
         let device_profiles_deleted = delete_in_batches(
             database,
             "telemetry_devices",
@@ -84,6 +102,12 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
         report.error_occurrences_deleted = report
             .error_occurrences_deleted
             .saturating_add(error_occurrences_deleted);
+        report.device_activity_hours_deleted = report
+            .device_activity_hours_deleted
+            .saturating_add(device_activity_hours_deleted);
+        report.device_activity_days_deleted = report
+            .device_activity_days_deleted
+            .saturating_add(device_activity_days_deleted);
         report.device_profiles_deleted = report
             .device_profiles_deleted
             .saturating_add(device_profiles_deleted);
@@ -165,6 +189,8 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             app_name = %app_name,
             retention_days = %retention_days,
             device_profiles_pruned = device_profiles_deleted,
+            device_activity_days_pruned = device_activity_days_deleted,
+            device_activity_hours_pruned = device_activity_hours_deleted,
             "retention sweep completed for application"
         );
     }
@@ -188,6 +214,8 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             error_occurrences_pruned = report.error_occurrences_deleted,
             error_groups_pruned = report.error_groups_deleted,
             device_profiles_pruned = report.device_profiles_deleted,
+            device_activity_days_pruned = report.device_activity_days_deleted,
+            device_activity_hours_pruned = report.device_activity_hours_deleted,
             rollups_pruned = report.rollups_deleted,
             dimension_rollups_pruned = report.dimension_rollups_deleted,
             user_rollups_pruned = report.user_rollups_deleted,
