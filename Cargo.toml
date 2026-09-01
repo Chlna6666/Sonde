@@ -11,6 +11,10 @@ readme = "README.md"
 keywords = ["telemetry", "analytics", "actix-web", "self-hosted"]
 categories = ["web-programming::http-server"]
 
+[workspace]
+members = ["sdk/rust"]
+resolver = "3"
+
 [dependencies]
 actix-web = "4.11"
 argon2 = "0.5"
