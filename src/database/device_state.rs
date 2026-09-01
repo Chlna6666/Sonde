@@ -4,7 +4,7 @@ use sea_orm::{
 };
 use uuid::Uuid;
 
-use super::{query::insert_batch_ignore_conflicts, telemetry::TelemetryScope};
+use super::{device_activity, query::insert_batch_ignore_conflicts, telemetry::TelemetryScope};
 
 const DAY_MILLIS: i64 = 86_400_000;
 const SESSION_IDLE_MILLIS: i64 = 30 * 60_000;
@@ -123,6 +123,14 @@ pub async fn observe(
         .await?
         .ok_or_else(|| DbErr::Custom("device profile row disappeared during update".into()))?;
     let counters = update_counters(&current, observation);
+    device_activity::record(
+        &transaction,
+        scope,
+        device_hash,
+        current.last_seen_at,
+        observation.received_at,
+    )
+    .await?;
     let session = derive_session(
         current.last_session_id,
         current.last_seen_at,
@@ -303,6 +311,7 @@ async fn ensure_device_row(
             "application_id",
             "environment_id",
             "device_hash",
+            "first_seen_at",
             "last_seen_at",
             "last_event_at",
             "last_metric_at",
@@ -338,6 +347,7 @@ async fn ensure_device_row(
             scope.application_id.clone().into(),
             scope.environment_id.clone().into(),
             device_hash.to_owned().into(),
+            now.into(),
             now.into(),
             Option::<i64>::None.into(),
             Option::<i64>::None.into(),
