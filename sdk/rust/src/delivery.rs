@@ -202,7 +202,7 @@ pub(crate) struct DeliveryQueue<T: QueuedTelemetry> {
     sender: mpsc::Sender<QueueCommand>,
     counters: Arc<QueueCounters>,
     spool: Option<Arc<Spool>>,
-    durable_enqueue_order: Mutex<()>,
+    durable_enqueue_order: Arc<Mutex<()>>,
     marker: PhantomData<fn() -> T>,
 }
 
@@ -235,26 +235,34 @@ impl<T: QueuedTelemetry> DeliveryQueue<T> {
             sender,
             counters,
             spool,
-            durable_enqueue_order: Mutex::new(()),
+            durable_enqueue_order: Arc::new(Mutex::new(())),
             marker: PhantomData,
         })
     }
 
     pub(crate) async fn enqueue(&self, item: T) -> Result<()> {
         let payload = serialize_item(&item)?;
-        if let Some(spool) = &self.spool {
-            let _order = self.durable_enqueue_order.lock().await;
-            let permit = self
-                .sender
-                .clone()
-                .reserve_owned()
-                .await
-                .map_err(|_| Error::QueueClosed { kind: T::KIND })?;
-            let record = spool.append(payload).await?;
-            self.counters.persisted.fetch_add(1, Ordering::Relaxed);
-            permit.send(QueueCommand::Item(QueuedItem::from(record)));
-            self.counters.enqueued.fetch_add(1, Ordering::Relaxed);
-            return Ok(());
+        if let Some(spool) = self.spool.clone() {
+            let sender = self.sender.clone();
+            let counters = self.counters.clone();
+            let order = self.durable_enqueue_order.clone();
+            return tokio::spawn(async move {
+                let _order = order.lock().await;
+                let permit = sender
+                    .reserve_owned()
+                    .await
+                    .map_err(|_| Error::QueueClosed { kind: T::KIND })?;
+                let record = spool.append(payload).await?;
+                counters.persisted.fetch_add(1, Ordering::Relaxed);
+                permit.send(QueueCommand::Item(QueuedItem::from(record)));
+                counters.enqueued.fetch_add(1, Ordering::Relaxed);
+                Ok::<(), Error>(())
+            })
+            .await
+            .map_err(|error| Error::DurableEnqueueTask {
+                kind: T::KIND,
+                reason: error.to_string(),
+            })?;
         }
 
         self.sender
@@ -385,7 +393,7 @@ async fn run_worker<T: QueuedTelemetry>(
                 )
                 .await;
                 deadline = retry_deadline(retained, &options);
-                let _ = reply.send(take_worker_result(&mut pending_error));
+                let _ = reply.send(control_result::<T>(&mut pending_error, retained));
             }
             Some(QueueCommand::Shutdown(reply)) => {
                 receiver.close();
@@ -400,7 +408,7 @@ async fn run_worker<T: QueuedTelemetry>(
                         }
                     }
                 }
-                let _ = flush_batch::<T>(
+                let retained = flush_batch::<T>(
                     &transport,
                     &options,
                     &counters,
@@ -409,7 +417,7 @@ async fn run_worker<T: QueuedTelemetry>(
                     &mut pending_error,
                 )
                 .await;
-                let _ = reply.send(take_worker_result(&mut pending_error));
+                let _ = reply.send(control_result::<T>(&mut pending_error, retained));
                 break;
             }
             None => {
@@ -435,9 +443,9 @@ async fn flush_batch<T: QueuedTelemetry>(
     spool: Option<&Arc<Spool>>,
     batch: &mut Vec<QueuedItem>,
     pending_error: &mut Option<Error>,
-) -> bool {
+) -> usize {
     if batch.is_empty() {
-        return false;
+        return 0;
     }
 
     let mut work = VecDeque::new();
@@ -454,7 +462,6 @@ async fn flush_batch<T: QueuedTelemetry>(
         counters.batches.fetch_add(1, Ordering::Relaxed);
         match send_with_retry(transport, options, counters, T::ROUTE, &items).await {
             Ok(receipt) => {
-                clear_retryable_error(pending_error);
                 record_receipt::<T>(counters, pending_error, &receipt);
                 if let Err(error) = commit_terminal(spool, &items).await {
                     *pending_error = Some(error);
@@ -469,13 +476,13 @@ async fn flush_batch<T: QueuedTelemetry>(
                 counters
                     .deferred
                     .fetch_add(items.len() as u64, Ordering::Relaxed);
-                *pending_error = Some(error);
                 let mut retained = items;
                 while let Some(remaining) = work.pop_front() {
                     retained.extend(remaining);
                 }
+                let retained_count = retained.len();
                 *batch = retained;
-                return true;
+                return retained_count;
             }
             Err(error) => {
                 counters
@@ -490,13 +497,7 @@ async fn flush_batch<T: QueuedTelemetry>(
     }
 
     *batch = Vec::with_capacity(options.max_batch_items);
-    false
-}
-
-fn clear_retryable_error(pending_error: &mut Option<Error>) {
-    if pending_error.as_ref().is_some_and(Error::is_retryable) {
-        *pending_error = None;
-    }
+    0
 }
 
 fn record_receipt<T: QueuedTelemetry>(
@@ -563,8 +564,8 @@ fn serialize_item<T: Serialize>(item: &T) -> Result<Vec<u8>> {
     Ok(payload)
 }
 
-fn retry_deadline(retained: bool, options: &DeliveryOptions) -> Option<Instant> {
-    retained.then(|| Instant::now() + options.retry.max_backoff)
+fn retry_deadline(retained: usize, options: &DeliveryOptions) -> Option<Instant> {
+    (retained > 0).then(|| Instant::now() + options.retry.max_backoff)
 }
 
 fn retry_delay(policy: &RetryPolicy, retry_index: u32) -> Duration {
@@ -582,11 +583,20 @@ fn retry_delay(policy: &RetryPolicy, retry_index: u32) -> Duration {
     Duration::from_millis(u64::try_from(jittered).unwrap_or(u64::MAX))
 }
 
-fn take_worker_result(pending_error: &mut Option<Error>) -> Result<()> {
-    match pending_error.take() {
-        Some(error) => Err(error),
-        None => Ok(()),
+fn control_result<T: QueuedTelemetry>(
+    pending_error: &mut Option<Error>,
+    retained: usize,
+) -> Result<()> {
+    if let Some(error) = pending_error.take() {
+        return Err(error);
     }
+    if retained > 0 {
+        return Err(Error::DeferredTelemetry {
+            kind: T::KIND,
+            pending: retained,
+        });
+    }
+    Ok(())
 }
 
 pub(crate) async fn await_control(
