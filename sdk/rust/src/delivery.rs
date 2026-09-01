@@ -135,7 +135,7 @@ impl QueueCounters {
     }
 }
 
-pub(crate) trait QueuedTelemetry: Serialize + Send + 'static {
+pub(crate) trait QueuedTelemetry: Serialize + Send + Sync + 'static {
     const KIND: &'static str;
     const ROUTE: &'static str;
 }
