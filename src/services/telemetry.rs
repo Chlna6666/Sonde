@@ -8,9 +8,12 @@ use crate::{
         ingest_auth, ingest_nonce,
         telemetry::TelemetryScope,
     },
-    domain::telemetry::{
-        BatchReceipt, ErrorInput, EventInput, LogInput, MAX_BATCH_ITEMS, MetricInput, RejectedItem,
-        ValidateTelemetry,
+    domain::{
+        device_facts::DeviceFactsInput,
+        telemetry::{
+            BatchReceipt, ErrorInput, EventInput, LogInput, MAX_BATCH_ITEMS, MetricInput,
+            RejectedItem, ValidateTelemetry,
+        },
     },
     error::AppError,
     ingest_signature,
@@ -97,6 +100,8 @@ pub fn has_permission(scopes: &[String], required_perm: &str) -> bool {
                 && (scope == "logs" || scope == "ingest.logs"))
             || (required_perm == "telemetry.errors"
                 && (scope == "errors" || scope == "ingest.errors"))
+            || (required_perm == "telemetry.heartbeat"
+                && (scope == "heartbeat" || scope == "ingest.heartbeat"))
     })
 }
 
@@ -360,6 +365,39 @@ async fn signed_scope(
     })
 }
 
+pub async fn heartbeat(
+    installed: &InstalledState,
+    scope: &IngestScope,
+    facts: DeviceFactsInput,
+) -> Result<(), AppError> {
+    facts
+        .validate()
+        .map_err(|message| AppError::Validation(message.into()))?;
+    let received_at = chrono::Utc::now().timestamp_millis();
+    let observation = DeviceObservation {
+        kind: DeviceTelemetryKind::Heartbeat,
+        received_at,
+        telemetry_at: received_at,
+        item_count: 0,
+        session_id: None,
+        app_version: timed_fact(facts.app_version, received_at),
+        launcher_version: timed_fact(facts.launcher_version, received_at),
+        os: timed_fact(facts.os, received_at),
+        system_language: timed_fact(facts.system_language, received_at),
+        architecture: timed_fact(facts.architecture, received_at),
+    };
+    let storage_scope = scope.storage_scope();
+    let device_hash = device_hash_for_scope(scope);
+    device_state::observe(
+        &installed.database,
+        &storage_scope,
+        &device_hash,
+        &observation,
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn events(
     installed: &InstalledState,
     scope: &IngestScope,
@@ -458,8 +496,7 @@ async fn observe_signed_device(
     let Some(observation) = observation else {
         return;
     };
-    let salt = format!("{}:{}", scope.application_id, scope.environment_id);
-    let device_hash = anonymous_hash(scope.signed_device_id(), &salt);
+    let device_hash = device_hash_for_scope(scope);
     if let Err(error) = device_state::observe(
         &installed.database,
         storage_scope,
@@ -503,6 +540,8 @@ fn event_observation(items: &[EventInput]) -> Option<DeviceObservation> {
         app_version,
         launcher_version,
         os,
+        system_language: None,
+        architecture: None,
     })
 }
 
@@ -532,6 +571,8 @@ fn error_observation(items: &[ErrorInput]) -> Option<DeviceObservation> {
         app_version,
         launcher_version,
         os,
+        system_language: None,
+        architecture: None,
     })
 }
 
@@ -549,6 +590,15 @@ fn simple_observation(kind: DeviceTelemetryKind, item_count: usize) -> Option<De
         app_version: None,
         launcher_version: None,
         os: None,
+        system_language: None,
+        architecture: None,
+    })
+}
+
+fn timed_fact(value: Option<String>, received_at: i64) -> Option<TimedDimension> {
+    value.map(|value| TimedDimension {
+        value,
+        timestamp: received_at,
     })
 }
 
@@ -564,6 +614,11 @@ fn update_current_dimension(
         value: value.to_owned(),
         timestamp: received_at,
     });
+}
+
+fn device_hash_for_scope(scope: &IngestScope) -> String {
+    let salt = format!("{}:{}", scope.application_id, scope.environment_id);
+    anonymous_hash(scope.signed_device_id(), &salt)
 }
 
 async fn charge_item_budget(
