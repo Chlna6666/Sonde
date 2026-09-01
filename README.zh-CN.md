@@ -99,26 +99,67 @@ async fn main() -> sonde_sdk::Result<()> {
     .connect()
     .await?;
 
+    // 这里只等待进入有界内存队列，不等待 HTTP 往返。
     sonde
         .event(Event::new("app_startup").attribute("channel", "stable"))
         .await?;
 
+    // 应用正常退出流程中完成最终 flush。
+    sonde.shutdown().await?;
     Ok(())
 }
 ```
 
 `load_or_create_device_id()` 首次启动时使用不覆盖已有文件的方式创建设备 ID，之后始终复用同一值。若已有身份文件损坏，SDK 会明确报错而不是自动生成新 ID，避免把同一次安装错误统计成新设备。该文件应放在应用自己的持久化数据目录中。
 
-`connect()` 会先完成设备 Token 交换和一次可信 heartbeat，随后默认每 60 秒自动 heartbeat。SDK 内部负责：
+`connect()` 会先完成设备 Token 交换和一次可信 heartbeat，随后默认每 60 秒自动 heartbeat。SDK 内部负责 Token 缓存/刷新、精确原始 JSON HMAC 签名、nonce、签名时间以及四类遥测的后台可靠队列。
 
-- 长期 Bootstrap Key 仅调用 `/api/v1/ingest/token`；
-- 缓存并提前刷新短生命周期 `sndt_` 设备 Token；
-- 使用 `sonde-hmac-sha256-v2` 对实际发送的 JSON 原始字节签名；
-- 每个请求生成新的 nonce 和请求签名时间；
-- 自动上报 heartbeat；
-- 批量上报 events / metrics / logs / errors；
-- 在客户端侧限制 1000 条/批和 1 MiB payload 上限；
-- 在发请求前按服务端相同规则校验 device ID、User-Agent 和设备 facts。
+### 后台可靠上报
+
+Events、Metrics、Logs、Errors 分别拥有独立的有界队列和后台 worker，默认策略：
+
+- 每种遥测最多排队 4096 条；
+- HTTP 每批最多 256 条；
+- 非空批次从第一条进入后最多等待 1 秒自动 flush；
+- 如果序列化后的请求超过 1 MiB，会继续自动拆批；
+- 连接失败、超时、HTTP 429、HTTP 5xx 自动重试；
+- 默认最多重试 5 次，指数退避并加入约 ±20% jitter，最大退避 15 秒；
+- 429/5xx 返回整数秒 `Retry-After` 时会遵循该值，但不会超过配置的最大退避；
+- 普通 4xx 属于永久错误，不重试；
+- 服务端逐项 rejected 不重试，并单独计入 rejected 统计。
+
+`event().await` / `metric().await` / `log().await` / `error().await` 的成功只表示**已经进入有界队列**。队列满时这些异步 API 会施加背压并等待空位；需要绝不等待的热路径可以使用 `try_event()` / `try_metric()` / `try_log()` / `try_error()`，队列满时直接返回 `Error::QueueFull`。
+
+需要确认此前入队数据已经处理时调用：
+
+```rust
+sonde.flush().await?;
+```
+
+应用正常退出时调用：
+
+```rust
+sonde.shutdown().await?;
+```
+
+`shutdown()` 会停止接受新遥测，让四个 worker 完成各自最终批处理和重试，然后退出。该操作可重复调用。
+
+超过最大重试次数后，失败批次会被丢弃，以保证内存始终有界且关闭流程不会无限等待。可通过 `delivery_stats()` 观察：
+
+```rust
+let stats = sonde.delivery_stats();
+println!(
+    "events delivered={} rejected={} dropped={} retries={}",
+    stats.events.delivered,
+    stats.events.rejected,
+    stats.events.dropped,
+    stats.events.retries,
+);
+```
+
+这套队列是**进程内内存队列，不是磁盘持久化 spool**。它可以隔离业务线程和网络波动，但进程被强杀、系统崩溃或断电时，仍可能丢失尚未送达 Sonde 的内存数据。
+
+对于连接/超时这类“服务器可能已经收到请求，但客户端没有收到响应”的模糊失败，重试语义属于 at-least-once。要求事件去重时应给 Event 设置 `idempotency_key`。
 
 业务 telemetry 类型**没有** `anonymousId`、`timestamp` 或 `sessionId` 字段。设备身份来自短期 Token；首次/最后出现时间、Session、在线时长、DAU/WAU/MAU 与累计统计全部由 Sonde 服务端根据可信请求推导。
 
