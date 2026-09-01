@@ -27,9 +27,10 @@ const INGEST_SECURITY_CLEANUP_LEASE_TTL: Duration = Duration::from_secs(60);
 const FIRST_SEEN_BACKFILL_INTERVAL: Duration = Duration::from_secs(10);
 const FIRST_SEEN_BACKFILL_LEASE_TTL: Duration = Duration::from_secs(60);
 const FIRST_SEEN_BACKFILL_BATCH: u64 = 32;
-const DEVICE_ACTIVITY_BACKFILL_INTERVAL: Duration = Duration::from_secs(5);
+const DEVICE_ACTIVITY_BACKFILL_START_DELAY: Duration = Duration::from_secs(5);
+const DEVICE_ACTIVITY_BACKFILL_INTERVAL: Duration = Duration::from_secs(10);
 const DEVICE_ACTIVITY_BACKFILL_LEASE_TTL: Duration = Duration::from_secs(60);
-const DEVICE_ACTIVITY_BACKFILL_BATCH: u64 = 256;
+const DEVICE_ACTIVITY_BACKFILL_BATCH: u64 = 128;
 
 pub fn spawn_leased_workers(database: DatabaseConnection) {
     spawn_alert_worker(database.clone());
@@ -212,6 +213,7 @@ fn spawn_first_seen_backfill_worker(database: DatabaseConnection) {
 fn spawn_device_activity_backfill_worker(database: DatabaseConnection) {
     let holder_id = format!("device-activity:{}", Uuid::now_v7());
     tokio::spawn(async move {
+        tokio::time::sleep(DEVICE_ACTIVITY_BACKFILL_START_DELAY).await;
         let mut interval = tokio::time::interval(DEVICE_ACTIVITY_BACKFILL_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
