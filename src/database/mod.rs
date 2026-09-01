@@ -1,3 +1,4 @@
+pub mod activity_stats;
 pub mod alert_delivery;
 pub mod alerts;
 mod application_transfer;
