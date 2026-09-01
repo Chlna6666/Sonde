@@ -96,15 +96,15 @@ async fn main() -> sonde_sdk::Result<()> {
     )
     .app_version(env!("CARGO_PKG_VERSION"))
     .system_language("zh-CN")
+    // 可选：启用崩溃/断电恢复 WAL；默认不启用磁盘 spool。
+    .disk_spool("data/sonde-spool")
     .connect()
     .await?;
 
-    // 这里只等待进入有界内存队列，不等待 HTTP 往返。
     sonde
         .event(Event::new("app_startup").attribute("channel", "stable"))
         .await?;
 
-    // 应用正常退出流程中完成最终 flush。
     sonde.shutdown().await?;
     Ok(())
 }
@@ -112,58 +112,50 @@ async fn main() -> sonde_sdk::Result<()> {
 
 `load_or_create_device_id()` 首次启动时使用不覆盖已有文件的方式创建设备 ID，之后始终复用同一值。若已有身份文件损坏，SDK 会明确报错而不是自动生成新 ID，避免把同一次安装错误统计成新设备。该文件应放在应用自己的持久化数据目录中。
 
-`connect()` 会先完成设备 Token 交换和一次可信 heartbeat，随后默认每 60 秒自动 heartbeat。SDK 内部负责 Token 缓存/刷新、精确原始 JSON HMAC 签名、nonce、签名时间以及四类遥测的后台可靠队列。
+`connect()` 会先完成设备 Token 交换和一次可信 heartbeat，随后默认每 60 秒自动 heartbeat。SDK 内部负责 Token 缓存/刷新、精确原始 JSON HMAC 签名、nonce、签名时间以及 Events / Metrics / Logs / Errors 四类独立后台队列。
 
-### 后台可靠上报
+默认不启用磁盘 spool 时，`event().await` / `metric().await` / `log().await` / `error().await` 的成功表示已经进入有界内存队列；队列满时异步 API 会施加背压，`try_*` 则立即返回 `Error::QueueFull`。默认每种遥测最多排队 4096 条、每批最多 256 条、1 秒自动 flush，并对连接失败、超时、模糊响应、HTTP 429 与 5xx 做指数退避重试。
 
-Events、Metrics、Logs、Errors 分别拥有独立的有界队列和后台 worker，默认策略：
-
-- 每种遥测最多排队 4096 条；
-- HTTP 每批最多 256 条；
-- 非空批次从第一条进入后最多等待 1 秒自动 flush；
-- 如果序列化后的请求超过 1 MiB，会继续自动拆批；
-- 连接失败、超时、HTTP 429、HTTP 5xx 自动重试；
-- 默认最多重试 5 次，指数退避并加入约 ±20% jitter，最大退避 15 秒；
-- 429/5xx 返回整数秒 `Retry-After` 时会遵循该值，但不会超过配置的最大退避；
-- 普通 4xx 属于永久错误，不重试；
-- 服务端逐项 rejected 不重试，并单独计入 rejected 统计。
-
-`event().await` / `metric().await` / `log().await` / `error().await` 的成功只表示**已经进入有界队列**。队列满时这些异步 API 会施加背压并等待空位；需要绝不等待的热路径可以使用 `try_event()` / `try_metric()` / `try_log()` / `try_error()`，队列满时直接返回 `Error::QueueFull`。
-
-需要确认此前入队数据已经处理时调用：
+需要崩溃恢复时显式启用：
 
 ```rust
-sonde.flush().await?;
+let sonde = SondeClient::builder(server, bootstrap_key, device_id)
+    .disk_spool("data/sonde-spool")
+    .connect()
+    .await?;
 ```
 
-应用正常退出时调用：
+启用后，每条遥测先序列化并 append 到对应类型的 WAL，`sync_data()` 成功后才进入 worker 队列。因此 async enqueue 返回成功代表记录已经本地持久化，而不是服务端已经确认。Events / Metrics / Logs / Errors 分别使用独立 spool；默认每段 4 MiB、每种遥测最多 64 MiB。磁盘达到上限且没有已确认 segment 可以回收时返回 `Error::SpoolFull`，不会删除未确认记录。
 
-```rust
-sonde.shutdown().await?;
-```
+服务端 terminal 回执会推进 append-only ACK journal；ACK 自身持久化成功后才允许删除完全确认的旧 segment。若服务器已经接收但客户端在 ACK 落盘前崩溃，重启后可能重复发送，因此 durable 模式是 **at-least-once**。需要业务去重的 Event 应设置稳定 `idempotency_key`。
 
-`shutdown()` 会停止接受新遥测，让四个 worker 完成各自最终批处理和重试，然后退出。该操作可重复调用。
+持续网络错误在 durable 模式下耗尽当前 retry budget 后不会 dropped，而会保持 deferred 并留在 WAL；后续 worker 继续尝试，正常退出仍失败的记录会在下次启动恢复。普通永久 4xx 与服务端逐项 rejected 属于 terminal，不无限重放。
 
-超过最大重试次数后，失败批次会被丢弃，以保证内存始终有界且关闭流程不会无限等待。可通过 `delivery_stats()` 观察：
+WAL 活动 segment 支持断电造成的末尾半条 frame：重启扫描时会截断到最后一条校验通过的完整记录；完整记录内部 checksum 失败则明确报错。每类 spool 同时持有跨进程 exclusive lock，并通过 SHA-256 metadata 绑定 endpoint、device ID 与 bootstrap key，避免两个进程并发写或把旧 WAL 发到另一个 Sonde 身份。bootstrap key 不以明文写入 metadata。
+
+Durable 模式下 `try_event()` / `try_metric()` / `try_log()` / `try_error()` 故意不可用，因为“不等待”和“成功前完成 WAL fsync”无法同时保证；应使用对应 async enqueue API。
+
+可通过 `delivery_stats()` 观察：
 
 ```rust
 let stats = sonde.delivery_stats();
 println!(
-    "events delivered={} rejected={} dropped={} retries={}",
+    "events persisted={} recovered={} delivered={} rejected={} dropped={} deferred={} retries={}",
+    stats.events.persisted,
+    stats.events.recovered,
     stats.events.delivered,
     stats.events.rejected,
     stats.events.dropped,
+    stats.events.deferred,
     stats.events.retries,
 );
 ```
 
-这套队列是**进程内内存队列，不是磁盘持久化 spool**。它可以隔离业务线程和网络波动，但进程被强杀、系统崩溃或断电时，仍可能丢失尚未送达 Sonde 的内存数据。
-
-对于连接/超时这类“服务器可能已经收到请求，但客户端没有收到响应”的模糊失败，重试语义属于 at-least-once。要求事件去重时应给 Event 设置 `idempotency_key`。
+需要确认此前入队数据已经处理时调用 `sonde.flush().await?`；应用正常退出时调用 `sonde.shutdown().await?`。
 
 业务 telemetry 类型**没有** `anonymousId`、`timestamp` 或 `sessionId` 字段。设备身份来自短期 Token；首次/最后出现时间、Session、在线时长、DAU/WAU/MAU 与累计统计全部由 Sonde 服务端根据可信请求推导。
 
-底层签名协议仅用于实现其它语言 SDK 或协议调试，参见服务端 `src/ingest_signature.rs` 与 Rust SDK `sdk/rust/src/signing.rs`，普通应用不应自行重复实现 HMAC 链路。
+更完整的内存队列、重试和 `SpoolOptions` 调整说明见 [`sdk/rust/README.md`](sdk/rust/README.md)。底层签名协议仅用于实现其它语言 SDK 或协议调试，普通应用不应自行重复实现 HMAC 链路。
 
 ## 质量检查
 
