@@ -18,10 +18,7 @@ fn observation(
         received_at,
         telemetry_at,
         item_count: 1,
-        session_id: Some(device_state::TimedDimension {
-            value: "session-1".into(),
-            timestamp: telemetry_at,
-        }),
+        session_id: None,
         app_version: app_version.map(|value| device_state::TimedDimension {
             value: value.into(),
             timestamp: telemetry_at,
@@ -31,6 +28,8 @@ fn observation(
             value: value.into(),
             timestamp: telemetry_at,
         }),
+        system_language: None,
+        architecture: None,
     }
 }
 
