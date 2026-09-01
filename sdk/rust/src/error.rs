@@ -25,6 +25,10 @@ pub enum Error {
         kind: &'static str,
         max_bytes: u64,
     },
+    #[error("telemetry spool at {path:?} is already locked by another client/process")]
+    SpoolLocked { path: PathBuf },
+    #[error("telemetry spool at {path:?} belongs to a different Sonde endpoint/device/bootstrap key")]
+    SpoolBindingMismatch { path: PathBuf },
     #[error("failed to access telemetry spool at {path:?}: {source}")]
     SpoolIo {
         path: PathBuf,
@@ -40,6 +44,8 @@ pub enum Error {
         kind: &'static str,
         rejected: usize,
     },
+    #[error("Sonde returned an invalid or ambiguous delivery response: {0}")]
+    InvalidServerResponse(String),
     #[error("failed to access Sonde device ID storage at {path:?}: {source}")]
     DeviceIdStorage {
         path: PathBuf,
@@ -72,6 +78,7 @@ impl Error {
             Self::Api { status, .. } => {
                 *status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
             }
+            Self::InvalidServerResponse(_) => true,
             _ => false,
         }
     }
