@@ -29,6 +29,8 @@ pub struct DeviceProfileRecord {
     pub last_app_version: Option<String>,
     pub last_launcher_version: Option<String>,
     pub last_os: Option<String>,
+    pub last_system_language: Option<String>,
+    pub last_architecture: Option<String>,
     pub event_items: i64,
     pub metric_items: i64,
     pub log_items: i64,
@@ -84,6 +86,8 @@ pub async fn list_profiles(
                 "last_app_version",
                 "last_launcher_version",
                 "last_os",
+                "last_system_language",
+                "last_architecture",
                 "event_items",
                 "metric_items",
                 "log_items",
@@ -123,6 +127,8 @@ pub async fn list_profiles(
                 last_app_version: row.try_get("", "last_app_version")?,
                 last_launcher_version: row.try_get("", "last_launcher_version")?,
                 last_os: row.try_get("", "last_os")?,
+                last_system_language: row.try_get("", "last_system_language")?,
+                last_architecture: row.try_get("", "last_architecture")?,
                 event_items: row.try_get("", "event_items")?,
                 metric_items: row.try_get("", "metric_items")?,
                 log_items: row.try_get("", "log_items")?,
@@ -210,7 +216,9 @@ fn build_condition(filter: &DeviceProfileFilter<'_>) -> Condition {
                 .add(Expr::col(Alias::new("last_session_id")).like(pattern.clone()))
                 .add(Expr::col(Alias::new("last_app_version")).like(pattern.clone()))
                 .add(Expr::col(Alias::new("last_launcher_version")).like(pattern.clone()))
-                .add(Expr::col(Alias::new("last_os")).like(pattern)),
+                .add(Expr::col(Alias::new("last_os")).like(pattern.clone()))
+                .add(Expr::col(Alias::new("last_system_language")).like(pattern.clone()))
+                .add(Expr::col(Alias::new("last_architecture")).like(pattern)),
         );
     }
     condition
