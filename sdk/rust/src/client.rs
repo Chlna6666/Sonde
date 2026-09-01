@@ -139,14 +139,14 @@ impl SondeClient {
     }
 
     async fn signed_post(&self, route: &str, body: Vec<u8>) -> Result<Response> {
-        let auth = self.token(false).await?;
+        let auth = self.token().await?;
         let first = self.signed_post_once(route, &body, &auth).await?;
         if first.status() != StatusCode::UNAUTHORIZED {
             return Ok(first);
         }
 
         self.invalidate_token_if(&auth.token).await;
-        let refreshed = self.token(false).await?;
+        let refreshed = self.token().await?;
         self.signed_post_once(route, &body, &refreshed).await
     }
 
@@ -182,11 +182,10 @@ impl SondeClient {
             .await?)
     }
 
-    async fn token(&self, force_refresh: bool) -> Result<TokenState> {
+    async fn token(&self) -> Result<TokenState> {
         let now = unix_millis()?;
         let mut guard = self.inner.token.lock().await;
-        if !force_refresh
-            && let Some(token) = guard.as_ref()
+        if let Some(token) = guard.as_ref()
             && token.expires_at.saturating_sub(now) > TOKEN_REFRESH_MARGIN_MS
         {
             return Ok(token.clone());
