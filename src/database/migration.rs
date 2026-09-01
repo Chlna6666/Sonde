@@ -5,6 +5,7 @@ mod auth_shared_state;
 mod columns;
 mod daily_rollups;
 mod device_activity_days;
+mod device_activity_hours;
 mod device_facts;
 mod device_profiles;
 mod dimension_rollups;
@@ -28,6 +29,7 @@ use auth_shared_state::SharedAuthState;
 use columns::{bigint, create_index, create_table, string};
 use daily_rollups::DailyRollups;
 use device_activity_days::DeviceActivityDays;
+use device_activity_hours::DeviceActivityHours;
 use device_facts::DeviceFacts;
 use device_profiles::DeviceProfiles;
 use dimension_rollups::DimensionRollups;
@@ -81,6 +83,7 @@ impl MigratorTrait for Migrator {
             Box::new(IngestBootstrapLimits),
             Box::new(DeviceFacts),
             Box::new(DeviceActivityDays),
+            Box::new(DeviceActivityHours),
         ]
     }
 }
@@ -323,10 +326,11 @@ impl MigrationTrait for InitialSchema {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for table in [
-            "telemetry_device_activity_days",
             "ingest_device_enrollments",
             "ingest_rate_windows",
             "ingest_nonce_replay",
+            "telemetry_device_activity_hours",
+            "telemetry_device_activity_days",
             "telemetry_devices",
             "telemetry_first_seen_backfill_days",
             "telemetry_user_first_seen",
