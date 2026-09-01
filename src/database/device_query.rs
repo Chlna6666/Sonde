@@ -64,6 +64,11 @@ pub async fn list_profiles(
 ) -> Result<DeviceProfilePageRecord, DbErr> {
     let condition = build_condition(filter);
     let total = count_with_condition(database, condition.clone()).await?;
+    let page_size = std::cmp::max(filter.page_size, 1);
+    let offset = filter
+        .page
+        .saturating_sub(1)
+        .saturating_mul(page_size);
 
     let query = Query::select()
         .columns(
@@ -97,8 +102,8 @@ pub async fn list_profiles(
         .cond_where(condition)
         .order_by(Alias::new("risk_score"), Order::Desc)
         .order_by(Alias::new("last_seen_at"), Order::Desc)
-        .limit(filter.page_size.max(1))
-        .offset(filter.page.saturating_sub(1).saturating_mul(filter.page_size.max(1)))
+        .limit(page_size)
+        .offset(offset)
         .to_owned();
 
     let items = database
