@@ -12,7 +12,7 @@ pub async fn try_acquire_or_renew(
     ttl_millis: i64,
 ) -> Result<bool, DbErr> {
     let now = chrono::Utc::now().timestamp_millis();
-    let lease_until = now.saturating_add(ttl_millis.max(1_000));
+    let lease_until = now.saturating_add(std::cmp::max(ttl_millis, 1_000));
 
     if update_existing(database, name, holder_id, now, lease_until).await? {
         return Ok(true);
