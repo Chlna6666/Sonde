@@ -1,14 +1,23 @@
 use std::{
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use reqwest::{header::CONTENT_TYPE, Client as HttpClient, Response, StatusCode};
+use reqwest::{
+    Client as HttpClient, Response, StatusCode,
+    header::{CONTENT_TYPE, RETRY_AFTER},
+};
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::{
+    delivery::{
+        DeliveryOptions, DeliveryQueue, DeliveryStats, RetryPolicy, await_control,
+    },
     device_id::validate_device_id,
     error::{Error, Result},
     model::{
@@ -30,13 +39,26 @@ pub struct SondeClient {
 }
 
 struct Inner {
+    transport: Arc<Transport>,
+    queues: Queues,
+    heartbeat_interval: Option<Duration>,
+    shutting_down: AtomicBool,
+}
+
+struct Queues {
+    events: DeliveryQueue<Event>,
+    metrics: DeliveryQueue<Metric>,
+    logs: DeliveryQueue<LogEntry>,
+    errors: DeliveryQueue<ErrorEvent>,
+}
+
+pub(crate) struct Transport {
     http: HttpClient,
     endpoint: String,
     api_key: String,
     device_id: String,
     facts: RwLock<DeviceFacts>,
     token: Mutex<Option<TokenState>>,
-    heartbeat_interval: Option<Duration>,
 }
 
 #[derive(Clone)]
@@ -54,6 +76,7 @@ pub struct SondeClientBuilder {
     facts: DeviceFacts,
     heartbeat_interval: Option<Duration>,
     request_timeout: Duration,
+    delivery: DeliveryOptions,
 }
 
 impl SondeClient {
@@ -70,160 +93,142 @@ impl SondeClient {
             facts: DeviceFacts::with_platform_defaults(),
             heartbeat_interval: Some(DEFAULT_HEARTBEAT_INTERVAL),
             request_timeout: Duration::from_secs(10),
+            delivery: DeliveryOptions::default(),
         }
     }
 
+    /// Send a heartbeat immediately. Normal heartbeat scheduling remains automatic after connect.
     pub async fn heartbeat(&self) -> Result<()> {
-        let facts = self.inner.facts.read().await.clone();
-        validate_device_facts(&facts)?;
-        let body = serialize_payload(&facts)?;
-        let response = self.signed_post("/heartbeat", body).await?;
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            Err(api_error(response).await)
-        }
+        self.ensure_running()?;
+        self.inner.transport.heartbeat().await
     }
 
+    /// Replace the current device facts and publish them immediately with a heartbeat.
     pub async fn set_device_facts(&self, facts: DeviceFacts) -> Result<()> {
+        self.ensure_running()?;
         validate_device_facts(&facts)?;
-        *self.inner.facts.write().await = facts;
-        self.heartbeat().await
+        *self.inner.transport.facts.write().await = facts;
+        self.inner.transport.heartbeat().await
     }
 
-    pub async fn event(&self, event: Event) -> Result<BatchReceipt> {
-        self.events(std::slice::from_ref(&event)).await
+    /// Enqueue an event. Completion means the item entered the bounded in-memory queue, not that the
+    /// server has acknowledged it. Call `flush()` when an acknowledgement barrier is required.
+    pub async fn event(&self, event: Event) -> Result<()> {
+        self.ensure_running()?;
+        self.inner.queues.events.enqueue(event).await
     }
 
-    pub async fn events(&self, events: &[Event]) -> Result<BatchReceipt> {
-        self.send_batch("/events", events).await
+    pub fn try_event(&self, event: Event) -> Result<()> {
+        self.ensure_running()?;
+        self.inner.queues.events.try_enqueue(event)
     }
 
-    pub async fn metric(&self, metric: Metric) -> Result<BatchReceipt> {
-        self.metrics(std::slice::from_ref(&metric)).await
-    }
-
-    pub async fn metrics(&self, metrics: &[Metric]) -> Result<BatchReceipt> {
-        self.send_batch("/metrics", metrics).await
-    }
-
-    pub async fn log(&self, entry: LogEntry) -> Result<BatchReceipt> {
-        self.logs(std::slice::from_ref(&entry)).await
-    }
-
-    pub async fn logs(&self, entries: &[LogEntry]) -> Result<BatchReceipt> {
-        self.send_batch("/logs", entries).await
-    }
-
-    pub async fn error(&self, error: ErrorEvent) -> Result<BatchReceipt> {
-        self.errors(std::slice::from_ref(&error)).await
-    }
-
-    pub async fn errors(&self, errors: &[ErrorEvent]) -> Result<BatchReceipt> {
-        self.send_batch("/errors", errors).await
-    }
-
-    async fn send_batch<T: Serialize>(&self, route: &str, items: &[T]) -> Result<BatchReceipt> {
-        if items.is_empty() || items.len() > MAX_BATCH_ITEMS {
-            return Err(Error::InvalidBatchSize);
+    pub async fn events(&self, events: Vec<Event>) -> Result<()> {
+        self.ensure_running()?;
+        for event in events {
+            self.inner.queues.events.enqueue(event).await?;
         }
-        let body = serialize_payload(&BatchRef { items })?;
-        if body.len() > MAX_INGEST_BODY_BYTES {
-            return Err(Error::PayloadTooLarge);
-        }
-        let response = self.signed_post(route, body).await?;
-        if !response.status().is_success() {
-            return Err(api_error(response).await);
-        }
-        Ok(response.json::<BatchReceipt>().await?)
+        Ok(())
     }
 
-    async fn signed_post(&self, route: &str, body: Vec<u8>) -> Result<Response> {
-        let auth = self.token().await?;
-        let first = self.signed_post_once(route, &body, &auth).await?;
-        if first.status() != StatusCode::UNAUTHORIZED {
-            return Ok(first);
-        }
-
-        self.invalidate_token_if(&auth.token).await;
-        let refreshed = self.token().await?;
-        self.signed_post_once(route, &body, &refreshed).await
+    pub async fn metric(&self, metric: Metric) -> Result<()> {
+        self.ensure_running()?;
+        self.inner.queues.metrics.enqueue(metric).await
     }
 
-    async fn signed_post_once(
-        &self,
-        route: &str,
-        body: &[u8],
-        auth: &TokenState,
-    ) -> Result<Response> {
-        let timestamp = unix_millis()?;
-        let nonce = Uuid::now_v7().to_string();
-        let canonical_path = format!("{INGEST_PATH}{route}");
-        let signature = signing::sign(
-            &auth.signing_key,
-            timestamp,
-            &nonce,
-            "POST",
-            &canonical_path,
-            body,
-        )?;
-
-        Ok(self
-            .inner
-            .http
-            .post(format!("{}{}", self.inner.endpoint, route))
-            .bearer_auth(&auth.token)
-            .header(CONTENT_TYPE, "application/json")
-            .header("x-sonde-timestamp", timestamp.to_string())
-            .header("x-sonde-nonce", nonce)
-            .header("x-sonde-signature", signature)
-            .body(body.to_vec())
-            .send()
-            .await?)
+    pub fn try_metric(&self, metric: Metric) -> Result<()> {
+        self.ensure_running()?;
+        self.inner.queues.metrics.try_enqueue(metric)
     }
 
-    async fn token(&self) -> Result<TokenState> {
-        let now = unix_millis()?;
-        let mut guard = self.inner.token.lock().await;
-        if let Some(token) = guard.as_ref()
-            && token.expires_at.saturating_sub(now) > TOKEN_REFRESH_MARGIN_MS
-        {
-            return Ok(token.clone());
+    pub async fn metrics(&self, metrics: Vec<Metric>) -> Result<()> {
+        self.ensure_running()?;
+        for metric in metrics {
+            self.inner.queues.metrics.enqueue(metric).await?;
         }
-
-        let response = self
-            .inner
-            .http
-            .post(format!("{}/token", self.inner.endpoint))
-            .bearer_auth(&self.inner.api_key)
-            .json(&TokenRequest {
-                device_id: &self.inner.device_id,
-            })
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            return Err(api_error(response).await);
-        }
-        let issued = response.json::<TokenResponse>().await?;
-        if issued.signature_version != SIGNATURE_VERSION {
-            return Err(Error::UnsupportedSignatureVersion(issued.signature_version));
-        }
-        let token = TokenState {
-            token: issued.token,
-            signing_key: issued.signing_key,
-            expires_at: issued.expires_at,
-        };
-        *guard = Some(token.clone());
-        Ok(token)
+        Ok(())
     }
 
-    async fn invalidate_token_if(&self, stale_token: &str) {
-        let mut guard = self.inner.token.lock().await;
-        if guard
-            .as_ref()
-            .is_some_and(|current| current.token == stale_token)
-        {
-            *guard = None;
+    pub async fn log(&self, entry: LogEntry) -> Result<()> {
+        self.ensure_running()?;
+        self.inner.queues.logs.enqueue(entry).await
+    }
+
+    pub fn try_log(&self, entry: LogEntry) -> Result<()> {
+        self.ensure_running()?;
+        self.inner.queues.logs.try_enqueue(entry)
+    }
+
+    pub async fn logs(&self, entries: Vec<LogEntry>) -> Result<()> {
+        self.ensure_running()?;
+        for entry in entries {
+            self.inner.queues.logs.enqueue(entry).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn error(&self, error: ErrorEvent) -> Result<()> {
+        self.ensure_running()?;
+        self.inner.queues.errors.enqueue(error).await
+    }
+
+    pub fn try_error(&self, error: ErrorEvent) -> Result<()> {
+        self.ensure_running()?;
+        self.inner.queues.errors.try_enqueue(error)
+    }
+
+    pub async fn errors(&self, errors: Vec<ErrorEvent>) -> Result<()> {
+        self.ensure_running()?;
+        for error in errors {
+            self.inner.queues.errors.enqueue(error).await?;
+        }
+        Ok(())
+    }
+
+    /// Flush all four telemetry queues. The workers are independent, so all flush barriers are
+    /// submitted before any one queue is awaited.
+    pub async fn flush(&self) -> Result<()> {
+        self.ensure_running()?;
+        let requests = [
+            ("events", self.inner.queues.events.request_flush().await),
+            ("metrics", self.inner.queues.metrics.request_flush().await),
+            ("logs", self.inner.queues.logs.request_flush().await),
+            ("errors", self.inner.queues.errors.request_flush().await),
+        ];
+        await_requests(requests).await
+    }
+
+    /// Stop accepting new telemetry and perform a final flush of every queue.
+    ///
+    /// This method is idempotent. Once shutdown starts, all enqueue APIs return `ShuttingDown`.
+    pub async fn shutdown(&self) -> Result<()> {
+        if self.inner.shutting_down.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        let requests = [
+            ("events", self.inner.queues.events.request_shutdown().await),
+            ("metrics", self.inner.queues.metrics.request_shutdown().await),
+            ("logs", self.inner.queues.logs.request_shutdown().await),
+            ("errors", self.inner.queues.errors.request_shutdown().await),
+        ];
+        await_requests(requests).await
+    }
+
+    /// Snapshot delivery counters without acquiring the queue workers.
+    pub fn delivery_stats(&self) -> DeliveryStats {
+        DeliveryStats {
+            events: self.inner.queues.events.stats(),
+            metrics: self.inner.queues.metrics.stats(),
+            logs: self.inner.queues.logs.stats(),
+            errors: self.inner.queues.errors.stats(),
+        }
+    }
+
+    fn ensure_running(&self) -> Result<()> {
+        if self.inner.shutting_down.load(Ordering::Acquire) {
+            Err(Error::ShuttingDown)
+        } else {
+            Ok(())
         }
     }
 
@@ -240,8 +245,10 @@ impl SondeClient {
                 let Some(inner) = weak.upgrade() else {
                     break;
                 };
-                let client = SondeClient { inner };
-                let _ = client.heartbeat().await;
+                if inner.shutting_down.load(Ordering::Acquire) {
+                    break;
+                }
+                let _ = inner.transport.heartbeat().await;
             }
         });
     }
@@ -293,6 +300,31 @@ impl SondeClientBuilder {
         self
     }
 
+    pub fn delivery_options(mut self, options: DeliveryOptions) -> Self {
+        self.delivery = options;
+        self
+    }
+
+    pub fn queue_capacity(mut self, capacity: usize) -> Self {
+        self.delivery.queue_capacity = capacity;
+        self
+    }
+
+    pub fn batch_size(mut self, max_items: usize) -> Self {
+        self.delivery.max_batch_items = max_items;
+        self
+    }
+
+    pub fn flush_interval(mut self, interval: Duration) -> Self {
+        self.delivery.flush_interval = interval;
+        self
+    }
+
+    pub fn retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.delivery.retry = policy;
+        self
+    }
+
     pub async fn connect(self) -> Result<SondeClient> {
         validate_nonempty("base URL", &self.base_url)?;
         validate_nonempty("API key", &self.api_key)?;
@@ -301,6 +333,7 @@ impl SondeClientBuilder {
             .map_err(|message| Error::InvalidConfiguration(message.into()))?
             .to_owned();
         validate_device_facts(&self.facts)?;
+        self.delivery.validate()?;
         if self
             .heartbeat_interval
             .is_some_and(|interval| interval < Duration::from_secs(15))
@@ -320,21 +353,182 @@ impl SondeClientBuilder {
             .user_agent(self.user_agent)
             .timeout(self.request_timeout)
             .build()?;
+        let transport = Arc::new(Transport {
+            http,
+            endpoint,
+            api_key: self.api_key,
+            device_id,
+            facts: RwLock::new(self.facts),
+            token: Mutex::new(None),
+        });
+
+        // Fail fast on credentials/signature compatibility before starting background workers.
+        transport.heartbeat().await?;
+
+        let queues = Queues {
+            events: DeliveryQueue::spawn(transport.clone(), self.delivery.clone()),
+            metrics: DeliveryQueue::spawn(transport.clone(), self.delivery.clone()),
+            logs: DeliveryQueue::spawn(transport.clone(), self.delivery.clone()),
+            errors: DeliveryQueue::spawn(transport.clone(), self.delivery),
+        };
         let client = SondeClient {
             inner: Arc::new(Inner {
-                http,
-                endpoint,
-                api_key: self.api_key,
-                device_id,
-                facts: RwLock::new(self.facts),
-                token: Mutex::new(None),
+                transport,
+                queues,
                 heartbeat_interval: self.heartbeat_interval,
+                shutting_down: AtomicBool::new(false),
             }),
         };
 
-        client.heartbeat().await?;
         client.start_automatic_heartbeat();
         Ok(client)
+    }
+}
+
+impl Transport {
+    async fn heartbeat(&self) -> Result<()> {
+        let facts = self.facts.read().await.clone();
+        validate_device_facts(&facts)?;
+        let body = serialize_payload(&facts)?;
+        let response = self.signed_post("/heartbeat", body).await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(api_error(response).await)
+        }
+    }
+
+    pub(crate) async fn send_batch<T: Serialize>(
+        &self,
+        route: &str,
+        items: &[T],
+    ) -> Result<BatchReceipt> {
+        if items.is_empty() || items.len() > MAX_BATCH_ITEMS {
+            return Err(Error::InvalidBatchSize);
+        }
+        let body = serialize_payload(&BatchRef { items })?;
+        if body.len() > MAX_INGEST_BODY_BYTES {
+            return Err(Error::PayloadTooLarge);
+        }
+        let response = self.signed_post(route, body).await?;
+        if !response.status().is_success() {
+            return Err(api_error(response).await);
+        }
+        Ok(response.json::<BatchReceipt>().await?)
+    }
+
+    async fn signed_post(&self, route: &str, body: Vec<u8>) -> Result<Response> {
+        let auth = self.token().await?;
+        let first = self.signed_post_once(route, &body, &auth).await?;
+        if first.status() != StatusCode::UNAUTHORIZED {
+            return Ok(first);
+        }
+
+        self.invalidate_token_if(&auth.token).await;
+        let refreshed = self.token().await?;
+        self.signed_post_once(route, &body, &refreshed).await
+    }
+
+    async fn signed_post_once(
+        &self,
+        route: &str,
+        body: &[u8],
+        auth: &TokenState,
+    ) -> Result<Response> {
+        let timestamp = unix_millis()?;
+        let nonce = Uuid::now_v7().to_string();
+        let canonical_path = format!("{INGEST_PATH}{route}");
+        let signature = signing::sign(
+            &auth.signing_key,
+            timestamp,
+            &nonce,
+            "POST",
+            &canonical_path,
+            body,
+        )?;
+
+        Ok(self
+            .http
+            .post(format!("{}{}", self.endpoint, route))
+            .bearer_auth(&auth.token)
+            .header(CONTENT_TYPE, "application/json")
+            .header("x-sonde-timestamp", timestamp.to_string())
+            .header("x-sonde-nonce", nonce)
+            .header("x-sonde-signature", signature)
+            .body(body.to_vec())
+            .send()
+            .await?)
+    }
+
+    async fn token(&self) -> Result<TokenState> {
+        let now = unix_millis()?;
+        let mut guard = self.token.lock().await;
+        if let Some(token) = guard.as_ref()
+            && token.expires_at.saturating_sub(now) > TOKEN_REFRESH_MARGIN_MS
+        {
+            return Ok(token.clone());
+        }
+
+        let response = self
+            .http
+            .post(format!("{}/token", self.endpoint))
+            .bearer_auth(&self.api_key)
+            .json(&TokenRequest {
+                device_id: &self.device_id,
+            })
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(api_error(response).await);
+        }
+        let issued = response.json::<TokenResponse>().await?;
+        if issued.signature_version != SIGNATURE_VERSION {
+            return Err(Error::UnsupportedSignatureVersion(issued.signature_version));
+        }
+        let token = TokenState {
+            token: issued.token,
+            signing_key: issued.signing_key,
+            expires_at: issued.expires_at,
+        };
+        *guard = Some(token.clone());
+        Ok(token)
+    }
+
+    async fn invalidate_token_if(&self, stale_token: &str) {
+        let mut guard = self.token.lock().await;
+        if guard
+            .as_ref()
+            .is_some_and(|current| current.token == stale_token)
+        {
+            *guard = None;
+        }
+    }
+}
+
+async fn await_requests(
+    requests: [
+        (
+            &'static str,
+            Result<tokio::sync::oneshot::Receiver<Result<()>>>,
+        );
+        4
+    ],
+) -> Result<()> {
+    let mut first_error = None;
+    for (kind, request) in requests {
+        let result = match request {
+            Ok(receiver) => await_control(receiver, kind).await,
+            Err(error) => Err(error),
+        };
+        if first_error.is_none()
+            && let Err(error) = result
+        {
+            first_error = Some(error);
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
     }
 }
 
@@ -409,6 +603,12 @@ fn unix_millis() -> Result<i64> {
 
 async fn api_error(response: Response) -> Error {
     let status = response.status();
+    let retry_after = response
+        .headers()
+        .get(RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs);
     let body = match response.text().await {
         Ok(body) if !body.is_empty() => body,
         Ok(_) => status
@@ -417,7 +617,11 @@ async fn api_error(response: Response) -> Error {
             .to_owned(),
         Err(error) => format!("failed to read error response: {error}"),
     };
-    Error::Api { status, body }
+    Error::Api {
+        status,
+        body,
+        retry_after,
+    }
 }
 
 #[cfg(test)]
