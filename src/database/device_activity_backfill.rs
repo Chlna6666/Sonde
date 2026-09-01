@@ -206,43 +206,44 @@ async fn merge_device_bounds(
         ]
         .map(Alias::new),
     );
+    let values = [
+        Value::from(bounds.device_hash.clone()),
+        Value::from(bounds.application_id.clone()),
+        Value::from(bounds.environment_id.clone()),
+        Value::from(bounds.device_hash.clone()),
+        Value::from(bounds.first_seen_at),
+        Value::from(bounds.last_seen_at),
+        Value::from(Some(bounds.last_seen_at)),
+        Value::BigInt(None),
+        Value::BigInt(None),
+        Value::BigInt(None),
+        Value::String(None),
+        Value::BigInt(None),
+        Value::String(None),
+        Value::BigInt(None),
+        Value::String(None),
+        Value::BigInt(None),
+        Value::String(None),
+        Value::BigInt(None),
+        Value::String(None),
+        Value::BigInt(None),
+        Value::String(None),
+        Value::BigInt(None),
+        Value::from(0_i64),
+        Value::from(0_i64),
+        Value::from(0_i64),
+        Value::from(0_i64),
+        Value::from(0_i64),
+        Value::from(0_i64),
+        Value::from(0_i64),
+        Value::from(0_i64),
+        Value::from(0_i32),
+        Value::String(None),
+        Value::BigInt(None),
+        Value::from(now),
+    ];
     insert
-        .values([
-            Value::from(bounds.device_hash.clone()),
-            Value::from(bounds.application_id.clone()),
-            Value::from(bounds.environment_id.clone()),
-            Value::from(bounds.device_hash.clone()),
-            Value::from(bounds.first_seen_at),
-            Value::from(bounds.last_seen_at),
-            Value::from(Some(bounds.last_seen_at)),
-            Value::BigInt(None),
-            Value::BigInt(None),
-            Value::BigInt(None),
-            Value::String(None),
-            Value::BigInt(None),
-            Value::String(None),
-            Value::BigInt(None),
-            Value::String(None),
-            Value::BigInt(None),
-            Value::String(None),
-            Value::BigInt(None),
-            Value::String(None),
-            Value::BigInt(None),
-            Value::String(None),
-            Value::BigInt(None),
-            Value::from(0_i64),
-            Value::from(0_i64),
-            Value::from(0_i64),
-            Value::from(0_i64),
-            Value::from(0_i64),
-            Value::from(0_i64),
-            Value::from(0_i64),
-            Value::from(0_i64),
-            Value::from(0_i32),
-            Value::String(None),
-            Value::BigInt(None),
-            Value::from(now),
-        ])
+        .values(values.into_iter().map(Expr::value))
         .map_err(|error| DbErr::Custom(format!("build device backfill insert: {error}")))?;
     insert.on_conflict(
         OnConflict::column(Alias::new("id"))
@@ -303,10 +304,11 @@ async fn read_state(
         .and_where(Expr::col(Alias::new("key")).eq(key))
         .limit(1)
         .to_owned();
-    Ok(database
+    database
         .query_one(&query)
         .await?
-        .and_then(|row| row.try_get::<String>("", "value").ok()))
+        .map(|row| row.try_get::<String>("", "value"))
+        .transpose()
 }
 
 async fn set_state(
@@ -318,8 +320,9 @@ async fn set_state(
     query
         .into_table(Alias::new("system_state"))
         .columns([Alias::new("key"), Alias::new("value")]);
+    let values = [Value::from(key), Value::from(value)];
     query
-        .values([Value::from(key), Value::from(value)])
+        .values(values.into_iter().map(Expr::value))
         .map_err(|error| DbErr::Custom(format!("build system state upsert: {error}")))?;
     query.on_conflict(
         OnConflict::column(Alias::new("key"))
