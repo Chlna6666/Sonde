@@ -4,6 +4,7 @@ mod alert_delivery_queue;
 mod auth_shared_state;
 mod columns;
 mod daily_rollups;
+mod device_facts;
 mod device_profiles;
 mod dimension_rollups;
 mod dirty_source_mask;
@@ -25,6 +26,7 @@ use alert_delivery_queue::AlertDeliveryQueue;
 use auth_shared_state::SharedAuthState;
 use columns::{bigint, create_index, create_table, string};
 use daily_rollups::DailyRollups;
+use device_facts::DeviceFacts;
 use device_profiles::DeviceProfiles;
 use dimension_rollups::DimensionRollups;
 use dirty_source_mask::DirtySourceMask;
@@ -73,6 +75,7 @@ impl MigratorTrait for Migrator {
             Box::new(MetricHistogramRepair),
             Box::new(AlertDeliveryQueue),
             Box::new(DeviceProfiles),
+            Box::new(DeviceFacts),
             Box::new(IngestNonceReplay),
             Box::new(IngestBootstrapLimits),
         ]
