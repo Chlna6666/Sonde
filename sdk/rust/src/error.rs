@@ -14,13 +14,13 @@ pub enum Error {
     PayloadTooLarge,
     #[error("unsupported Sonde request signature version: {0}")]
     UnsupportedSignatureVersion(String),
-    #[error("failed to access Sonde device ID storage at {path}: {source}")]
+    #[error("failed to access Sonde device ID storage at {path:?}: {source}")]
     DeviceIdStorage {
         path: PathBuf,
         #[source]
         source: io::Error,
     },
-    #[error("stored Sonde device ID at {path} is invalid: {reason}")]
+    #[error("stored Sonde device ID at {path:?} is invalid: {reason}")]
     InvalidStoredDeviceId {
         path: PathBuf,
         reason: &'static str,
