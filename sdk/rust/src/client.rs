@@ -1,4 +1,5 @@
 use std::{
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -15,16 +16,14 @@ use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::{
-    delivery::{
-        DeliveryOptions, DeliveryQueue, DeliveryStats, RetryPolicy, await_control,
-    },
+    delivery::{DeliveryOptions, DeliveryQueue, DeliveryStats, RetryPolicy, await_control},
     device_id::validate_device_id,
     error::{Error, Result},
     model::{
-        BatchReceipt, BatchRef, DeviceFacts, ErrorEvent, Event, LogEntry, Metric, TokenRequest,
-        TokenResponse,
+        BatchReceipt, DeviceFacts, ErrorEvent, Event, LogEntry, Metric, TokenRequest, TokenResponse,
     },
     signing::{self, SIGNATURE_VERSION},
+    spool::SpoolOptions,
 };
 
 const MAX_BATCH_ITEMS: usize = 1_000;
@@ -32,6 +31,8 @@ const MAX_INGEST_BODY_BYTES: usize = 1_048_576;
 const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 const TOKEN_REFRESH_MARGIN_MS: i64 = 10_000;
 const INGEST_PATH: &str = "/api/v1/ingest";
+const BATCH_PREFIX: &[u8] = b"{\"items\":[";
+const BATCH_SUFFIX: &[u8] = b"]}";
 
 #[derive(Clone)]
 pub struct SondeClient {
@@ -111,8 +112,9 @@ impl SondeClient {
         self.inner.transport.heartbeat().await
     }
 
-    /// Enqueue an event. Completion means the item entered the bounded in-memory queue, not that the
-    /// server has acknowledged it. Call `flush()` when an acknowledgement barrier is required.
+    /// Enqueue an event. With disk spooling enabled, completion means the item is fsynced to the
+    /// queue WAL and admitted to the bounded in-memory worker queue. It does not mean the server has
+    /// acknowledged the item; call `flush()` when an acknowledgement barrier is required.
     pub async fn event(&self, event: Event) -> Result<()> {
         self.ensure_running()?;
         self.inner.queues.events.enqueue(event).await
@@ -200,7 +202,8 @@ impl SondeClient {
 
     /// Stop accepting new telemetry and perform a final flush of every queue.
     ///
-    /// This method is idempotent. Once shutdown starts, all enqueue APIs return `ShuttingDown`.
+    /// This method is idempotent. With disk spooling enabled, retryable batches that still cannot be
+    /// delivered remain unacknowledged in the WAL and are replayed by the next client instance.
     pub async fn shutdown(&self) -> Result<()> {
         if self.inner.shutting_down.swap(true, Ordering::AcqRel) {
             return Ok(());
@@ -325,6 +328,21 @@ impl SondeClientBuilder {
         self
     }
 
+    pub fn disk_spool(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.delivery.spool = Some(SpoolOptions::new(directory));
+        self
+    }
+
+    pub fn spool_options(mut self, options: SpoolOptions) -> Self {
+        self.delivery.spool = Some(options);
+        self
+    }
+
+    pub fn disable_disk_spool(mut self) -> Self {
+        self.delivery.spool = None;
+        self
+    }
+
     pub async fn connect(self) -> Result<SondeClient> {
         validate_nonempty("base URL", &self.base_url)?;
         validate_nonempty("API key", &self.api_key)?;
@@ -362,20 +380,22 @@ impl SondeClientBuilder {
             token: Mutex::new(None),
         });
 
-        // Fail fast on credentials/signature compatibility before starting background workers.
+        // Fail fast on credentials/signature compatibility before opening durable queues.
         transport.heartbeat().await?;
 
+        let heartbeat_interval = self.heartbeat_interval;
+        let delivery = self.delivery;
         let queues = Queues {
-            events: DeliveryQueue::spawn(transport.clone(), self.delivery.clone()),
-            metrics: DeliveryQueue::spawn(transport.clone(), self.delivery.clone()),
-            logs: DeliveryQueue::spawn(transport.clone(), self.delivery.clone()),
-            errors: DeliveryQueue::spawn(transport.clone(), self.delivery),
+            events: DeliveryQueue::spawn(transport.clone(), delivery.clone()).await?,
+            metrics: DeliveryQueue::spawn(transport.clone(), delivery.clone()).await?,
+            logs: DeliveryQueue::spawn(transport.clone(), delivery.clone()).await?,
+            errors: DeliveryQueue::spawn(transport.clone(), delivery).await?,
         };
         let client = SondeClient {
             inner: Arc::new(Inner {
                 transport,
                 queues,
-                heartbeat_interval: self.heartbeat_interval,
+                heartbeat_interval,
                 shutting_down: AtomicBool::new(false),
             }),
         };
@@ -398,18 +418,15 @@ impl Transport {
         }
     }
 
-    pub(crate) async fn send_batch<T: Serialize>(
+    pub(crate) async fn send_serialized_batch(
         &self,
         route: &str,
-        items: &[T],
+        items: &[&[u8]],
     ) -> Result<BatchReceipt> {
         if items.is_empty() || items.len() > MAX_BATCH_ITEMS {
             return Err(Error::InvalidBatchSize);
         }
-        let body = serialize_payload(&BatchRef { items })?;
-        if body.len() > MAX_INGEST_BODY_BYTES {
-            return Err(Error::PayloadTooLarge);
-        }
+        let body = build_serialized_batch_body(items)?;
         let response = self.signed_post(route, body).await?;
         if !response.status().is_success() {
             return Err(api_error(response).await);
@@ -532,6 +549,33 @@ async fn await_requests(
     }
 }
 
+fn build_serialized_batch_body(items: &[&[u8]]) -> Result<Vec<u8>> {
+    let payload_bytes = items.iter().try_fold(0_usize, |total, item| {
+        total.checked_add(item.len()).ok_or(Error::PayloadTooLarge)
+    })?;
+    let separators = items.len().saturating_sub(1);
+    let total_len = BATCH_PREFIX
+        .len()
+        .checked_add(payload_bytes)
+        .and_then(|value| value.checked_add(separators))
+        .and_then(|value| value.checked_add(BATCH_SUFFIX.len()))
+        .ok_or(Error::PayloadTooLarge)?;
+    if total_len > MAX_INGEST_BODY_BYTES {
+        return Err(Error::PayloadTooLarge);
+    }
+
+    let mut body = Vec::with_capacity(total_len);
+    body.extend_from_slice(BATCH_PREFIX);
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            body.push(b',');
+        }
+        body.extend_from_slice(item);
+    }
+    body.extend_from_slice(BATCH_SUFFIX);
+    Ok(body)
+}
+
 fn normalize_endpoint(base_url: &str) -> String {
     let trimmed = base_url.trim().trim_end_matches('/');
     if trimmed.ends_with(INGEST_PATH) {
@@ -626,7 +670,10 @@ async fn api_error(response: Response) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{INGEST_PATH, normalize_endpoint, validate_device_facts, validate_user_agent};
+    use super::{
+        INGEST_PATH, build_serialized_batch_body, normalize_endpoint, validate_device_facts,
+        validate_user_agent,
+    };
     use crate::model::DeviceFacts;
 
     #[test]
@@ -640,6 +687,15 @@ mod tests {
             "https://sonde.example.com/api/v1/ingest"
         );
         assert_eq!(INGEST_PATH, "/api/v1/ingest");
+    }
+
+    #[test]
+    fn rebuilds_batch_from_serialized_items_without_reserializing() -> crate::Result<()> {
+        let first = br#"{\"name\":\"a\"}"#;
+        let second = br#"{\"name\":\"b\"}"#;
+        let body = build_serialized_batch_body(&[first.as_slice(), second.as_slice()])?;
+        assert_eq!(body, br#"{\"items\":[{\"name\":\"a\"},{\"name\":\"b\"}]}"#);
+        Ok(())
     }
 
     #[test]
