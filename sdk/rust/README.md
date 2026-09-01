@@ -2,18 +2,20 @@
 
 Official Rust client SDK for Sonde. This crate is intentionally **not published to crates.io** (`publish = false`) and is consumed directly from this Git repository.
 
+Cargo traverses Git repositories to locate the requested crate, so the repository root URL is sufficient even though this crate lives under `sdk/rust`.
+
 ## Add the dependency
 
 ```toml
 [dependencies]
-sonde-sdk = { git = "https://github.com/Chlna6666/Sonde", package = "sonde-sdk" }
+sonde-sdk = { git = "https://github.com/Chlna6666/Sonde" }
 ```
 
 For reproducible production builds, pin a commit:
 
 ```toml
 [dependencies]
-sonde-sdk = { git = "https://github.com/Chlna6666/Sonde", package = "sonde-sdk", rev = "<SONDE_COMMIT_SHA>" }
+sonde-sdk = { git = "https://github.com/Chlna6666/Sonde", rev = "<SONDE_COMMIT_SHA>" }
 ```
 
 ## Connect
@@ -41,9 +43,9 @@ async fn main() -> sonde_sdk::Result<()> {
 }
 
 fn load_or_create_installation_id() -> String {
-    // Persist one high-entropy random installation identifier on first launch.
-    // Do not use account names, raw hardware serials, or other directly identifying values.
-    "replace-with-persisted-installation-id".to_owned()
+    // On the first launch, persist this value in the application's own config/data store.
+    // Reuse it on later launches. Do not derive it from hardware serials or account names.
+    sonde_sdk::generate_device_id()
 }
 ```
 
@@ -56,7 +58,8 @@ The SDK telemetry types intentionally do **not** expose `timestamp`, `sessionId`
 ```rust
 use sonde_sdk::Metric;
 
-sonde.metric(Metric::gauge("cpu_usage_pct", 28.4).unit("%"))
+sonde
+    .metric(Metric::gauge("cpu_usage_pct", 28.4).unit("%"))
     .await?;
 ```
 
@@ -65,7 +68,8 @@ sonde.metric(Metric::gauge("cpu_usage_pct", 28.4).unit("%"))
 ```rust
 use sonde_sdk::{LogEntry, LogLevel};
 
-sonde.log(LogEntry::new(LogLevel::Info, "application initialized"))
+sonde
+    .log(LogEntry::new(LogLevel::Info, "application initialized"))
     .await?;
 ```
 
@@ -74,12 +78,13 @@ sonde.log(LogEntry::new(LogLevel::Info, "application initialized"))
 ```rust
 use sonde_sdk::{ErrorEvent, ErrorSeverity};
 
-sonde.error(
-    ErrorEvent::new("ConfigLoadError", "failed to load config")
-        .severity(ErrorSeverity::Error)
-        .handled(true),
-)
-.await?;
+sonde
+    .error(
+        ErrorEvent::new("ConfigLoadError", "failed to load config")
+            .severity(ErrorSeverity::Error)
+            .handled(true),
+    )
+    .await?;
 ```
 
 ## Device facts
@@ -110,4 +115,5 @@ The SDK handles the Sonde ingest protocol internally:
 - Generates a fresh nonce and request-signing timestamp per request.
 - Retries once with a fresh token after an HTTP 401.
 - Automatically sends heartbeat requests while the client is alive.
+- Supports events, metrics, logs and errors without client-controlled identity/time/session fields.
 - Enforces Sonde's 1,000-item and 1 MiB batch limits before sending.
