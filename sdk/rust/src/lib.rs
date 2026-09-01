@@ -5,6 +5,8 @@ mod error;
 mod model;
 mod signing;
 mod spool;
+#[cfg(test)]
+mod spool_tests;
 
 pub use client::{SondeClient, SondeClientBuilder};
 pub use delivery::{DeliveryOptions, DeliveryStats, QueueDeliveryStats, RetryPolicy};
