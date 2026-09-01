@@ -142,7 +142,7 @@ async fn merge_device_bounds(
         .table(Alias::new("telemetry_devices"))
         .value(Alias::new("first_seen_at"), timestamp)
         .and_where(Expr::col(Alias::new("id")).eq(device_hash))
-        .and_where(
+        .cond_where(
             Condition::any()
                 .add(Expr::col(Alias::new("first_seen_at")).is_null())
                 .add(Expr::col(Alias::new("first_seen_at")).gt(timestamp)),
