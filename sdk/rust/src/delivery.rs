@@ -10,7 +10,7 @@ use std::{
 
 use serde::Serialize;
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{Mutex, mpsc, oneshot},
     time::{Instant, sleep, timeout_at},
 };
 use uuid::Uuid;
@@ -202,6 +202,7 @@ pub(crate) struct DeliveryQueue<T: QueuedTelemetry> {
     sender: mpsc::Sender<QueueCommand>,
     counters: Arc<QueueCounters>,
     spool: Option<Arc<Spool>>,
+    durable_enqueue_order: Mutex<()>,
     marker: PhantomData<fn() -> T>,
 }
 
@@ -209,7 +210,8 @@ impl<T: QueuedTelemetry> DeliveryQueue<T> {
     pub(crate) async fn spawn(transport: Arc<Transport>, options: DeliveryOptions) -> Result<Self> {
         let (spool, recovered) = match options.spool.clone() {
             Some(spool_options) => {
-                let (spool, recovered) = Spool::open(T::KIND, spool_options).await?;
+                let (spool, recovered) =
+                    Spool::open(T::KIND, spool_options, transport.spool_binding()).await?;
                 (Some(spool), recovered)
             }
             None => (None, Vec::new()),
@@ -233,13 +235,15 @@ impl<T: QueuedTelemetry> DeliveryQueue<T> {
             sender,
             counters,
             spool,
+            durable_enqueue_order: Mutex::new(()),
             marker: PhantomData,
         })
     }
 
     pub(crate) async fn enqueue(&self, item: T) -> Result<()> {
         let payload = serialize_item(&item)?;
-        let queued = if let Some(spool) = &self.spool {
+        if let Some(spool) = &self.spool {
+            let _order = self.durable_enqueue_order.lock().await;
             let permit = self
                 .sender
                 .clone()
@@ -248,19 +252,16 @@ impl<T: QueuedTelemetry> DeliveryQueue<T> {
                 .map_err(|_| Error::QueueClosed { kind: T::KIND })?;
             let record = spool.append(payload).await?;
             self.counters.persisted.fetch_add(1, Ordering::Relaxed);
-            let queued = QueuedItem::from(record);
-            permit.send(QueueCommand::Item(queued));
+            permit.send(QueueCommand::Item(QueuedItem::from(record)));
             self.counters.enqueued.fetch_add(1, Ordering::Relaxed);
             return Ok(());
-        } else {
-            QueuedItem {
-                sequence: None,
-                payload,
-            }
-        };
+        }
 
         self.sender
-            .send(QueueCommand::Item(queued))
+            .send(QueueCommand::Item(QueuedItem {
+                sequence: None,
+                payload,
+            }))
             .await
             .map_err(|_| Error::QueueClosed { kind: T::KIND })?;
         self.counters.enqueued.fetch_add(1, Ordering::Relaxed);
@@ -453,6 +454,7 @@ async fn flush_batch<T: QueuedTelemetry>(
         counters.batches.fetch_add(1, Ordering::Relaxed);
         match send_with_retry(transport, options, counters, T::ROUTE, &items).await {
             Ok(receipt) => {
+                clear_retryable_error(pending_error);
                 record_receipt::<T>(counters, pending_error, &receipt);
                 if let Err(error) = commit_terminal(spool, &items).await {
                     *pending_error = Some(error);
@@ -489,6 +491,12 @@ async fn flush_batch<T: QueuedTelemetry>(
 
     *batch = Vec::with_capacity(options.max_batch_items);
     false
+}
+
+fn clear_retryable_error(pending_error: &mut Option<Error>) {
+    if pending_error.as_ref().is_some_and(Error::is_retryable) {
+        *pending_error = None;
+    }
 }
 
 fn record_receipt<T: QueuedTelemetry>(
