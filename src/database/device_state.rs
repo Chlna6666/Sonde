@@ -452,6 +452,7 @@ fn derive_session(
     received_at: i64,
 ) -> SessionState {
     let gap = received_at.saturating_sub(last_seen_at);
+    let had_current = current_id.is_some();
     if let Some(id) = current_id
         && gap <= SESSION_IDLE_MILLIS
     {
@@ -465,7 +466,7 @@ fn derive_session(
     SessionState {
         id: Uuid::now_v7().to_string(),
         last_activity_at: received_at,
-        started_new: current_id.is_some(),
+        started_new: had_current,
     }
 }
 
