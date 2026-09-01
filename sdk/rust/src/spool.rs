@@ -1,4 +1,5 @@
 use std::{
+    fs::{OpenOptions as StdOpenOptions, TryLockError},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -18,6 +19,8 @@ const ACK_RECORD_BYTES: usize = 8 + 32;
 const ACK_COMPACT_THRESHOLD_BYTES: u64 = 64 * 1024;
 const DEFAULT_MAX_BYTES_PER_QUEUE: u64 = 64 * 1024 * 1024;
 const DEFAULT_SEGMENT_BYTES: u64 = 4 * 1024 * 1024;
+const META_MAGIC: [u8; 8] = *b"SNDSPL01";
+const META_BYTES: usize = META_MAGIC.len() + 32;
 
 #[derive(Clone, Debug)]
 pub struct SpoolOptions {
@@ -86,6 +89,7 @@ struct SpoolState {
     next_sequence: u64,
     total_bytes: u64,
     poisoned: bool,
+    _lock_file: std::fs::File,
 }
 
 #[derive(Clone, Debug)]
@@ -105,12 +109,32 @@ impl Spool {
     pub(crate) async fn open(
         kind: &'static str,
         options: SpoolOptions,
+        binding: [u8; 32],
     ) -> Result<(Arc<Self>, Vec<SpoolRecord>)> {
         options.validate()?;
         let directory = options.directory.join(kind);
         fs::create_dir_all(&directory)
             .await
             .map_err(|source| spool_io(&directory, source))?;
+
+        let lock_path = directory.join("spool.lock");
+        let lock_file = StdOpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|source| spool_io(&lock_path, source))?;
+        match lock_file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
+                return Err(Error::SpoolLocked { path: lock_path });
+            }
+            Err(TryLockError::Error(source)) => {
+                return Err(spool_io(&lock_path, source));
+            }
+        }
+
+        ensure_binding(&directory, binding).await?;
 
         let ack_path = directory.join("ack.log");
         let acknowledged_sequence = read_acknowledged_sequence(&ack_path).await?;
@@ -242,6 +266,7 @@ impl Spool {
             next_sequence,
             total_bytes,
             poisoned: false,
+            _lock_file: lock_file,
         };
         cleanup_acknowledged_segments(&mut state).await?;
 
@@ -368,6 +393,72 @@ impl Spool {
 
         cleanup_acknowledged_segments(&mut state).await
     }
+}
+
+async fn ensure_binding(directory: &Path, binding: [u8; 32]) -> Result<()> {
+    let path = directory.join("meta.bin");
+    match fs::read(&path).await {
+        Ok(bytes) => {
+            if bytes.len() != META_BYTES || bytes[..META_MAGIC.len()] != META_MAGIC {
+                return Err(spool_corrupt(&path, "unsupported or corrupt spool metadata"));
+            }
+            if bytes[META_MAGIC.len()..] != binding {
+                return Err(Error::SpoolBindingMismatch { path });
+            }
+            Ok(())
+        }
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            if has_existing_spool_data(directory).await? {
+                return Err(spool_corrupt(
+                    directory,
+                    "spool metadata is missing for an existing journal; remove the dev spool before reusing it",
+                ));
+            }
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&path)
+                .await
+                .map_err(|source| spool_io(&path, source))?;
+            let mut bytes = Vec::with_capacity(META_BYTES);
+            bytes.extend_from_slice(&META_MAGIC);
+            bytes.extend_from_slice(&binding);
+            file.write_all(&bytes)
+                .await
+                .map_err(|source| spool_io(&path, source))?;
+            file.sync_data()
+                .await
+                .map_err(|source| spool_io(&path, source))
+        }
+        Err(source) => Err(spool_io(&path, source)),
+    }
+}
+
+async fn has_existing_spool_data(directory: &Path) -> Result<bool> {
+    let mut entries = fs::read_dir(directory)
+        .await
+        .map_err(|source| spool_io(directory, source))?;
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|source| spool_io(directory, source))?
+    {
+        let path = entry.path();
+        let is_wal = path.extension().and_then(|value| value.to_str()) == Some("wal");
+        let is_ack = path.file_name().and_then(|value| value.to_str()) == Some("ack.log");
+        if !is_wal && !is_ack {
+            continue;
+        }
+        let len = entry
+            .metadata()
+            .await
+            .map_err(|source| spool_io(&path, source))?
+            .len();
+        if len > 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 async fn list_segment_paths(directory: &Path) -> Result<Vec<(u64, PathBuf)>> {
@@ -614,7 +705,8 @@ mod tests {
             let options = SpoolOptions::new(&root)
                 .segment_bytes(64 * 1024)
                 .max_bytes_per_queue(128 * 1024);
-            let (spool, recovered) = Spool::open("events", options.clone()).await?;
+            let binding = [7_u8; 32];
+            let (spool, recovered) = Spool::open("events", options.clone(), binding).await?;
             assert!(recovered.is_empty());
 
             let first = spool.append(br#"{\"name\":\"first\"}"#.to_vec()).await?;
@@ -622,7 +714,7 @@ mod tests {
             spool.commit_through(first.sequence).await?;
             drop(spool);
 
-            let (reopened, recovered) = Spool::open("events", options).await?;
+            let (reopened, recovered) = Spool::open("events", options, binding).await?;
             assert_eq!(recovered.len(), 1);
             assert_eq!(recovered[0].sequence, second.sequence);
             assert_eq!(recovered[0].payload, second.payload);
