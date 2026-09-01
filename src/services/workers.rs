@@ -5,7 +5,10 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::{
-    database::{alert_delivery, device_risk, first_seen, ingest_bootstrap, ingest_nonce},
+    database::{
+        alert_delivery, device_activity_backfill, device_risk, first_seen, ingest_bootstrap,
+        ingest_nonce,
+    },
     services::{alerts, job_lease, retention},
 };
 
@@ -24,13 +27,17 @@ const INGEST_SECURITY_CLEANUP_LEASE_TTL: Duration = Duration::from_secs(60);
 const FIRST_SEEN_BACKFILL_INTERVAL: Duration = Duration::from_secs(10);
 const FIRST_SEEN_BACKFILL_LEASE_TTL: Duration = Duration::from_secs(60);
 const FIRST_SEEN_BACKFILL_BATCH: u64 = 32;
+const DEVICE_ACTIVITY_BACKFILL_INTERVAL: Duration = Duration::from_secs(5);
+const DEVICE_ACTIVITY_BACKFILL_LEASE_TTL: Duration = Duration::from_secs(60);
+const DEVICE_ACTIVITY_BACKFILL_BATCH: u64 = 256;
 
 pub fn spawn_leased_workers(database: DatabaseConnection) {
     spawn_alert_worker(database.clone());
     spawn_alert_delivery_worker(database.clone());
     spawn_retention_worker(database.clone());
     spawn_ingest_security_cleanup_worker(database.clone());
-    spawn_first_seen_backfill_worker(database);
+    spawn_first_seen_backfill_worker(database.clone());
+    spawn_device_activity_backfill_worker(database);
 }
 
 fn spawn_alert_worker(database: DatabaseConnection) {
@@ -196,6 +203,34 @@ fn spawn_first_seen_backfill_worker(database: DatabaseConnection) {
                 Ok(_) => {}
                 Err(error) => {
                     warn!(error = %error, "leased first-seen backfill worker encountered an error");
+                }
+            }
+        }
+    });
+}
+
+fn spawn_device_activity_backfill_worker(database: DatabaseConnection) {
+    let holder_id = format!("device-activity:{}", Uuid::now_v7());
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(DEVICE_ACTIVITY_BACKFILL_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            match job_lease::run_with_lease(
+                &database,
+                "device-activity-backfill",
+                &holder_id,
+                DEVICE_ACTIVITY_BACKFILL_LEASE_TTL,
+                || device_activity_backfill::run_batch(&database, DEVICE_ACTIVITY_BACKFILL_BATCH),
+            )
+            .await
+            {
+                Ok(Some(processed)) if processed > 0 => {
+                    debug!(processed, "leased device activity backfill batch completed");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    warn!(error = %error, "leased device activity backfill worker encountered an error");
                 }
             }
         }
