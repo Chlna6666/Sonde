@@ -1,0 +1,28 @@
+[package]
+name = "sonde-sdk"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+description = "Official Git-distributed Rust SDK for Sonde telemetry ingest"
+license = "MIT"
+repository = "https://github.com/Chlna6666/Sonde"
+
+[dependencies]
+hex = "0.4"
+hmac = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "sync", "time"] }
+uuid = { version = "1", features = ["v7"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
