@@ -131,11 +131,16 @@ pub async fn observe(
         current.last_seen_at,
         observation.received_at,
     );
+    let activity_previous_seen_at = if session.created_new {
+        observation.received_at
+    } else {
+        current.last_seen_at
+    };
     device_activity::record(
         &transaction,
         scope,
         device_hash,
-        current.last_seen_at,
+        activity_previous_seen_at,
         observation.received_at,
     )
     .await?;
