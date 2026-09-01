@@ -20,6 +20,11 @@ pub enum Error {
     QueueClosed { kind: &'static str },
     #[error("non-blocking enqueue is unavailable for durable {kind} delivery; use the async enqueue API")]
     DurableEnqueueRequiresAsync { kind: &'static str },
+    #[error("durable {kind} enqueue task failed: {reason}")]
+    DurableEnqueueTask {
+        kind: &'static str,
+        reason: String,
+    },
     #[error("telemetry {kind} spool reached its {max_bytes} byte capacity")]
     SpoolFull {
         kind: &'static str,
@@ -39,6 +44,11 @@ pub enum Error {
     SpoolCorrupt { path: PathBuf, reason: String },
     #[error("Sonde client is shutting down")]
     ShuttingDown,
+    #[error("{pending} durable {kind} telemetry item(s) remain deferred after retry exhaustion")]
+    DeferredTelemetry {
+        kind: &'static str,
+        pending: usize,
+    },
     #[error("Sonde rejected {rejected} item(s) from the {kind} delivery queue")]
     RejectedItems {
         kind: &'static str,
