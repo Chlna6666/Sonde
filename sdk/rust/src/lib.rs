@@ -4,6 +4,7 @@ mod device_id;
 mod error;
 mod model;
 mod signing;
+mod spool;
 
 pub use client::{SondeClient, SondeClientBuilder};
 pub use delivery::{DeliveryOptions, DeliveryStats, QueueDeliveryStats, RetryPolicy};
@@ -13,3 +14,4 @@ pub use model::{
     Attributes, DeviceFacts, ErrorEvent, ErrorSeverity, Event, Histogram, LogEntry, LogLevel, Metric,
     MetricType,
 };
+pub use spool::SpoolOptions;
