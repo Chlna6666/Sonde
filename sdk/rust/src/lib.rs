@@ -1,10 +1,12 @@
 mod client;
+mod delivery;
 mod device_id;
 mod error;
 mod model;
 mod signing;
 
 pub use client::{SondeClient, SondeClientBuilder};
+pub use delivery::{DeliveryOptions, DeliveryStats, QueueDeliveryStats, RetryPolicy};
 pub use device_id::{generate_device_id, load_or_create_device_id};
 pub use error::{Error, Result};
 pub use model::{
