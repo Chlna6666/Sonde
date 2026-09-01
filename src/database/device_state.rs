@@ -106,6 +106,7 @@ pub async fn observe(
     let current = load_device_for_update(&transaction, device_hash)
         .await?
         .ok_or_else(|| DbErr::Custom("device profile row disappeared during update".into()))?;
+    let counters = update_counters(&current, observation);
 
     let session = merge_dimension(
         current.last_session_id,
@@ -194,7 +195,6 @@ pub async fn observe(
         }
     }
 
-    let counters = update_counters(&current, observation);
     let (last_anomaly, last_anomaly_at) = if anomaly_flags.is_empty() {
         (current.last_anomaly, current.last_anomaly_at)
     } else {
