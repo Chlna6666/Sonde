@@ -115,9 +115,12 @@ pub async fn groups(
 
     let rows = database.query_all(&query).await?;
     let has_more = rows.len() > filter.page_size as usize;
-    let mut items = Vec::with_capacity(rows.len().min(filter.page_size as usize));
+    let mut items = Vec::with_capacity(std::cmp::min(
+        rows.len(),
+        filter.page_size as usize,
+    ));
     for row in rows.into_iter().take(filter.page_size as usize) {
-        let occurrences = row.try_get::<i64>("", "occurrences")?.max(0) as u64;
+        let occurrences = u64::try_from(row.try_get::<i64>("", "occurrences")?).unwrap_or(0);
         items.push(ErrorGroupRecord {
             id: row.try_get("", "id")?,
             application_id: row.try_get("", "application_id")?,
@@ -183,7 +186,7 @@ pub async fn group(
         severity: row.try_get("", "severity")?,
         first_seen: row.try_get("", "first_seen")?,
         last_seen: row.try_get("", "last_seen")?,
-        occurrences: row.try_get::<i64>("", "occurrences")?.max(0) as u64,
+        occurrences: u64::try_from(row.try_get::<i64>("", "occurrences")?).unwrap_or(0),
         last_app_version: optional_string(&row, "last_app_version")?,
         last_launcher_version: optional_string(&row, "last_launcher_version")?,
         last_os: optional_string(&row, "last_os")?,
@@ -233,7 +236,7 @@ pub async fn occurrences(
 
     let rows = database.query_all(&query).await?;
     let has_more = rows.len() > page_size as usize;
-    let mut items = Vec::with_capacity(rows.len().min(page_size as usize));
+    let mut items = Vec::with_capacity(std::cmp::min(rows.len(), page_size as usize));
     for row in rows.into_iter().take(page_size as usize) {
         let attributes: String = row.try_get("", "attributes")?;
         let handled = row
