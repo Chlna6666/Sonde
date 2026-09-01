@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf};
+use std::{io, path::PathBuf, time::Duration};
 
 use reqwest::StatusCode;
 
@@ -14,6 +14,17 @@ pub enum Error {
     PayloadTooLarge,
     #[error("unsupported Sonde request signature version: {0}")]
     UnsupportedSignatureVersion(String),
+    #[error("telemetry {kind} queue is full")]
+    QueueFull { kind: &'static str },
+    #[error("telemetry {kind} queue is closed")]
+    QueueClosed { kind: &'static str },
+    #[error("Sonde client is shutting down")]
+    ShuttingDown,
+    #[error("Sonde rejected {rejected} item(s) from the {kind} delivery queue")]
+    RejectedItems {
+        kind: &'static str,
+        rejected: usize,
+    },
     #[error("failed to access Sonde device ID storage at {path:?}: {source}")]
     DeviceIdStorage {
         path: PathBuf,
@@ -30,9 +41,32 @@ pub enum Error {
     #[error("HTTP request failed: {0}")]
     Http(#[from] reqwest::Error),
     #[error("Sonde returned HTTP {status}: {body}")]
-    Api { status: StatusCode, body: String },
+    Api {
+        status: StatusCode,
+        body: String,
+        retry_after: Option<Duration>,
+    },
     #[error("failed to initialize HMAC request signer")]
     SigningKey,
+}
+
+impl Error {
+    pub(crate) fn is_retryable(&self) -> bool {
+        match self {
+            Self::Http(error) => error.is_connect() || error.is_timeout(),
+            Self::Api { status, .. } => {
+                *status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::Api { retry_after, .. } => *retry_after,
+            _ => None,
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
