@@ -1,3 +1,5 @@
+use std::{io, path::PathBuf};
+
 use reqwest::StatusCode;
 
 #[derive(Debug, thiserror::Error)]
@@ -12,6 +14,17 @@ pub enum Error {
     PayloadTooLarge,
     #[error("unsupported Sonde request signature version: {0}")]
     UnsupportedSignatureVersion(String),
+    #[error("failed to access Sonde device ID storage at {path}: {source}")]
+    DeviceIdStorage {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("stored Sonde device ID at {path} is invalid: {reason}")]
+    InvalidStoredDeviceId {
+        path: PathBuf,
+        reason: &'static str,
+    },
     #[error("failed to serialize telemetry payload: {0}")]
     Serialization(#[from] serde_json::Error),
     #[error("HTTP request failed: {0}")]
