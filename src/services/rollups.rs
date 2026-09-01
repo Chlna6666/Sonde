@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use sea_orm::{DatabaseConnection, DbErr};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::database::{dimension_rollup, first_seen, log_error_rollup, rollups, user_rollup};
 
@@ -55,7 +55,7 @@ pub fn spawn_rollup_worker(database: DatabaseConnection) {
             interval.tick().await;
             match process_ready_rollups(&database).await {
                 Ok(processed) if processed > 0 => {
-                    info!(processed, "telemetry daily rollups refreshed");
+                    debug!(processed, "telemetry daily rollups refreshed");
                 }
                 Ok(_) => {}
                 Err(error) => {
