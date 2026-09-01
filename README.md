@@ -70,6 +70,7 @@ The official Rust SDK lives in `sdk/rust`. It is intentionally marked `publish =
 ```toml
 [dependencies]
 sonde-sdk = { git = "https://github.com/Chlna6666/Sonde" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 Pin a commit for reproducible production builds:
@@ -77,19 +78,21 @@ Pin a commit for reproducible production builds:
 ```toml
 [dependencies]
 sonde-sdk = { git = "https://github.com/Chlna6666/Sonde", rev = "<SONDE_COMMIT_SHA>" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 Applications should persist one high-entropy pseudonymous installation/device identifier. Do not derive it from raw MAC addresses, hardware serial numbers, account names, or other directly identifying values.
 
 ```rust
-use sonde_sdk::{Event, SondeClient};
+use sonde_sdk::{Event, SondeClient, load_or_create_device_id};
 
 #[tokio::main]
 async fn main() -> sonde_sdk::Result<()> {
+    let device_id = load_or_create_device_id("data/sonde-device-id")?;
     let sonde = SondeClient::builder(
         "http://127.0.0.1:8080",
         "sonde_your_bootstrap_key",
-        load_or_create_installation_id(),
+        device_id,
     )
     .app_version(env!("CARGO_PKG_VERSION"))
     .system_language("en-US")
@@ -102,12 +105,9 @@ async fn main() -> sonde_sdk::Result<()> {
 
     Ok(())
 }
-
-fn load_or_create_installation_id() -> String {
-    // Persist the first generated value in the application's own data store and reuse it.
-    sonde_sdk::generate_device_id()
-}
 ```
+
+`load_or_create_device_id()` creates the identifier once with no-overwrite file creation and reuses it on future launches. If the existing file is malformed, the SDK reports the problem rather than silently rotating identity and turning the same installation into a new device. Put the file in the application's normal persistent data directory.
 
 `connect()` exchanges the bootstrap key for a short-lived device token, performs an authenticated heartbeat, and starts the default 60-second heartbeat loop. The SDK then handles token refresh, exact-body HMAC signing, nonces, request-signing timestamps, and signed events/metrics/logs/errors internally.
 
