@@ -13,6 +13,7 @@ const RAPID_OS_MILLIS: i64 = 60 * 60_000;
 
 #[derive(Clone, Copy, Debug)]
 pub enum DeviceTelemetryKind {
+    Heartbeat,
     Event,
     Metric,
     Log,
@@ -35,6 +36,8 @@ pub struct DeviceObservation {
     pub app_version: Option<TimedDimension>,
     pub launcher_version: Option<TimedDimension>,
     pub os: Option<TimedDimension>,
+    pub system_language: Option<TimedDimension>,
+    pub architecture: Option<TimedDimension>,
 }
 
 #[derive(Debug)]
@@ -52,6 +55,10 @@ struct DeviceRow {
     last_launcher_version_at: Option<i64>,
     last_os: Option<String>,
     last_os_at: Option<i64>,
+    last_system_language: Option<String>,
+    last_system_language_at: Option<i64>,
+    last_architecture: Option<String>,
+    last_architecture_at: Option<i64>,
     event_items: i64,
     metric_items: i64,
     log_items: i64,
@@ -135,6 +142,16 @@ pub async fn observe(
         current.last_os,
         current.last_os_at,
         observation.os.as_ref(),
+    );
+    let system_language = merge_dimension(
+        current.last_system_language,
+        current.last_system_language_at,
+        observation.system_language.as_ref(),
+    );
+    let architecture = merge_dimension(
+        current.last_architecture,
+        current.last_architecture_at,
+        observation.architecture.as_ref(),
     );
 
     let mut anomaly_flags = Vec::new();
@@ -221,6 +238,19 @@ pub async fn observe(
         )
         .value(Alias::new("last_os"), os.value)
         .value(Alias::new("last_os_at"), os.timestamp)
+        .value(
+            Alias::new("last_system_language"),
+            system_language.value,
+        )
+        .value(
+            Alias::new("last_system_language_at"),
+            system_language.timestamp,
+        )
+        .value(Alias::new("last_architecture"), architecture.value)
+        .value(
+            Alias::new("last_architecture_at"),
+            architecture.timestamp,
+        )
         .value(Alias::new("event_items"), counters.event_items)
         .value(Alias::new("metric_items"), counters.metric_items)
         .value(Alias::new("log_items"), counters.log_items)
@@ -286,6 +316,10 @@ async fn ensure_device_row(
             "last_launcher_version_at",
             "last_os",
             "last_os_at",
+            "last_system_language",
+            "last_system_language_at",
+            "last_architecture",
+            "last_architecture_at",
             "event_items",
             "metric_items",
             "log_items",
@@ -308,6 +342,10 @@ async fn ensure_device_row(
             Option::<i64>::None.into(),
             Option::<i64>::None.into(),
             Option::<i64>::None.into(),
+            Option::<i64>::None.into(),
+            Option::<String>::None.into(),
+            Option::<i64>::None.into(),
+            Option::<String>::None.into(),
             Option::<i64>::None.into(),
             Option::<String>::None.into(),
             Option::<i64>::None.into(),
@@ -358,6 +396,10 @@ async fn load_device_for_update(
                 "last_launcher_version_at",
                 "last_os",
                 "last_os_at",
+                "last_system_language",
+                "last_system_language_at",
+                "last_architecture",
+                "last_architecture_at",
                 "event_items",
                 "metric_items",
                 "log_items",
@@ -397,6 +439,10 @@ async fn load_device_for_update(
                 last_launcher_version_at: row.try_get("", "last_launcher_version_at")?,
                 last_os: row.try_get("", "last_os")?,
                 last_os_at: row.try_get("", "last_os_at")?,
+                last_system_language: row.try_get("", "last_system_language")?,
+                last_system_language_at: row.try_get("", "last_system_language_at")?,
+                last_architecture: row.try_get("", "last_architecture")?,
+                last_architecture_at: row.try_get("", "last_architecture_at")?,
                 event_items: row.try_get("", "event_items")?,
                 metric_items: row.try_get("", "metric_items")?,
                 log_items: row.try_get("", "log_items")?,
@@ -426,6 +472,7 @@ fn update_counters(current: &DeviceRow, observation: &DeviceObservation) -> Tele
         error_items: current.error_items,
     };
     match observation.kind {
+        DeviceTelemetryKind::Heartbeat => {}
         DeviceTelemetryKind::Event => {
             counters.last_event_at = max_timestamp(counters.last_event_at, observation.received_at);
             counters.event_items = counters.event_items.saturating_add(item_count);
@@ -582,7 +629,7 @@ mod tests {
     }
 
     #[test]
-    fn metric_observation_advances_activity_without_changing_event_count() {
+    fn heartbeat_advances_activity_without_incrementing_telemetry_items() {
         let row = DeviceRow {
             last_seen_at: 100,
             last_event_at: Some(100),
@@ -597,6 +644,10 @@ mod tests {
             last_launcher_version_at: None,
             last_os: None,
             last_os_at: None,
+            last_system_language: None,
+            last_system_language_at: None,
+            last_architecture: None,
+            last_architecture_at: None,
             event_items: 4,
             metric_items: 0,
             log_items: 0,
@@ -610,18 +661,20 @@ mod tests {
             last_anomaly_at: None,
         };
         let observation = DeviceObservation {
-            kind: DeviceTelemetryKind::Metric,
+            kind: DeviceTelemetryKind::Heartbeat,
             received_at: 200,
             telemetry_at: 200,
-            item_count: 3,
+            item_count: 0,
             session_id: None,
             app_version: None,
             launcher_version: None,
             os: None,
+            system_language: None,
+            architecture: None,
         };
         let counters = update_counters(&row, &observation);
         assert_eq!(counters.event_items, 4);
-        assert_eq!(counters.metric_items, 3);
-        assert_eq!(counters.last_metric_at, Some(200));
+        assert_eq!(counters.metric_items, 0);
+        assert_eq!(counters.last_event_at, Some(100));
     }
 }
