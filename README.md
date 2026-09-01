@@ -96,15 +96,15 @@ async fn main() -> sonde_sdk::Result<()> {
     )
     .app_version(env!("CARGO_PKG_VERSION"))
     .system_language("en-US")
+    // Optional: persist unacknowledged telemetry across crashes and power loss.
+    .disk_spool("data/sonde-spool")
     .connect()
     .await?;
 
-    // This waits for bounded-queue admission, not for an HTTP round trip.
     sonde
         .event(Event::new("app_startup").attribute("channel", "stable"))
         .await?;
 
-    // Perform the final reliable flush in the application's normal exit path.
     sonde.shutdown().await?;
     Ok(())
 }
@@ -112,27 +112,32 @@ async fn main() -> sonde_sdk::Result<()> {
 
 `load_or_create_device_id()` creates the identifier once with no-overwrite file creation and reuses it on future launches. If the existing file is malformed, the SDK reports the problem rather than silently rotating identity and turning the same installation into a new device. Put the file in the application's normal persistent data directory.
 
-`connect()` exchanges the bootstrap key for a short-lived device token, performs an authenticated heartbeat, and starts the default 60-second heartbeat loop. The SDK then handles token refresh, exact-body HMAC signing, nonces, request-signing timestamps, and the four background telemetry queues internally.
+`connect()` exchanges the bootstrap key for a short-lived device token, performs an authenticated heartbeat, and starts the default 60-second heartbeat loop. The SDK handles token refresh, exact-body HMAC signing, nonces, request-signing timestamps, and four independent background queues for events, metrics, logs and errors.
 
-### Reliable queued delivery
+Without a disk spool, async telemetry calls return after bounded-memory queue admission. Defaults are 4,096 queued items per telemetry type, 256 items per HTTP batch and a one-second automatic flush delay. Connect failures, timeouts, ambiguous responses, HTTP 429 and HTTP 5xx use exponential-backoff retries; ordinary permanent 4xx responses and explicit per-item rejections are not retried.
 
-Events, metrics, logs and errors each have an independent bounded queue and background worker. Defaults are 4,096 queued items per telemetry type, 256 items per HTTP batch and a one-second automatic flush delay from the first item in a non-empty batch.
+Enable crash-persistent delivery explicitly:
 
-Serialized batches that exceed the 1 MiB ingest limit are split automatically. Connect/time-out failures, HTTP 429 and HTTP 5xx are retried up to five times by default using exponential backoff with roughly ±20% jitter and a 15-second maximum delay. Integer-seconds `Retry-After` values are honored for retryable responses, capped by the configured maximum backoff. Ordinary 4xx responses and server-side per-item rejections are treated as permanent failures and are not retried.
+```rust
+let sonde = SondeClient::builder(server, bootstrap_key, device_id)
+    .disk_spool("data/sonde-spool")
+    .connect()
+    .await?;
+```
 
-`event().await`, `metric().await`, `log().await` and `error().await` return when the item has entered the bounded queue. When a queue is full, these APIs apply asynchronous backpressure. Latency-sensitive call sites can use `try_event()`, `try_metric()`, `try_log()` and `try_error()` to receive `Error::QueueFull` instead of waiting.
+With spooling enabled, each telemetry item is serialized, appended to its type-specific WAL, and `sync_data()`'d before entering the worker queue. Async enqueue success therefore means the item is durably stored locally; it does not mean the Sonde server has acknowledged it. Defaults are 4 MiB WAL segments and 64 MiB of disk budget **per telemetry type**.
 
-Use `flush().await` as an acknowledgement barrier for items queued before the flush. Use `shutdown().await` during normal application shutdown; it stops new telemetry admission, drains all four queues, applies the configured retry policy and performs the final flush. Shutdown is idempotent.
+Server terminal results advance an append-only ACK journal, and the ACK is persisted before fully acknowledged old WAL segments are reclaimed. Retryable failures that exhaust the current retry budget remain deferred in the WAL instead of being dropped; they can be retried later or recovered after restart. If the disk budget fills before acknowledged segments can be reclaimed, enqueue returns `Error::SpoolFull` rather than deleting unacknowledged telemetry.
 
-After retry exhaustion a failed in-memory batch is dropped so memory remains bounded and shutdown cannot block forever. `delivery_stats()` exposes cumulative enqueued, delivered, rejected, dropped, batch and retry counters for every telemetry type.
+The active segment can repair an incomplete trailing frame caused by a crash or power loss. A checksum failure inside a complete record is treated as corruption and startup fails explicitly. Each spool also holds an exclusive cross-process lock and a SHA-256 binding to the Sonde endpoint, device ID and bootstrap key, preventing concurrent writers or accidental replay into another Sonde identity. The bootstrap key is not stored in plaintext in spool metadata.
 
-This is an **in-memory delivery queue, not a crash-persistent disk spool**. It isolates application code from network latency and transient outages, but an abrupt process kill, OS crash or power loss can still lose data that has not reached Sonde.
+Durable delivery remains **at-least-once**: a server may accept a request before the client persists the ACK. Events requiring business-level deduplication should set `Event::idempotency_key()`. The non-blocking `try_*` APIs are intentionally unavailable in durable mode because they cannot promise a completed WAL append/fsync without waiting.
 
-Retries around ambiguous connect/time-out failures are at-least-once: the server may have received a request before the client observed the failure. Events requiring deduplication should set `Event::idempotency_key()`.
+`delivery_stats()` exposes `persisted`, `recovered`, `delivered`, `rejected`, `dropped`, `deferred`, batch and retry counters for every telemetry type. Use `flush().await` for an acknowledgement barrier and `shutdown().await` during normal application shutdown.
 
 Telemetry types intentionally do **not** expose `anonymousId`, `timestamp`, or `sessionId`. Device identity comes from the short-lived token. First/last seen, sessions, online duration, DAU/WAU/MAU, and cumulative activity are derived by Sonde from trusted server-received requests.
 
-The underlying `sonde-hmac-sha256-v2` protocol remains available as an implementation reference for future SDKs in other languages. Regular application code should use the Rust SDK instead of duplicating the signing protocol.
+See [`sdk/rust/README.md`](sdk/rust/README.md) for full queue, retry and `SpoolOptions` tuning details. The underlying `sonde-hmac-sha256-v2` protocol remains an implementation reference for future SDKs in other languages; regular application code should use the Rust SDK instead of duplicating the signing protocol.
 
 ## Quality checks
 
