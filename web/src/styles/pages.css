@@ -1,4 +1,4 @@
-/* Sonde Pages & Components - Apple Design Specifications (HIG) */
+/* Sonde pages — instrument console */
 
 /* Boot screen */
 .boot-screen {
@@ -44,13 +44,13 @@
 .auth-context::before {
   content: "";
   position: absolute;
-  width: 580px;
-  height: 580px;
-  left: -240px;
-  bottom: -240px;
-  border: 1px solid color-mix(in srgb, var(--signal) 20%, transparent);
-  border-radius: 50%;
-  box-shadow: 0 0 0 60px color-mix(in srgb, var(--signal) 3%, transparent), 0 0 0 120px color-mix(in srgb, var(--signal) 2%, transparent);
+  inset: 0;
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(135deg, transparent 20%, #000 80%);
+  pointer-events: none;
 }
 
 .context-copy {
@@ -62,9 +62,9 @@
 
 .context-copy h1 {
   margin: 16px 0 16px;
-  font-size: clamp(2.4rem, 4.5vw, 4.8rem);
-  line-height: 0.98;
-  letter-spacing: -0.05em;
+  font-size: clamp(2.2rem, 4vw, 4.2rem);
+  line-height: 1.02;
+  letter-spacing: -0.02em;
   font-weight: 750;
 }
 
@@ -88,7 +88,7 @@
 
 .commissioning-list li {
   padding: 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-soft);
   background: var(--panel-strong);
   color: var(--faint);
@@ -135,6 +135,56 @@
   background: var(--bg-elevated);
 }
 
+.auth-preferences {
+  position: absolute;
+  top: 20px;
+  right: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.managed-database {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--input-bg);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input-wrap input {
+  width: 100%;
+  padding-right: 42px;
+}
+
+.input-action {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  padding: 4px;
+}
+
+.input-action:hover {
+  color: var(--text);
+}
+
 .auth-panel form {
   width: min(580px, 100%);
   display: grid;
@@ -171,16 +221,15 @@
   font-weight: 600;
 }
 
-/* Apple Standard Segmented Control */
 .segmented-control {
   display: inline-flex;
   align-items: center;
   flex-wrap: nowrap;
   gap: 2px;
   padding: 3px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--input-bg);
-  border: 1px solid var(--border-soft);
+  border: 1px solid var(--border);
   position: relative;
   width: fit-content;
   max-width: 100%;
@@ -189,7 +238,7 @@
 .segmented-control button {
   min-height: 32px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -205,10 +254,9 @@
 }
 
 .segmented-control button[aria-pressed="true"] {
-  background: var(--panel-strong);
-  color: var(--text);
+  background: var(--signal);
+  color: var(--signal-ink);
   font-weight: 700;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15), 0 0 0 1px var(--border);
 }
 
 .two-columns {
@@ -247,24 +295,10 @@
   z-index: 5;
   width: min(440px, 100%);
   padding: 28px 26px 32px;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, rgba(255, 255, 255, 0.2));
-  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
-  backdrop-filter: blur(35px) saturate(190%);
-  -webkit-backdrop-filter: blur(35px) saturate(190%);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(255, 255, 255, 0.08);
-  border-radius: 18px;
-  animation: apple-card-spring 450ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-@keyframes apple-card-spring {
-  from {
-    opacity: 0;
-    transform: scale(0.96) translateY(14px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-  }
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-xl);
+  animation: page-enter 280ms var(--ease-apple) both;
 }
 
 .login-card-topbar {
@@ -388,7 +422,7 @@
   }
 }
 
-/* Apple Inset Grouped Metric / KPI Cards */
+/* Metric / KPI cards */
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -633,7 +667,7 @@
   text-decoration: underline;
 }
 
-/* Apple Inset Grouped Application Cards */
+/* Application cards */
 .application-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -995,7 +1029,7 @@
   animation: shimmer 1.4s linear infinite;
 }
 
-/* Global Trend Timeline Chart (Apple Health / Screen Time) */
+/* Trend timeline */
 .trend-chart-panel {
   padding: 20px 22px;
   border-radius: 12px;

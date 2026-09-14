@@ -18,6 +18,7 @@ import {
   Upload,
   UserPlus,
   Users,
+  ScrollText,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Modal } from "../components/Modal";
@@ -27,6 +28,7 @@ import { MultiLineChart, type VersionSeriesData } from "../components/MultiLineC
 import { BuildBarChart } from "../components/BuildBarChart";
 import { ActivityStatsPanel, type ActivityStats } from "../components/ActivityStatsPanel";
 import { PlatformIcon } from "../components/PlatformIcon";
+import { Button, Card, Badge, EmptyState, Input } from "../components/ui";
 import { api } from "../lib/api";
 
 type Application = {
@@ -127,6 +129,7 @@ type AppTelemetryStats = {
   launcherVersions: Array<{ name: string; count: number; percentage: number }>;
   osFamilies?: Array<{ name: string; count: number; percentage: number }>;
   operatingSystems: Array<{ name: string; count: number; percentage: number }>;
+  systemLanguages?: Array<{ name: string; count: number; percentage: number }>;
 };
 
 export function ApplicationsPage() {
@@ -199,22 +202,22 @@ export function ApplicationsPage() {
           <p className="text-xs text-[var(--muted)] mt-0.5">{t("apps.subtitle")}</p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--panel)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--panel-hover)] active:scale-95 transition-all cursor-pointer shadow-sm"
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => setImporting(true)}
+            icon={<Upload size={14} />}
           >
-            <Upload size={14} />
-            <span>{t("apps.importApp")}</span>
-          </button>
-          <button
-            type="button"
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[var(--signal)] text-xs font-bold text-white shadow-sm hover:brightness-110 active:scale-95 transition-all cursor-pointer"
+            {t("apps.importApp")}
+          </Button>
+          <Button
+            variant="default"
+            size="sm"
             onClick={() => setCreating(true)}
+            icon={<Plus size={15} />}
           >
-            <Plus size={15} />
-            <span>{t("apps.new")}</span>
-          </button>
+            {t("apps.new")}
+          </Button>
         </div>
       </div>
 
@@ -235,45 +238,51 @@ export function ApplicationsPage() {
       ) : null}
 
       {error ? (
-        <div className="error-panel">
-          <p>{error}</p>
-          <button onClick={load}>{t("common.retry")}</button>
+        <div className="p-4 rounded-[var(--radius-lg)] bg-[var(--danger-subtle)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-semibold flex items-center justify-between mb-4">
+          <span>{error}</span>
+          <Button variant="danger" size="sm" onClick={load}>
+            {t("common.retry")}
+          </Button>
         </div>
       ) : null}
 
       {creating ? (
-        <form className="inline-create" onSubmit={create}>
-          <Field name="name" label={t("apps.name")} placeholder="e.g. Flight Deck" required />
-          <Field name="slug" label={t("apps.slug")} placeholder="flight-deck" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required />
-          <div>
-            <button className="primary-button compact">{t("common.create")}</button>
-            <button type="button" className="secondary-button compact" onClick={() => setCreating(false)}>
-              {t("common.cancel")}
-            </button>
-          </div>
-        </form>
+        <Card className="p-5 mb-6">
+          <form className="grid grid-cols-1 sm:grid-cols-2 gap-4" onSubmit={create}>
+            <Field name="name" label={t("apps.name")} placeholder="e.g. Flight Deck" required />
+            <Field name="slug" label={t("apps.slug")} placeholder="flight-deck" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required />
+            <div className="col-span-full flex items-center gap-2 pt-2">
+              <Button type="submit" size="sm">{t("common.create")}</Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setCreating(false)}>
+                {t("common.cancel")}
+              </Button>
+            </div>
+          </form>
+        </Card>
       ) : null}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {applications.map((application) => {
           const isPermanent = !application.retentionDays || application.retentionDays <= 0;
           return (
-            <article key={application.id} className="glass-panel glass-panel-interactive p-6 flex flex-col justify-between group overflow-hidden">
+            <Card key={application.id} hover className="p-5 flex flex-col justify-between group overflow-hidden">
               <div>
                 <div className="flex items-start justify-between gap-2 mb-3">
                   <div className="flex items-center gap-3.5 min-w-0">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--signal-subtle)] text-[var(--signal)] border border-[var(--signal)]/25 shadow-xs flex-shrink-0 font-black text-lg">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-[var(--radius-lg)] bg-[var(--signal-subtle)] text-[var(--signal)] border border-[var(--signal)]/25 shadow-xs flex-shrink-0 font-black text-lg">
                       {application.name.slice(0, 2).toUpperCase()}
                     </div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="text-base font-bold text-[var(--text)] m-0 leading-tight truncate">{application.name}</h3>
                         {application.isPublic ? (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-[var(--signal)]/30 bg-[var(--signal-subtle)] px-2 py-0.5 text-[10px] font-bold text-[var(--signal)]">
-                            <Globe size={10} /> Public
-                          </span>
+                          <Badge variant="success" size="sm" className="gap-1">
+                            <Globe size={10} /> {t("apps.public")}
+                          </Badge>
                         ) : (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--input-bg)] px-2 py-0.5 text-[10px] font-medium text-[var(--muted)]">Private</span>
+                          <Badge variant="outline" size="sm">
+                            {t("apps.private")}
+                          </Badge>
                         )}
                       </div>
                       <div className="flex items-center gap-1.5 mt-1">
@@ -286,55 +295,55 @@ export function ApplicationsPage() {
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {application.isPublic ? (
-                      <a href={`/p/${application.slug}`} target="_blank" rel="noreferrer" className="p-1.5 rounded-xl text-[var(--muted)] hover:text-[var(--signal)] hover:bg-[var(--signal-subtle)]">
+                      <a href={`/p/${application.slug}`} target="_blank" rel="noreferrer" className="p-1.5 rounded-lg text-[var(--muted)] hover:text-[var(--signal)] hover:bg-[var(--signal-subtle)]">
                         <ExternalLink size={15} />
                       </a>
                     ) : null}
-                    <button type="button" className="p-1.5 rounded-xl text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--input-bg)] cursor-pointer" onClick={() => handleExportApp(application)}>
-                      <Download size={15} />
-                    </button>
+                    <Button variant="ghost" size="icon-sm" onClick={() => handleExportApp(application)} icon={<Download size={14} />} />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3 my-5">
-                  <div className="p-3.5 rounded-2xl bg-[var(--input-bg)] border border-[var(--border-soft)]">
+                <div className="grid grid-cols-2 gap-3 my-4">
+                  <div className="p-3 rounded-[var(--radius-lg)] bg-[var(--input-bg)] border border-[var(--border-soft)]">
                     <span className="text-[11px] font-medium text-[var(--muted)] block mb-1">{t("apps.retention")}</span>
                     {isPermanent ? (
-                      <strong className="text-sm font-bold text-[var(--signal)] inline-flex items-center gap-1 mt-0.5"><InfinityIcon size={15} />永久保存</strong>
+                      <strong className="text-xs font-bold text-[var(--signal)] inline-flex items-center gap-1 mt-0.5"><InfinityIcon size={14} />{t("apps.permanentRetention")}</strong>
                     ) : (
                       <div className="flex items-baseline gap-1">
-                        <strong className="text-lg font-extrabold font-mono text-[var(--text)]">{application.retentionDays}</strong>
-                        <span className="text-xs text-[var(--muted)]">天</span>
+                        <strong className="text-base font-extrabold font-mono text-[var(--text)]">{application.retentionDays}</strong>
+                        <span className="text-xs text-[var(--muted)]">{t("common.days")}</span>
                       </div>
                     )}
                   </div>
-                  <div className="p-3.5 rounded-2xl bg-[var(--input-bg)] border border-[var(--border-soft)]">
+                  <div className="p-3 rounded-[var(--radius-lg)] bg-[var(--input-bg)] border border-[var(--border-soft)]">
                     <span className="text-[11px] font-medium text-[var(--muted)] block mb-1">{t("apps.status")}</span>
                     <div className="flex items-center gap-2 mt-1">
-                      <span className="h-2 w-2 rounded-full bg-[var(--signal)] shadow-[0_0_8px_var(--signal)] animate-pulse" />
-                      <strong className="text-xs font-bold text-[var(--signal)]">{t("apps.active")}</strong>
+                      <Badge variant="success" dot pulse size="sm">{t("apps.active")}</Badge>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 pt-4 border-t border-[var(--border-soft)]">
-                <button type="button" className="h-10 px-3 rounded-xl bg-[var(--signal)] text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer" onClick={() => setStatsApp(application)}>
-                  <BarChart3 size={14} />{t("apps.stats")}
-                </button>
-                <button type="button" className="h-10 px-3 rounded-xl border border-[var(--border)] bg-[var(--input-bg)] text-xs font-semibold text-[var(--text)] inline-flex items-center justify-center gap-1.5 cursor-pointer" onClick={() => setManagingApp(application)}>
-                  <Settings size={14} />配置与 SDK
-                </button>
+              <div className="grid grid-cols-2 gap-2 pt-3 border-t border-[var(--border-soft)]">
+                <Button variant="default" size="sm" onClick={() => setStatsApp(application)} icon={<BarChart3 size={14} />}>
+                  {t("apps.stats")}
+                </Button>
+                <Button variant="secondary" size="sm" onClick={() => setManagingApp(application)} icon={<Settings size={14} />}>
+                  {t("apps.configureAndSdk")}
+                </Button>
               </div>
-            </article>
+            </Card>
           );
         })}
 
         {applications.length === 0 && !creating ? (
-          <div className="col-span-full py-16 text-center text-[var(--muted)]">
-            <Activity size={32} className="mx-auto mb-2 opacity-50" />
-            <h3 className="text-base font-bold text-[var(--text)]">{t("apps.empty")}</h3>
-            <p className="text-xs mt-1">{t("apps.emptyDesc")}</p>
+          <div className="col-span-full">
+            <EmptyState
+              icon={<Activity size={28} />}
+              title={t("apps.empty")}
+              description={t("apps.emptyDesc")}
+              action={<Button variant="default" size="sm" onClick={() => setCreating(true)} icon={<Plus size={14} />}>{t("apps.new")}</Button>}
+            />
           </div>
         ) : null}
       </div>
@@ -364,9 +373,9 @@ function Field({ name, label, placeholder, pattern, defaultValue, required }: {
   required?: boolean;
 }) {
   return (
-    <label className="field">
-      <span>{label}</span>
-      <input name={name} placeholder={placeholder} pattern={pattern} defaultValue={defaultValue} required={required} />
+    <label className="flex flex-col gap-1.5 text-xs text-[var(--muted)]">
+      <span className="font-semibold text-[var(--text)]">{label}</span>
+      <Input name={name} placeholder={placeholder} pattern={pattern} defaultValue={defaultValue} required={required} />
     </label>
   );
 }
@@ -410,17 +419,17 @@ function ImportAppModal({ onClose, onSuccess }: { onClose: () => void; onSuccess
 
   return (
     <Modal size="md" title={t("apps.importApp")} icon={<Upload size={20} />} onClose={onClose} footer={
-      <div className="flex justify-end gap-3 w-full">
-        <button type="button" className="secondary-button compact" onClick={onClose}>{t("common.cancel")}</button>
-        <button type="button" className="primary-button compact" disabled={!fileContent || loading} onClick={handleImport}>{loading ? t("common.loading") : t("migration.execute")}</button>
+      <div className="flex justify-end gap-2 w-full">
+        <Button variant="ghost" size="sm" onClick={onClose}>{t("common.cancel")}</Button>
+        <Button size="sm" disabled={!fileContent || loading} loading={loading} onClick={handleImport}>{t("migration.execute")}</Button>
       </div>
     }>
-      <p className="text-xs text-muted" style={{ margin: 0 }}>{t("apps.importAppSubtitle")}</p>
-      <label className="field">
-        <span>{t("apps.importSelectFile")}</span>
-        <input type="file" accept=".json,.sonde.json" onChange={handleFile} style={{ padding: "8px" }} />
+      <p className="text-xs text-[var(--muted)] m-0 mb-3">{t("apps.importAppSubtitle")}</p>
+      <label className="flex flex-col gap-1.5 text-xs text-[var(--muted)]">
+        <span className="font-semibold text-[var(--text)]">{t("apps.importSelectFile")}</span>
+        <Input type="file" accept=".json,.sonde.json" onChange={handleFile} />
       </label>
-      {error ? <div className="form-error">{error}</div> : null}
+      {error ? <p className="text-xs text-[var(--danger)] mt-2 font-medium">{error}</p> : null}
     </Modal>
   );
 }
@@ -440,6 +449,7 @@ function ManageAppModal({ application, onClose, onExport }: {
   const [revealedKey, setRevealedKey] = useState("");
   const [dependencyCopied, setDependencyCopied] = useState(false);
   const [exampleCopied, setExampleCopied] = useState(false);
+  const [logCopied, setLogCopied] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyEnvId, setNewKeyEnvId] = useState("");
   const [creatingKey, setCreatingKey] = useState(false);
@@ -567,7 +577,7 @@ function ManageAppModal({ application, onClose, onExport }: {
           {(["integration", "keys", "members", "public", "settings"] as const).map((tab) => (
             <button key={tab} type="button" className={`sonde-modal-tab ${activeTab === tab ? "active" : ""}`} onClick={() => setActiveTab(tab)}>
               {tab === "integration" ? <ShieldCheck size={15} /> : tab === "keys" ? <KeyRound size={15} /> : tab === "members" ? <Users size={15} /> : tab === "public" ? <Globe size={15} /> : <Settings size={15} />}
-              {tab === "integration" ? "Rust SDK" : tab === "keys" ? `${t("apps.tabKeys")} (${apiKeys.length})` : tab === "members" ? `${t("apps.tabMembers")} (${members.length})` : tab === "public" ? t("apps.tabPublic") : t("apps.tabSettings")}
+              {tab === "integration" ? t("apps.tabIntegration") : tab === "keys" ? `${t("apps.tabKeys")} (${apiKeys.length})` : tab === "members" ? `${t("apps.tabMembers")} (${members.length})` : tab === "public" ? t("apps.tabPublic") : t("apps.tabSettings")}
             </button>
           ))}
         </>
@@ -575,13 +585,13 @@ function ManageAppModal({ application, onClose, onExport }: {
     >
       {activeTab === "integration" ? (
         <div className="space-y-4">
-          <div className="p-4 rounded-2xl bg-[var(--signal-subtle)] border border-[var(--signal)]/25">
+          <div className="p-4 rounded-[var(--radius-md)] bg-[var(--signal-subtle)] border border-[var(--signal)]/25">
             <div className="flex items-start gap-3">
               <ShieldCheck size={20} className="text-[var(--signal)] mt-0.5" />
               <div>
-                <strong className="text-sm text-[var(--text)]">官方 Rust SDK · Git 分发</strong>
+                <strong className="text-sm text-[var(--text)]">{t("apps.sdkOfficialGit")}</strong>
                 <p className="text-xs text-[var(--muted)] mt-1 mb-0 leading-relaxed">
-                  SDK 位于 Sonde 仓库的 <code>sdk/rust</code>，设置了 <code>publish = false</code>，不会发布到 crates.io。Token 刷新、HMAC、nonce、heartbeat、后台批处理和可选 crash-persistent WAL 全部由 SDK 内部处理。
+                  {t("apps.sdkOfficialGitDesc")}
                 </p>
               </div>
             </div>
@@ -599,13 +609,13 @@ function ManageAppModal({ application, onClose, onExport }: {
           />
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-            <SdkFact title="设备身份" text="SDK 首次创建并持久化高熵 installation/device ID；业务 telemetry 不发送 anonymousId。" />
-            <SdkFact title="时间与 Session" text="客户端不上传 timestamp/sessionId。Sonde 使用服务端接收时间、heartbeat 和活动间隔推导。" />
-            <SdkFact title="可靠上报" text="可选 WAL 会在 async enqueue 成功前 append + fsync；服务端 ACK 前崩溃的数据会在下次启动恢复。" />
+            <SdkFact title={t("apps.sdkFactDeviceId")} text={t("apps.sdkFactDeviceIdDesc")} />
+            <SdkFact title={t("apps.sdkFactTimeSession")} text={t("apps.sdkFactTimeSessionDesc")} />
+            <SdkFact title={t("apps.sdkFactReliable")} text={t("apps.sdkFactReliableDesc")} />
           </div>
 
           <SdkCodeBlock
-            title="Minimal Rust integration"
+            title={t("apps.sdkMinimalIntegration")}
             value={example}
             copied={exampleCopied}
             onCopy={() => {
@@ -615,8 +625,65 @@ function ManageAppModal({ application, onClose, onExport }: {
             }}
           />
 
-          <div className="p-3.5 rounded-2xl bg-[var(--panel-strong)] border border-[var(--border-soft)] text-xs text-[var(--muted)] leading-relaxed">
-            将 <code>sonde-device-id</code> 与 <code>sonde-spool</code> 放在应用自己的持久化数据目录。WAL 使用 at-least-once 语义，关键业务 Event 应设置稳定 <code>idempotency_key</code>。已有身份文件损坏时 SDK 会报错而不是自动换 ID。生产环境建议在 Git 依赖中增加 <code>rev = "&lt;commit sha&gt;"</code> 固定 SDK 版本。新建 Ingest Key 统一使用 <code>ingest</code> scope。
+          <div className="p-3.5 rounded-[var(--radius-md)] bg-[var(--panel-strong)] border border-[var(--border-soft)] text-xs text-[var(--muted)] leading-relaxed">
+            {t("apps.sdkGuidance")}
+          </div>
+
+          <div className="p-4 rounded-[var(--radius-md)] bg-[var(--input-bg)] border border-[var(--border)] space-y-3 mt-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ScrollText size={18} className="text-[var(--signal)]" />
+                <strong className="text-sm text-[var(--text)]">{t("apps.logIngestGuide")}</strong>
+              </div>
+              <a
+                href={`/logs?applicationId=${application.id}`}
+                className="text-xs text-[var(--signal)] hover:underline flex items-center gap-1 font-semibold"
+              >
+                {t("apps.viewLogs")} &rarr;
+              </a>
+            </div>
+            <p className="text-xs text-[var(--muted)] m-0 leading-relaxed">
+              {t("apps.logIngestDescription")}
+            </p>
+            <SdkCodeBlock
+              title="HTTP cURL Log Ingestion Snippet"
+              value={`curl -X POST "${window.location.origin}/api/v1/ingest/logs" \\
+  -H "Authorization: Bearer <API_KEY>" \\
+  -H "Content-Type: application/json" \\
+  -d '[
+    {
+      "level": "info",
+      "message": "User order placed successfully",
+      "logger": "checkout-service",
+      "traceId": "trace-9876543210abcdef",
+      "attributes": {
+        "orderId": "ord-12345",
+        "userId": "user-888"
+      }
+    }
+  ]'`}
+              copied={logCopied}
+              onCopy={() => {
+                const snippet = `curl -X POST "${window.location.origin}/api/v1/ingest/logs" \\
+  -H "Authorization: Bearer <API_KEY>" \\
+  -H "Content-Type: application/json" \\
+  -d '[
+    {
+      "level": "info",
+      "message": "User order placed successfully",
+      "logger": "checkout-service",
+      "traceId": "trace-9876543210abcdef",
+      "attributes": {
+        "orderId": "ord-12345",
+        "userId": "user-888"
+      }
+    }
+  ]'`;
+                navigator.clipboard.writeText(snippet);
+                setLogCopied(true);
+                window.setTimeout(() => setLogCopied(false), 1600);
+              }}
+            />
           </div>
         </div>
       ) : null}
@@ -630,20 +697,20 @@ function ManageAppModal({ application, onClose, onExport }: {
             </div>
           ) : null}
           <div className="keys-header">
-            <span className="text-xs font-semibold text-muted uppercase">Ingest Keys</span>
+            <span className="text-xs font-semibold text-muted uppercase">{t("apps.ingestKeys")}</span>
             {!creatingKey ? <button type="button" className="primary-button compact" onClick={() => setCreatingKey(true)}><Plus size={15} />{t("apps.newKey")}</button> : null}
           </div>
           {creatingKey ? (
             <form className="inline-create" onSubmit={handleCreateKey}>
               <label className="field"><span>{t("apps.keyName")}</span><input value={newKeyName} onChange={(event) => setNewKeyName(event.target.value)} required /></label>
               <label className="field"><span>{t("apps.environment")}</span><select value={newKeyEnvId} onChange={(event) => setNewKeyEnvId(event.target.value)} required>{environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}</select></label>
-              <div className="p-3 rounded-xl bg-[var(--input-bg)] border border-[var(--border-soft)] text-xs text-[var(--muted)]">固定权限：<code>ingest</code>（heartbeat + events + metrics + logs + errors）</div>
+              <div className="p-3 rounded-xl bg-[var(--input-bg)] border border-[var(--border-soft)] text-xs text-[var(--muted)]">{t("apps.ingestScopeFixed")}</div>
               <div className="flex gap-2"><button className="primary-button compact">{t("common.create")}</button><button type="button" className="secondary-button compact" onClick={() => setCreatingKey(false)}>{t("common.cancel")}</button></div>
             </form>
           ) : null}
           <div style={{ overflowX: "auto" }}>
             <table className="keys-table">
-              <thead><tr><th>{t("apps.keyName")}</th><th>{t("apps.environment")}</th><th>Scope</th><th>{t("apps.status")}</th><th>{t("apps.createdAt")}</th><th /></tr></thead>
+              <thead><tr><th>{t("apps.keyName")}</th><th>{t("apps.environment")}</th><th>{t("apps.scope")}</th><th>{t("apps.status")}</th><th>{t("apps.createdAt")}</th><th /></tr></thead>
               <tbody>
                 {apiKeys.map((key) => (
                   <tr key={key.id}>
@@ -667,7 +734,7 @@ function ManageAppModal({ application, onClose, onExport }: {
         <div className="flex flex-col gap-6">
           <form className="inline-create" onSubmit={handleAddMember}>
             <label className="field"><span>{t("access.username")}</span><select value={selectedUserId} onChange={(event) => setSelectedUserId(event.target.value)} required><option value="">{t("apps.selectMember")}</option>{allUsers.map((user) => <option key={user.id} value={user.id}>{user.username} ({user.email})</option>)}</select></label>
-            <label className="field"><span>{t("apps.memberRole")}</span><select value={selectedRole} onChange={(event) => setSelectedRole(event.target.value)}><option value="Manager">{t("apps.manager")}</option><option value="Viewer">{t("apps.viewer")}</option></select></label>
+            <label className="field"><span>{t("apps.memberRole")}</span><select value={selectedRole} onChange={(event) => setSelectedRole(event.target.value)}><option value="Manager">{t("apps.manager")}</option><option value="Analyst">{t("apps.analyst")}</option><option value="Viewer">{t("apps.viewer")}</option></select></label>
             <div><button className="primary-button compact"><UserPlus size={15} />{t("apps.grantMember")}</button></div>
           </form>
           <table className="keys-table"><thead><tr><th>{t("access.username")}</th><th>{t("access.email")}</th><th>{t("apps.memberRole")}</th><th /></tr></thead><tbody>
@@ -678,7 +745,7 @@ function ManageAppModal({ application, onClose, onExport }: {
 
       {activeTab === "public" ? (
         <form className="flex flex-col gap-4" onSubmit={handleUpdateSettings}>
-          <label className="flex items-center justify-between p-4 rounded-xl bg-[var(--panel-strong)] border border-[var(--border)]"><div><strong>{t("apps.enablePublic")}</strong><p className="text-xs text-muted m-0 mt-1">Expose the public telemetry showcase page.</p></div><input type="checkbox" checked={isPublic} onChange={(event) => setIsPublic(event.target.checked)} /></label>
+          <label className="flex items-center justify-between p-4 rounded-xl bg-[var(--panel-strong)] border border-[var(--border)]"><div><strong>{t("apps.enablePublic")}</strong><p className="text-xs text-muted m-0 mt-1">{t("apps.isPublicHint")}</p></div><input type="checkbox" checked={isPublic} onChange={(event) => setIsPublic(event.target.checked)} /></label>
           <label className="field"><span>{t("apps.description")}</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></label>
           <label className="field"><span>{t("apps.githubUrl")}</span><input value={githubUrl} onChange={(event) => setGithubUrl(event.target.value)} /></label>
           <label className="field"><span>{t("apps.websiteUrl")}</span><input value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} /></label>
@@ -690,13 +757,42 @@ function ManageAppModal({ application, onClose, onExport }: {
       {activeTab === "settings" ? (
         <div className="flex flex-col gap-6">
           <form className="flex flex-col gap-4" onSubmit={handleUpdateSettings}>
-            <Field name="name" label="Application Name" defaultValue={application.name} />
-            <Field name="slug" label="URL Slug" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" defaultValue={application.slug} />
-            <label className="field"><span>{t("apps.retention")}</span><select name="retentionDays" defaultValue={application.retentionDays}><option value={30}>30 days</option><option value={90}>90 days</option><option value={180}>180 days</option><option value={365}>365 days</option><option value={730}>730 days</option><option value={3650}>3650 days</option></select></label>
+            <Field name="name" label={t("apps.name")} defaultValue={application.name} />
+            <Field name="slug" label={t("apps.slug")} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" defaultValue={application.slug} />
+            <label className="field">
+              <span>{t("apps.retention")}</span>
+              <select name="retentionDays" defaultValue={application.retentionDays}>
+                <option value={30}>{t("apps.retention30")}</option>
+                <option value={90}>{t("apps.retention90")}</option>
+                <option value={180}>{t("apps.retention180")}</option>
+                <option value={365}>{t("apps.retention365")}</option>
+                <option value={730}>{t("apps.retention730")}</option>
+                <option value={3650}>{t("apps.retention3650")}</option>
+              </select>
+            </label>
             <button className="primary-button">{t("apps.saveSettings")}</button>
           </form>
-          <hr style={{ borderColor: "var(--border-soft)" }} />
-          <div><button type="button" className="secondary-button" style={{ color: "var(--danger)" }} onClick={handleDeleteApp}><Trash2 size={16} />{t("apps.deleteApp")}</button></div>
+          <div className="border-t border-[var(--border-soft)] pt-5 space-y-3">
+            <div>
+              <span className="text-xs font-bold uppercase tracking-wider text-[var(--danger)] block">
+                {t("apps.dangerZone")}
+              </span>
+              <p className="text-xs text-[var(--muted)] m-0 mt-1 leading-relaxed">
+                {t("apps.dangerZoneDesc")}
+              </p>
+            </div>
+            <div>
+              <button
+                type="button"
+                className="secondary-button"
+                style={{ color: "var(--danger)", borderColor: "var(--danger)" }}
+                onClick={handleDeleteApp}
+              >
+                <Trash2 size={16} />
+                {t("apps.deleteApp")}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </Modal>
@@ -704,19 +800,20 @@ function ManageAppModal({ application, onClose, onExport }: {
 }
 
 function SdkCodeBlock({ title, value, copied, onCopy }: { title: string; value: string; copied: boolean; onCopy: () => void }) {
+  const { t } = useTranslation();
   return (
-    <div className="relative rounded-2xl bg-[#0d1117] border border-[var(--border)] overflow-hidden shadow-xl">
-      <div className="flex items-center justify-between px-4 py-2 bg-[#161b22] border-b border-[#30363d] text-xs">
-        <span className="font-mono text-gray-400 font-semibold">{title}</span>
-        <button type="button" onClick={onCopy} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[var(--signal)] text-white font-bold">{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? "已复制" : "复制"}</button>
+    <div className="relative rounded-[var(--radius-md)] bg-[var(--bg)] border border-[var(--border)] overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2 bg-[var(--panel-strong)] border-b border-[var(--border-soft)] text-xs">
+        <span className="font-mono text-[var(--muted)] font-semibold">{title}</span>
+        <button type="button" onClick={onCopy} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-[var(--radius-sm)] bg-[var(--signal)] text-[var(--signal-ink)] font-bold">{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? t("common.copied") : t("common.copy")}</button>
       </div>
-      <pre className="p-4 text-xs font-mono text-gray-200 overflow-x-auto max-h-[420px] leading-relaxed select-text"><code>{value}</code></pre>
+      <pre className="p-4 text-xs font-mono text-[var(--text)] overflow-x-auto max-h-[420px] leading-relaxed select-text"><code>{value}</code></pre>
     </div>
   );
 }
 
 function SdkFact({ title, text }: { title: string; text: string }) {
-  return <div className="p-3.5 rounded-2xl bg-[var(--panel-strong)] border border-[var(--border-soft)]"><strong className="text-[var(--text)]">{title}</strong><p className="m-0 mt-1 text-[11px] leading-relaxed text-[var(--muted)]">{text}</p></div>;
+  return <div className="p-3.5 rounded-[var(--radius-md)] bg-[var(--panel-strong)] border border-[var(--border-soft)]"><strong className="text-[var(--text)]">{title}</strong><p className="m-0 mt-1 text-[11px] leading-relaxed text-[var(--muted)]">{text}</p></div>;
 }
 
 function AppStatsModal({ application, onClose }: { application: Application; onClose: () => void }) {
@@ -768,29 +865,36 @@ function AppStatsModal({ application, onClose }: { application: Application; onC
                   <StatValue label={t("stats.dau")} value={stats.overview.dau ?? stats.overview.activeUsers} signal />
                   <StatValue label={t("stats.mau")} value={stats.overview.mau ?? stats.overview.activeUsers} />
                 </div>
-                <SplineAreaChart data={stats.trend.map((point) => ({ label: point.day, value: point.events, secondaryValue: point.users }))} height={170} strokeColor="#f97316" fillColor="#f97316" valueLabel={t("explorer.events")} secondaryLabel={t("public.devices")} />
+                <SplineAreaChart data={stats.trend.map((point) => ({ label: point.day, value: point.events, secondaryValue: point.users }))} height={170} strokeColor="#c8eca4" fillColor="#c8eca4" valueLabel={t("explorer.events")} secondaryLabel={t("public.devices")} />
               </div>
-              <DonutChart items={stats.appVersions} title={t("stats.versionDonut")} badge={t("stats.appVersion")} height={220} />
+              <div className="distribution-card">
+                <DonutChart items={stats.appVersions} title={t("stats.versionDonut")} badge={t("stats.appVersion")} centerLabel={t("apps.statsTotalEvents")} height={220} />
+              </div>
             </div>
 
             <ActivityStatsPanel activity={stats.activity} />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               <div className="distribution-card"><h3>{t("stats.systemBuilds")}</h3><BuildBarChart items={stats.buildDistribution ?? []} height={180} /></div>
-              <div className="distribution-card"><h3>{t("stats.trendAnalysis")}</h3><SplineAreaChart data={stats.trend.map((point) => ({ label: point.day, value: point.events, secondaryValue: point.users }))} height={160} strokeColor="#818cf8" fillColor="#818cf8" valueLabel={t("explorer.events")} secondaryLabel={t("public.devices")} /></div>
+              <div className="distribution-card"><h3>{t("stats.trendAnalysis")}</h3><SplineAreaChart data={stats.trend.map((point) => ({ label: point.day, value: point.events, secondaryValue: point.users }))} height={160} strokeColor="#7ec8c4" fillColor="#7ec8c4" valueLabel={t("explorer.events")} secondaryLabel={t("public.devices")} /></div>
               <div className="distribution-card"><h3>{t("stats.versionCurves")}</h3><MultiLineChart series={stats.versionSeries ?? []} height={160} /></div>
             </div>
 
-            <div className="distribution-card">
-              <div className="flex justify-between items-center gap-3 flex-wrap mb-3">
-                <h3 className="m-0">{t("apps.osFamilies")}</h3>
-                <div className="flex gap-2 flex-wrap">
-                  <button type="button" className="secondary-button compact" onClick={() => setSelectedOsFamily("all")}>{t("apps.statsAll")}</button>
-                  {(stats.osFamilies ?? []).map((family) => <button key={family.name} type="button" className="secondary-button compact" onClick={() => setSelectedOsFamily(family.name)}><PlatformIcon platform={family.name} size={12} />{family.name} ({family.count})</button>)}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="distribution-card">
+                <div className="flex justify-between items-center gap-3 flex-wrap mb-3">
+                  <h3 className="m-0">{t("apps.osFamilies")}</h3>
+                  <div className="flex gap-2 flex-wrap">
+                    <button type="button" className="secondary-button compact" onClick={() => setSelectedOsFamily("all")}>{t("apps.statsAll")}</button>
+                    {(stats.osFamilies ?? []).map((family) => <button key={family.name} type="button" className="secondary-button compact" onClick={() => setSelectedOsFamily(family.name)}><PlatformIcon platform={family.name} size={12} />{family.name} ({family.count})</button>)}
+                  </div>
+                </div>
+                <div style={{ maxHeight: 220, overflowY: "auto" }}>
+                  {filteredOperatingSystems.map((os) => <div key={os.name} className="dist-row"><span><strong>{os.name}</strong></span><div className="dist-bar-track"><div className="dist-bar-progress" style={{ width: `${os.percentage}%` }} /></div><span className="text-muted">{os.count.toLocaleString()}</span><span className="font-mono text-signal">{os.percentage}%</span></div>)}
                 </div>
               </div>
-              <div style={{ maxHeight: 220, overflowY: "auto" }}>
-                {filteredOperatingSystems.map((os) => <div key={os.name} className="dist-row"><span><strong>{os.name}</strong></span><div className="dist-bar-track"><div className="dist-bar-progress" style={{ width: `${os.percentage}%` }} /></div><span className="text-muted">{os.count.toLocaleString()}</span><span className="font-mono text-signal">{os.percentage}%</span></div>)}
+              <div className="distribution-card">
+                <DonutChart items={stats.systemLanguages ?? []} title={t("stats.systemLanguages")} badge={t("stats.systemLanguage")} centerLabel={t("stats.totalUsers")} height={220} />
               </div>
             </div>
           </div>

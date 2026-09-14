@@ -8,6 +8,7 @@ import { SplineAreaChart } from "../components/SplineAreaChart";
 import { DonutChart } from "../components/DonutChart";
 import { MultiLineChart, VersionSeriesData } from "../components/MultiLineChart";
 import { BuildBarChart } from "../components/BuildBarChart";
+import { Button, Card, Badge, Skeleton } from "../components/ui";
 
 type VersionShare = {
   version: string;
@@ -66,6 +67,7 @@ type Overview = {
   osFamilies?: DistributionItem[];
   operatingSystems?: DistributionItem[];
   buildDistribution?: DistributionItem[];
+  systemLanguages?: DistributionItem[];
 };
 
 export function DashboardPage() {
@@ -102,7 +104,7 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header Bar: Title + Apple Segmented Range Switcher */}
+      {/* Header Bar: Title + range switcher */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <span className="eyebrow">{t("overview.eyebrow")}</span>
@@ -139,22 +141,22 @@ export function DashboardPage() {
       </div>
 
       {error ? (
-        <div className="p-4 rounded-2xl bg-[var(--danger-subtle)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-semibold flex items-center justify-between">
+        <div className="p-4 rounded-[var(--radius-lg)] bg-[var(--danger-subtle)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-semibold flex items-center justify-between">
           <span>{error}</span>
-          <button
-            type="button"
+          <Button
+            variant="danger"
+            size="sm"
             onClick={load}
-            className="px-3 py-1 bg-[var(--danger)] text-white rounded-lg text-xs font-bold hover:brightness-110 cursor-pointer"
           >
             {t("common.retry")}
-          </button>
+          </Button>
         </div>
       ) : null}
 
       {!data && loading ? (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           {[...Array(6)].map((_, i) => (
-            <div key={i} className="h-28 rounded-2xl bg-[var(--panel-strong)] animate-pulse" />
+            <Skeleton key={i} className="h-28 rounded-[var(--radius-xl)]" />
           ))}
         </div>
       ) : data ? (
@@ -204,10 +206,10 @@ export function DashboardPage() {
           {/* Row 1: Telemetry Stream Trend & Version Adoption Donut */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             {/* Overview Wave Chart */}
-            <div className="glass-panel p-6 flex flex-col justify-between min-h-[340px]">
+            <Card className="p-5 flex flex-col justify-between min-h-[340px]">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2.5">
-                  <div className="p-2 rounded-xl icon-squircle-green">
+                  <div className="p-1.5 rounded-[var(--radius-sm)] icon-squircle-green">
                     <TrendingUp size={16} />
                   </div>
                   <div>
@@ -215,10 +217,9 @@ export function DashboardPage() {
                     <p className="text-[11px] text-[var(--muted)] m-0 mt-0.5">{t("stats.trendAnalysis")}</p>
                   </div>
                 </div>
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-[var(--signal)]/30 bg-[var(--signal-subtle)] text-[var(--signal)] text-[11px] font-bold">
-                  <span className="h-2 w-2 rounded-full bg-[var(--signal)] animate-pulse" />
+                <Badge variant="success" dot pulse>
                   {t("stats.live")}
-                </span>
+                </Badge>
               </div>
 
               <div className="flex-1 w-full min-h-[240px]">
@@ -229,41 +230,46 @@ export function DashboardPage() {
                     secondaryValue: pt.users,
                   }))}
                   height="100%"
-                  strokeColor="#30d158"
-                  fillColor="#30d158"
+                  strokeColor="#c8eca4"
+                  fillColor="#c8eca4"
                   valueLabel={t("explorer.events")}
                   secondaryLabel={t("public.devices")}
                 />
               </div>
-            </div>
+            </Card>
 
             {/* Version Distribution Donut Chart */}
-            <div className="glass-panel p-6 flex flex-col justify-between min-h-[340px]">
+            <Card className="p-5 flex flex-col justify-between min-h-[340px]">
               <DonutChart
-                items={data.versionSeries?.map((s) => ({
-                  name: s.version,
-                  count: s.totalCount,
-                  percentage: data.events24h > 0 ? Math.round((s.totalCount / data.events24h) * 1000) / 10 : 0,
-                })) ?? []}
+                items={(() => {
+                  const series = data.versionSeries ?? [];
+                  const total = series.reduce((acc, curr) => acc + curr.totalCount, 0);
+                  return series.map((s) => ({
+                    name: s.version,
+                    count: s.totalCount,
+                    percentage: total > 0 ? Math.round((s.totalCount / total) * 1000) / 10 : 0,
+                  }));
+                })()}
                 title={t("stats.versionDonut")}
                 badge={t("stats.appVersion")}
+                centerLabel={t("apps.statsTotalEvents")}
                 height="100%"
               />
-            </div>
+            </Card>
           </div>
 
           {/* Row 2: Cross-Platform System Builds & Version Growth Curves */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             {/* System Build Distribution Bar Chart */}
-            <div className="glass-panel p-6 flex flex-col justify-between min-h-[340px]">
+            <Card className="p-5 flex flex-col justify-between min-h-[340px]">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2.5">
-                  <div className="p-2 rounded-xl icon-squircle-amber">
+                  <div className="p-1.5 rounded-[var(--radius-sm)] icon-squircle-amber">
                     <Sparkles size={16} />
                   </div>
                   <div>
                     <h3 className="text-sm font-bold text-[var(--text)] m-0">{t("stats.systemBuilds")}</h3>
-                    <p className="text-[11px] text-[var(--muted)] m-0 mt-0.5">跨平台 OS 与构建版本分布</p>
+                    <p className="text-[11px] text-[var(--muted)] m-0 mt-0.5">{t("dashboard.osBuildDesc")}</p>
                   </div>
                 </div>
               </div>
@@ -273,13 +279,13 @@ export function DashboardPage() {
                   height="100%"
                 />
               </div>
-            </div>
+            </Card>
 
             {/* Version Growth Multi-Line Chart */}
-            <div className="glass-panel p-6 flex flex-col justify-between min-h-[340px]">
+            <Card className="p-5 flex flex-col justify-between min-h-[340px]">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2.5">
-                  <div className="p-2 rounded-xl icon-squircle-cyan">
+                  <div className="p-1.5 rounded-[var(--radius-sm)] icon-squircle-cyan">
                     <Activity size={16} />
                   </div>
                   <div>
@@ -294,7 +300,32 @@ export function DashboardPage() {
                   height="100%"
                 />
               </div>
-            </div>
+            </Card>
+          </div>
+
+          {/* Row 3: OS Families & System Languages */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* System Language Distribution */}
+            <Card className="p-5 flex flex-col justify-between min-h-[340px]">
+              <DonutChart
+                items={data.systemLanguages ?? []}
+                title={t("stats.systemLanguages")}
+                badge={t("stats.systemLanguage")}
+                centerLabel={t("stats.totalUsers")}
+                height="100%"
+              />
+            </Card>
+
+            {/* Operating System Families */}
+            <Card className="p-5 flex flex-col justify-between min-h-[340px]">
+              <DonutChart
+                items={data.osFamilies ?? []}
+                title={t("apps.osFamilies")}
+                badge="OS"
+                centerLabel={t("apps.statsTotalEvents")}
+                height="100%"
+              />
+            </Card>
           </div>
         </>
       ) : null}

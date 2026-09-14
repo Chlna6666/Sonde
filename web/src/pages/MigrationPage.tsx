@@ -12,6 +12,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
 import { CustomSelect } from "../components/CustomSelect";
+import { Button, Card, Badge, Input, EmptyState } from "../components/ui";
 import { api } from "../lib/api";
 import "../styles/migration.css";
 
@@ -207,7 +208,7 @@ export function MigrationPage() {
     <div className="page enter-page">
       <header className="page-header">
         <div>
-          <span className="eyebrow">TRANSFER / DATA HUB</span>
+          <span className="eyebrow">{t("migration.eyebrow")}</span>
           <h1>{t("migration.title")}</h1>
           <p>{t("migration.subtitle")}</p>
         </div>
@@ -254,64 +255,79 @@ export function MigrationPage() {
       {error ? <p className="form-error mb-4" role="alert">{error}</p> : null}
 
       {activeTab === "d1" ? (
-        <div className="migration-layout">
-          <form className="migration-panel" onSubmit={inspect}>
-            <div className="panel-heading">
-              <FileUp aria-hidden="true" />
-              <div>
-                <h2>{t("migration.source")}</h2>
-                <p>{t("migration.safe")}</p>
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+          <Card className="p-5 flex flex-col gap-4">
+            <form onSubmit={inspect} className="flex flex-col gap-4">
+              <div className="flex items-start gap-3">
+                <div className="p-1.5 rounded-[var(--radius-sm)] icon-squircle-cyan">
+                  <FileUp size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold text-[var(--text)] m-0">{t("migration.source")}</h3>
+                  <p className="text-xs text-[var(--muted)] m-0 mt-0.5">{t("migration.safe")}</p>
+                </div>
               </div>
-            </div>
-            <label className="file-drop">
-              <input
-                type="file"
-                accept=".sql,text/sql,text/plain"
-                onChange={(event) => void chooseFile(event)}
-              />
-              <DatabaseZap aria-hidden="true" />
-              <strong>{fileName || t("migration.choose")}</strong>
-              <span>{t("migration.limit")}</span>
-            </label>
-            <div className="two-columns">
-              <div className="field">
-                <span>{t("migration.application")}</span>
-                <CustomSelect
-                  label={t("migration.application")}
-                  value={applicationId}
-                  options={[
-                    { value: "", label: "—" },
-                    ...applications.map((item) => ({ value: item.id, label: item.name })),
-                  ]}
-                  onChange={setApplicationId}
-                />
-              </div>
-              <div className="field">
-                <span>{t("migration.environment")}</span>
-                <CustomSelect
-                  label={t("migration.environment")}
-                  value={environmentId}
-                  options={[
-                    { value: "", label: "—" },
-                    ...environments.map((item) => ({ value: item.id, label: item.name })),
-                  ]}
-                  onChange={setEnvironmentId}
-                />
-              </div>
-            </div>
-            <button className="primary-button" disabled={!sql || busy || !environmentId}>
-              {busy ? t("common.loading") : t("migration.preview")}
-            </button>
-          </form>
 
-          <section className="migration-panel" aria-live="polite">
-            <div className="panel-heading">
-              <ShieldCheck aria-hidden="true" />
+              <label className="file-drop">
+                <input
+                  type="file"
+                  accept=".sql,text/sql,text/plain"
+                  onChange={(event) => void chooseFile(event)}
+                />
+                <DatabaseZap aria-hidden="true" />
+                <strong>{fileName || t("migration.choose")}</strong>
+                <span>{t("migration.limit")}</span>
+              </label>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="field">
+                  <span>{t("migration.application")}</span>
+                  <CustomSelect
+                    label={t("migration.application")}
+                    value={applicationId}
+                    options={[
+                      { value: "", label: "—" },
+                      ...applications.map((item) => ({ value: item.id, label: item.name })),
+                    ]}
+                    onChange={setApplicationId}
+                  />
+                </div>
+                <div className="field">
+                  <span>{t("migration.environment")}</span>
+                  <CustomSelect
+                    label={t("migration.environment")}
+                    value={environmentId}
+                    options={[
+                      { value: "", label: "—" },
+                      ...environments.map((item) => ({ value: item.id, label: item.name })),
+                    ]}
+                    onChange={setEnvironmentId}
+                  />
+                </div>
+              </div>
+
+              <Button
+                type="submit"
+                size="sm"
+                disabled={!sql || busy || !environmentId}
+                loading={busy}
+              >
+                {t("migration.preview")}
+              </Button>
+            </form>
+          </Card>
+
+          <Card className="p-5 flex flex-col gap-4" aria-live="polite">
+            <div className="flex items-start gap-3">
+              <div className="p-1.5 rounded-[var(--radius-sm)] icon-squircle-green">
+                <ShieldCheck size={18} />
+              </div>
               <div>
-                <h2>{t("migration.report")}</h2>
-                <p>{t("migration.reportHint")}</p>
+                <h3 className="text-sm sm:text-base font-bold text-[var(--text)] m-0">{t("migration.report")}</h3>
+                <p className="text-xs text-[var(--muted)] m-0 mt-0.5">{t("migration.reportHint")}</p>
               </div>
             </div>
+
             {preview ? (
               <>
                 <dl className="migration-stats">
@@ -320,61 +336,71 @@ export function MigrationPage() {
                   <div><dt>{t("migration.duplicates")}</dt><dd>{preview.duplicates.toLocaleString()}</dd></div>
                   <div><dt>{t("migration.rejected")}</dt><dd>{preview.rejected.toLocaleString()}</dd></div>
                 </dl>
-                <div className="two-columns">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <strong>{t("apps.statsAppVersions")}</strong>
-                    <ul>
+                    <strong className="text-xs font-bold text-[var(--text)] block mb-1">{t("apps.statsAppVersions")}</strong>
+                    <ul className="text-xs space-y-1 p-0 m-0 list-none">
                       {Object.entries(preview.appVersions).map(([version, count]) => (
-                        <li key={version}><code>{version}</code> <span>{count.toLocaleString()}</span></li>
+                        <li key={version} className="flex justify-between font-mono text-[11px]">
+                          <code>{version}</code> <span>{count.toLocaleString()}</span>
+                        </li>
                       ))}
                     </ul>
                   </div>
                   <div>
-                    <strong>{t("apps.statsOS")}</strong>
-                    <ul>
+                    <strong className="text-xs font-bold text-[var(--text)] block mb-1">{t("apps.statsOS")}</strong>
+                    <ul className="text-xs space-y-1 p-0 m-0 list-none">
                       {Object.entries(preview.operatingSystems).map(([os, count]) => (
-                        <li key={os}><code>{os}</code> <span>{count.toLocaleString()}</span></li>
+                        <li key={os} className="flex justify-between font-mono text-[11px]">
+                          <code>{os}</code> <span>{count.toLocaleString()}</span>
+                        </li>
                       ))}
                     </ul>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  className="primary-button"
+                <Button
+                  size="sm"
                   disabled={busy || preview.valid === 0}
+                  loading={busy}
                   onClick={() => void execute()}
                 >
-                  {busy ? t("common.loading") : t("migration.execute")}
-                </button>
+                  {t("migration.execute")}
+                </Button>
               </>
             ) : result ? (
-              <div className="migration-success">
-                <CheckCircle2 size={32} className="text-signal" />
-                <h3>{result.alreadyImported ? t("migration.already") : t("migration.done")}</h3>
-                <p>
-                  Inserted {result.run.inserted.toLocaleString()} events, deduped{" "}
-                  {result.run.deduped.toLocaleString()}.
+              <div className="flex flex-col items-center justify-center p-6 text-center rounded-[var(--radius-lg)] bg-[var(--signal-subtle)] border border-[var(--signal)]/30">
+                <CheckCircle2 size={32} className="text-[var(--signal)] mb-2" />
+                <h3 className="text-sm font-bold text-[var(--text)] m-0">{result.alreadyImported ? t("migration.already") : t("migration.done")}</h3>
+                <p className="text-xs text-[var(--muted)] m-0 mt-1">
+                  {t("migration.insertedDeduped", {
+                    inserted: result.run.inserted.toLocaleString(),
+                    deduped: result.run.deduped.toLocaleString(),
+                  })}
                 </p>
               </div>
             ) : (
-              <div className="empty-state" style={{ minHeight: "200px" }}>
-                <p>{t("migration.awaiting")}</p>
-              </div>
+              <EmptyState
+                icon={<DatabaseZap size={24} />}
+                title={t("migration.awaiting")}
+              />
             )}
-          </section>
+          </Card>
         </div>
       ) : null}
 
       {activeTab === "app" ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "20px" }}>
-          <div className="migration-panel">
-            <div className="panel-heading">
-              <Download aria-hidden="true" className="text-signal" />
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+          <Card className="p-5 flex flex-col gap-4">
+            <div className="flex items-start gap-3">
+              <div className="p-1.5 rounded-[var(--radius-sm)] icon-squircle-green">
+                <Download size={18} />
+              </div>
               <div>
-                <h2>{t("apps.exportApp")}</h2>
-                <p>Export a single application package including environments, API keys, and telemetry.</p>
+                <h3 className="text-sm sm:text-base font-bold text-[var(--text)] m-0">{t("apps.exportApp")}</h3>
+                <p className="text-xs text-[var(--muted)] m-0 mt-0.5">{t("migration.exportAppDesc")}</p>
               </div>
             </div>
+
             <div className="field">
               <span>{t("migration.application")}</span>
               <CustomSelect
@@ -384,25 +410,30 @@ export function MigrationPage() {
                 onChange={setSelectedExportAppId}
               />
             </div>
-            <button
-              type="button"
-              className="primary-button"
-              disabled={!selectedExportAppId}
-              onClick={handleExportSingleApp}
-            >
-              <Download size={15} />
-              {t("apps.exportApp")}
-            </button>
-          </div>
 
-          <div className="migration-panel">
-            <div className="panel-heading">
-              <Upload aria-hidden="true" className="text-amber" />
+            <div className="mt-auto">
+              <Button
+                size="sm"
+                disabled={!selectedExportAppId}
+                onClick={handleExportSingleApp}
+                icon={<Download size={14} />}
+              >
+                {t("apps.exportApp")}
+              </Button>
+            </div>
+          </Card>
+
+          <Card className="p-5 flex flex-col gap-4">
+            <div className="flex items-start gap-3">
+              <div className="p-1.5 rounded-[var(--radius-sm)] icon-squircle-amber">
+                <Upload size={18} />
+              </div>
               <div>
-                <h2>{t("apps.importApp")}</h2>
-                <p>{t("apps.importAppSubtitle")}</p>
+                <h3 className="text-sm sm:text-base font-bold text-[var(--text)] m-0">{t("apps.importApp")}</h3>
+                <p className="text-xs text-[var(--muted)] m-0 mt-0.5">{t("apps.importAppSubtitle")}</p>
               </div>
             </div>
+
             <label className="file-drop">
               <input type="file" accept=".json,.sonde.json" onChange={handleAppImportFile} />
               <Upload aria-hidden="true" />
@@ -410,36 +441,38 @@ export function MigrationPage() {
             </label>
 
             {appImportSuccess ? (
-              <div className="migration-success" style={{ padding: "12px" }}>
-                <CheckCircle2 size={20} className="text-signal" />
+              <div className="flex items-center gap-2 p-3 rounded-[var(--radius-lg)] bg-[var(--signal-subtle)] border border-[var(--signal)]/30 text-[var(--signal)] text-xs font-medium">
+                <CheckCircle2 size={18} />
                 <span>{appImportSuccess}</span>
               </div>
             ) : null}
 
             {appPreviewData ? (
-              <div style={{ background: "var(--input-bg)", padding: "12px", borderRadius: "6px", fontSize: "0.78rem" }}>
+              <div className="p-3 rounded-[var(--radius-md)] bg-[var(--input-bg)] border border-[var(--border-soft)] text-xs space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-muted">App Name:</span>
-                  <strong>{appPreviewData.name}</strong>
+                  <span className="text-[var(--muted)]">{t("migration.appName")}:</span>
+                  <strong className="text-[var(--text)]">{appPreviewData.name}</strong>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted">Slug:</span>
-                  <code>{appPreviewData.slug}</code>
+                  <span className="text-[var(--muted)]">{t("migration.appSlug")}:</span>
+                  <code className="text-[var(--text)]">{appPreviewData.slug}</code>
                 </div>
               </div>
             ) : null}
 
-            <button
-              type="button"
-              className="secondary-button"
-              style={{ color: "var(--signal)", borderColor: "var(--signal)" }}
-              disabled={!appImportFile || busy}
-              onClick={handleExecuteAppImport}
-            >
-              {busy ? <RefreshCw size={15} className="animate-spin" /> : <Upload size={15} />}
-              {busy ? t("common.loading") : t("apps.importApp")}
-            </button>
-          </div>
+            <div className="mt-auto">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!appImportFile || busy}
+                loading={busy}
+                onClick={handleExecuteAppImport}
+                icon={<Upload size={14} />}
+              >
+                {t("apps.importApp")}
+              </Button>
+            </div>
+          </Card>
         </div>
       ) : null}
     </div>

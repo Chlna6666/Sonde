@@ -1,6 +1,7 @@
 import { Check, ChevronDown } from "lucide-react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import "../styles/preferences.css";
 
 export type SelectOption<T extends string> = {
   value: T;
@@ -92,7 +93,7 @@ export function CustomSelect<T extends string>({
         aria-activedescendant={open ? `${id}-option-${activeIndex}` : undefined}
         onClick={() => (open ? setOpen(false) : openMenu())}
         onKeyDown={handleKeyDown}
-        className={`inline-flex items-center justify-between gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--input-bg)] font-semibold text-[var(--text)] hover:bg-[var(--panel-hover)] hover:border-[var(--border-highlight)] active:scale-95 transition-all cursor-pointer ${
+        className={`inline-flex items-center justify-between gap-1.5 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--input-bg)] font-semibold text-[var(--text)] hover:bg-[var(--panel-hover)] hover:border-[var(--border-highlight)] active:translate-y-px transition-colors cursor-pointer ${
           compact ? "h-8 px-2.5 text-[11px]" : "h-9 px-3 text-xs"
         }`}
       >
@@ -112,7 +113,7 @@ export function CustomSelect<T extends string>({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: -4 }}
             transition={{ type: "spring", stiffness: 450, damping: 30 }}
-            className="absolute right-0 top-full mt-1.5 z-50 min-w-[140px] overflow-hidden rounded-2xl border border-[var(--border-highlight)] bg-[var(--bg-float)] p-1.5 shadow-2xl backdrop-blur-3xl"
+            className="absolute right-0 top-full mt-1.5 z-50 min-w-[140px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--bg-float)] p-1 shadow-xl"
             id={`${id}-listbox`}
             role="listbox"
             aria-label={label}
@@ -125,7 +126,7 @@ export function CustomSelect<T extends string>({
                   key={option.value}
                   role="option"
                   aria-selected={isSelected}
-                  className={`flex items-center justify-between gap-3 px-3 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-colors ${
+                  className={`flex items-center justify-between gap-3 px-3 py-2 rounded-[var(--radius-sm)] text-xs font-semibold cursor-pointer transition-colors ${
                     isSelected
                       ? "bg-[var(--signal-subtle)] text-[var(--signal)] font-bold"
                       : "text-[var(--text)] hover:bg-[var(--panel-hover)]"

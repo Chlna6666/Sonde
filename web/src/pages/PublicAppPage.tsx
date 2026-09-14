@@ -14,6 +14,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
 import { api } from "../lib/api";
+import { Button, Card, Badge } from "../components/ui";
 import { SplineAreaChart } from "../components/SplineAreaChart";
 import { DonutChart } from "../components/DonutChart";
 import { MultiLineChart, VersionSeriesData } from "../components/MultiLineChart";
@@ -80,6 +81,18 @@ type PublicAppData = {
   };
 };
 
+function publicHttpsUrl(value?: string | null): string | null {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:") return null;
+    if (parsed.username || parsed.password) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
 export function PublicAppPage() {
   const { slug } = useParams<{ slug: string }>();
   const { t } = useTranslation();
@@ -120,14 +133,17 @@ export function PublicAppPage() {
     );
   }
 
+  const githubUrl = publicHttpsUrl(data?.githubUrl);
+  const websiteUrl = publicHttpsUrl(data?.websiteUrl);
+
   if (error || !data) {
     return (
       <div className="min-h-screen grid place-items-center bg-[var(--bg)] p-6">
-        <div className="max-w-md w-full text-center p-8 rounded-2xl bg-[var(--panel)] border border-[var(--border)] shadow-xl">
+        <div className="max-w-md w-full text-center p-8 rounded-[var(--radius-xl)] bg-[var(--panel)] border border-[var(--border)]">
           <AppWindow size={40} className="mx-auto mb-4 text-[var(--muted)]" />
           <h2 className="text-lg font-bold text-[var(--text)] mb-2">{t("public.notFound")}</h2>
           <p className="text-xs text-[var(--muted)] font-mono">
-            Application slug: <code>{slug}</code>
+            {t("public.appSlug")} <code>{slug}</code>
           </p>
         </div>
       </div>
@@ -137,18 +153,18 @@ export function PublicAppPage() {
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex flex-col selection:bg-[var(--signal-subtle)] selection:text-[var(--signal)]">
       {/* Top Brand Header */}
-      <header className="sticky top-0 z-40 border-b border-[var(--border-soft)] bg-[var(--panel-strong)]/85 backdrop-blur-2xl px-6 py-3.5 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="h-7 w-7 rounded-lg bg-[var(--signal)] flex items-center justify-center font-black text-white text-xs shadow-xs">
-            S
+      <header className="sticky top-0 z-40 border-b border-[var(--border)] bg-[var(--bg-elevated)] px-6 py-3.5 flex items-center justify-between">
+        <div className="brand-lockup">
+          <div className="sonde-mark" aria-hidden="true">
+            <span />
           </div>
-          <span className="font-bold text-xs tracking-wider text-[var(--text)] uppercase">
-            Sonde Telemetry
+          <span className="font-bold text-xs tracking-[0.14em] text-[var(--text)] uppercase">
+            Sonde
           </span>
         </div>
 
         <div className="flex items-center gap-3">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-[var(--signal)]/30 bg-[var(--signal-subtle)] text-[var(--signal)] text-xs font-bold shadow-xs">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-[var(--radius-sm)] border border-[var(--signal)]/30 bg-[var(--signal-subtle)] text-[var(--signal)] text-xs font-bold uppercase tracking-wider">
             <Radio size={12} className="animate-pulse" />
             <span>{t("public.operational")}</span>
           </span>
@@ -158,10 +174,10 @@ export function PublicAppPage() {
       {/* Main Showcase Container */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8">
         {/* Hero App Card */}
-        <div className="rounded-3xl border border-[var(--border-soft)] bg-[var(--panel)] p-6 sm:p-8 shadow-sm mb-6 relative overflow-hidden">
+        <div className="rounded-[var(--radius-xl)] border border-[var(--card-border)] bg-[var(--card)] p-6 sm:p-8 mb-6 relative overflow-hidden">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
             <div className="flex items-start sm:items-center gap-4">
-              <div className="h-16 w-16 rounded-2xl bg-[var(--signal-subtle)] border border-[var(--signal)]/20 text-[var(--signal)] flex items-center justify-center text-xl font-black shadow-inner flex-shrink-0">
+              <div className="h-16 w-16 rounded-[var(--radius-md)] bg-[var(--signal-subtle)] border border-[var(--signal)]/20 text-[var(--signal)] flex items-center justify-center text-xl font-black flex-shrink-0">
                 {data.name.slice(0, 2).toUpperCase()}
               </div>
               <div>
@@ -169,8 +185,8 @@ export function PublicAppPage() {
                   <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[var(--text)] m-0">
                     {data.name}
                   </h1>
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border border-[var(--signal)]/30 bg-[var(--signal-subtle)] text-[10px] font-bold text-[var(--signal)]">
-                    Public
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-[var(--radius-sm)] border border-[var(--signal)]/30 bg-[var(--signal-subtle)] text-[10px] font-bold uppercase tracking-wider text-[var(--signal)]">
+                    {t("apps.public")}
                   </span>
                   {data.customHeader ? (
                     <span className="rounded-md border border-[var(--border)] bg-[var(--input-bg)] px-2 py-0.5 text-[10px] font-medium text-[var(--muted)]">
@@ -186,24 +202,24 @@ export function PublicAppPage() {
 
             {/* Action Links */}
             <div className="flex items-center gap-2.5 flex-wrap">
-              {data.githubUrl ? (
+              {githubUrl ? (
                 <a
-                  href={data.githubUrl}
+                  href={githubUrl}
                   target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[var(--border)] bg-[var(--input-bg)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--panel-hover)] active:scale-95 transition-all shadow-xs"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--input-bg)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--panel-hover)] transition-colors"
                 >
                   <Github size={14} />
                   <span>{t("public.visitGithub")}</span>
                   <ArrowUpRight size={12} className="opacity-60" />
                 </a>
               ) : null}
-              {data.websiteUrl ? (
+              {websiteUrl ? (
                 <a
-                  href={data.websiteUrl}
+                  href={websiteUrl}
                   target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[var(--signal)] text-xs font-bold text-white hover:brightness-110 active:scale-95 transition-all shadow-xs"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-[var(--radius-md)] bg-[var(--signal)] text-xs font-bold text-[var(--signal-ink)] hover:bg-[var(--primary-hover)] transition-colors"
                 >
                   <Globe size={14} />
                   <span>{t("public.visitWebsite")}</span>
@@ -214,7 +230,7 @@ export function PublicAppPage() {
           </div>
 
           {data.description ? (
-            <p className="mt-5 mb-0 text-xs sm:text-sm text-[var(--muted)] leading-relaxed bg-[var(--input-bg)] p-4 rounded-2xl border border-[var(--border-soft)]">
+            <p className="mt-5 mb-0 text-xs sm:text-sm text-[var(--muted)] leading-relaxed bg-[var(--input-bg)] p-4 rounded-[var(--radius-md)] border border-[var(--border-soft)]">
               {data.description}
             </p>
           ) : null}
@@ -290,7 +306,7 @@ export function PublicAppPage() {
 
         {/* 4 Metric Cards Ribbon */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-          <div className="rounded-2xl border border-[var(--border-soft)] bg-[var(--panel)] p-5 shadow-sm">
+          <Card className="p-4">
             <div className="flex items-center justify-between text-[var(--muted)] mb-2">
               <span className="text-xs font-medium">{t("stats.totalUsers")}</span>
               <Users size={16} />
@@ -298,9 +314,9 @@ export function PublicAppPage() {
             <div className="text-2xl font-extrabold font-mono text-[var(--text)]">
               {(data.stats.overview.totalUsers ?? data.stats.overview.activeUsers).toLocaleString()}
             </div>
-          </div>
+          </Card>
 
-          <div className="rounded-2xl border border-[var(--border-soft)] bg-[var(--panel)] p-5 shadow-sm">
+          <Card className="p-4">
             <div className="flex items-center justify-between text-[var(--muted)] mb-2">
               <span className="text-xs font-medium">{t("stats.dau")}</span>
               <Activity size={16} className="text-[var(--signal)]" />
@@ -308,9 +324,9 @@ export function PublicAppPage() {
             <div className="text-2xl font-extrabold font-mono text-[var(--signal)]">
               {(data.stats.overview.dau ?? data.stats.overview.activeUsers).toLocaleString()}
             </div>
-          </div>
+          </Card>
 
-          <div className="rounded-2xl border border-[var(--border-soft)] bg-[var(--panel)] p-5 shadow-sm">
+          <Card className="p-4">
             <div className="flex items-center justify-between text-[var(--muted)] mb-2">
               <span className="text-xs font-medium">{t("stats.mau")}</span>
               <Gauge size={16} className="text-[var(--amber)]" />
@@ -318,9 +334,9 @@ export function PublicAppPage() {
             <div className="text-2xl font-extrabold font-mono text-[var(--amber)]">
               {(data.stats.overview.mau ?? data.stats.overview.activeUsers).toLocaleString()}
             </div>
-          </div>
+          </Card>
 
-          <div className="rounded-2xl border border-[var(--border-soft)] bg-[var(--panel)] p-5 shadow-sm">
+          <Card className="p-4">
             <div className="flex items-center justify-between text-[var(--muted)] mb-2">
               <span className="text-xs font-medium">{t("overview.events")}</span>
               <Layers size={16} />
@@ -328,25 +344,24 @@ export function PublicAppPage() {
             <div className="text-2xl font-extrabold font-mono text-[var(--text)]">
               {data.stats.overview.totalEvents.toLocaleString()}
             </div>
-          </div>
+          </Card>
         </div>
 
         {/* Spacious 2x2 Visual Charts Grid */}
         {/* Row 1: Telemetry Stream & Version Distribution */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
           {/* Telemetry Launches Wave */}
-          <div className="rounded-2xl border border-[var(--border-soft)] bg-[var(--panel)] p-5 shadow-sm flex flex-col justify-between min-h-[320px]">
+          <Card className="p-5 flex flex-col justify-between min-h-[320px]">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-bold text-[var(--text)] m-0">{t("stats.overviewDash")}</h3>
-                <span className="rounded-md border border-[var(--signal)]/30 bg-[var(--signal-subtle)] px-2 py-0.5 text-[10px] font-bold text-[var(--signal)]">
+                <Badge variant="success" size="sm">
                   {t("public.launches")}
-                </span>
+                </Badge>
               </div>
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border border-[var(--signal)]/30 bg-[var(--signal-subtle)] text-[var(--signal)] text-[10px] font-bold">
-                <span className="h-1.5 w-1.5 rounded-full bg-[var(--signal)] animate-pulse" />
+              <Badge variant="success" dot pulse size="sm">
                 {t("stats.live")}
-              </span>
+              </Badge>
             </div>
             <div className="flex-1 w-full min-h-[230px]">
               <SplineAreaChart
@@ -356,35 +371,35 @@ export function PublicAppPage() {
                   secondaryValue: pt.users,
                 }))}
                 height="100%"
-                strokeColor="#f97316"
-                fillColor="#f97316"
+                strokeColor="#c8eca4"
+                fillColor="#c8eca4"
                 valueLabel={t("public.launches")}
                 secondaryLabel={t("public.devices")}
               />
             </div>
-          </div>
+          </Card>
 
           {/* Version Distribution Donut */}
-          <div className="h-full min-h-[320px]">
+          <Card className="p-5 h-full min-h-[320px]">
             <DonutChart
               items={data.stats.appVersions}
               title={t("stats.versionDonut")}
               badge={t("stats.appVersion")}
               height="100%"
             />
-          </div>
+          </Card>
         </div>
 
         {/* Row 2: Cross-Platform Builds & Multi-Version Growth */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
           {/* Cross-Platform System Builds */}
-          <div className="rounded-2xl border border-[var(--border-soft)] bg-[var(--panel)] p-5 shadow-sm flex flex-col justify-between min-h-[320px]">
+          <Card className="p-5 flex flex-col justify-between min-h-[320px]">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-bold text-[var(--text)] m-0">{t("stats.systemBuilds")}</h3>
-                <span className="rounded-md border border-[var(--amber)]/30 bg-[var(--amber-subtle)] px-2 py-0.5 text-[10px] font-bold text-[var(--amber)]">
+                <Badge variant="warning" size="sm">
                   跨平台 Build
-                </span>
+                </Badge>
               </div>
             </div>
             <div className="flex-1 w-full min-h-[230px]">
@@ -393,16 +408,16 @@ export function PublicAppPage() {
                 height="100%"
               />
             </div>
-          </div>
+          </Card>
 
           {/* Multi-Version Growth Curves */}
-          <div className="rounded-2xl border border-[var(--border-soft)] bg-[var(--panel)] p-5 shadow-sm flex flex-col justify-between min-h-[320px]">
+          <Card className="p-5 flex flex-col justify-between min-h-[320px]">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-bold text-[var(--text)] m-0">{t("stats.versionCurves")}</h3>
-                <span className="rounded-md border border-[#38bdf8]/30 bg-[#38bdf8]/10 px-2 py-0.5 text-[10px] font-bold text-[#38bdf8]">
+                <Badge variant="info" size="sm">
                   {t("stats.compare")}
-                </span>
+                </Badge>
               </div>
             </div>
             <div className="flex-1 w-full min-h-[230px]">
@@ -411,11 +426,11 @@ export function PublicAppPage() {
                 height="100%"
               />
             </div>
-          </div>
+          </Card>
         </div>
 
         {/* Operating Systems Matrix Card */}
-        <div className="rounded-2xl border border-[var(--border-soft)] bg-[var(--panel)] p-5 sm:p-6 shadow-sm mb-8">
+        <Card className="p-5 sm:p-6 mb-8">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-bold text-[var(--text)] m-0">{t("apps.osFamilies")}</h3>
@@ -426,43 +441,32 @@ export function PublicAppPage() {
 
             {/* Platform Family Filter Pills */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none flex-nowrap">
-              <button
-                type="button"
-                className={`px-2.5 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap flex-shrink-0 ${
-                  selectedOsFamily === "all"
-                    ? "bg-[var(--signal)] text-white shadow-xs font-bold"
-                    : "bg-[var(--input-bg)] text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border-soft)]"
-                }`}
+              <Button
+                variant={selectedOsFamily === "all" ? "default" : "secondary"}
+                size="sm"
                 onClick={() => setSelectedOsFamily("all")}
               >
                 <span>{t("apps.statsAll")}</span>
                 <span className="opacity-75 font-mono text-[10px] ml-1">
                   ({data.stats.operatingSystems.length})
                 </span>
-              </button>
+              </Button>
 
               {(data.stats.osFamilies ?? []).map((fam) => {
                 const isSelected = selectedOsFamily === fam.name;
-                const isLinux = fam.name === "Linux";
                 return (
-                  <button
+                  <Button
                     key={fam.name}
-                    type="button"
-                    className={`px-2.5 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
-                      isSelected
-                        ? isLinux
-                          ? "bg-[var(--signal)] text-white shadow-xs font-bold"
-                          : "bg-[var(--amber)] text-white shadow-xs font-bold"
-                        : "bg-[var(--input-bg)] text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border-soft)]"
-                    }`}
+                    variant={isSelected ? "default" : "secondary"}
+                    size="sm"
                     onClick={() => setSelectedOsFamily(isSelected ? "all" : fam.name)}
+                    icon={<PlatformIcon platform={fam.name} size={13} />}
                   >
-                    <PlatformIcon platform={fam.name} size={12} />
                     <span>{fam.name}</span>
-                    <span className="opacity-75 font-mono text-[10px]">
-                      {fam.count.toLocaleString()} ({fam.percentage}%)
+                    <span className="opacity-75 font-mono text-[10px] ml-1">
+                      ({fam.count.toLocaleString()})
                     </span>
-                  </button>
+                  </Button>
                 );
               })}
             </div>
@@ -499,7 +503,7 @@ export function PublicAppPage() {
               })
             )}
           </div>
-        </div>
+        </Card>
       </main>
 
       {/* Footer */}

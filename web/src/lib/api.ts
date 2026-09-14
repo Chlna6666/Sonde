@@ -2,7 +2,6 @@ export type ApiErrorBody = {
   code: string;
   message: string;
   challengeId?: string;
-  challengePrompt?: string;
   retryAfterSeconds?: number;
 };
 

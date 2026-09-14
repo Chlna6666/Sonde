@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
-  Activity,
   AppWindow,
   BellRing,
   ChevronRight,
@@ -11,18 +10,19 @@ import {
   HardDrive,
   LogOut,
   Menu,
-  Radio,
   Search,
   Settings,
   ShieldAlert,
   ShieldCheck,
   X,
-  RadioTower,
+  ScrollText,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { api } from "../lib/api";
 import type { User } from "../App";
 import { LocaleSelect, ThemeSelect } from "./PreferenceSelects";
+import { Badge } from "./ui/Badge";
+import { Button } from "./ui/Button";
 
 const navigation = [
   {
@@ -56,6 +56,14 @@ const navigation = [
     colorClass: "icon-squircle-blue",
     eyebrow: "explorer.eyebrow",
     title: "explorer.title",
+  },
+  {
+    to: "/logs",
+    label: "nav.logs",
+    Icon: ScrollText,
+    colorClass: "icon-squircle-indigo",
+    eyebrow: "logs.eyebrow",
+    title: "logs.title",
   },
   {
     to: "/alerts",
@@ -117,46 +125,38 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   };
 
   return (
-    <div className="flex min-h-screen w-full bg-[var(--bg)] text-[var(--text)] font-sans antialiased selection:bg-[var(--signal)] selection:text-white">
+    <div className="flex min-h-screen w-full bg-[var(--bg)] text-[var(--text)] antialiased selection:bg-[var(--signal)] selection:text-[var(--signal-ink)]">
       <a className="skip-link" href="#main-content">
-        Skip to main content
+        {t("shell.skipToContent")}
       </a>
 
-      {/* Desktop & Tablet Sidebar (Fixed 260px width with glassmorphism) */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-[var(--border-soft)] bg-[var(--bg-elevated)] p-4 backdrop-blur-2xl transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-[var(--border)] bg-[var(--bg-elevated)] p-3 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] lg:translate-x-0 ${
           mobileOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full"
         }`}
         aria-label="Primary navigation"
       >
-        {/* Brand Lockup Header */}
         <div className="flex items-center justify-between px-2 py-3 border-b border-[var(--border-soft)] flex-shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--signal)] text-white shadow-md shadow-[var(--signal)]/25 flex-shrink-0">
-              <RadioTower size={18} />
-              <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-white border-2 border-[var(--signal)] animate-ping" />
+          <div className="brand-lockup">
+            <div className="sonde-mark" aria-hidden="true">
+              <span />
             </div>
             <div className="min-w-0">
-              <strong className="block text-base font-extrabold tracking-tight text-[var(--text)] leading-none">
-                Sonde
-              </strong>
-              <small className="block text-[11px] font-medium text-[var(--muted)] truncate mt-1">
-                {t("brand.name")} Telemetry
-              </small>
+              <strong>Sonde</strong>
+              <small>Telemetry</small>
             </div>
           </div>
 
           <button
             type="button"
             onClick={() => setMobileOpen(false)}
-            className="lg:hidden p-1.5 rounded-lg text-[var(--muted)] hover:text-[var(--text)] cursor-pointer"
+            className="lg:hidden p-1.5 rounded-[var(--radius-sm)] text-[var(--muted)] hover:text-[var(--text)] cursor-pointer"
           >
             <X size={18} />
           </button>
         </div>
 
-        {/* Navigation links with Sliding Pill Active Indicator */}
-        <nav className="flex flex-col gap-1 my-4 flex-1 overflow-y-auto pr-1">
+        <nav className="flex flex-col gap-0.5 my-3 flex-1 overflow-y-auto pr-1">
           {navigation.map((item) => {
             const isActive =
               item.to === "/"
@@ -170,40 +170,31 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
                 to={item.to}
                 end={item.to === "/"}
                 onClick={() => setMobileOpen(false)}
-                className={`group relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-colors duration-150 ${
-                  isActive ? "text-[var(--text)] font-bold" : "text-[var(--muted)] hover:text-[var(--text)]"
+                className={`group relative flex items-center gap-3 px-2.5 py-2 rounded-[var(--radius-md)] text-xs font-semibold transition-colors duration-150 ${
+                  isActive ? "text-[var(--text)]" : "text-[var(--muted)] hover:text-[var(--text)]"
                 }`}
               >
-                {/* Active Sliding Pill Animation */}
                 {isActive ? (
                   <motion.div
                     layoutId="sidebar-active-pill"
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                    className="absolute inset-0 rounded-xl bg-[var(--panel-strong)] border border-[var(--border)] shadow-sm"
+                    transition={{ type: "spring", stiffness: 420, damping: 34 }}
+                    className="absolute inset-0 rounded-[var(--radius-md)] bg-[var(--signal-subtle)] border border-[var(--signal)]/25"
                   />
                 ) : null}
 
-                <span className={`relative z-10 p-1.5 rounded-lg ${colorClass}`}>
-                  <Icon size={16} />
+                <span className={`relative z-10 p-1 rounded-[var(--radius-sm)] ${colorClass}`}>
+                  <Icon size={15} />
                 </span>
 
                 <span className="relative z-10 flex-1 truncate">{t(item.label)}</span>
-
-                <ChevronRight
-                  size={14}
-                  className={`relative z-10 transition-transform duration-200 ${
-                    isActive ? "opacity-90 translate-x-0.5 text-[var(--signal)]" : "opacity-0 group-hover:opacity-40"
-                  }`}
-                />
               </NavLink>
             );
           })}
         </nav>
 
-        {/* User Card with Inline Logout */}
         <div className="mt-auto pt-3 border-t border-[var(--border-soft)] flex-shrink-0">
-          <div className="flex items-center gap-2.5 p-2 rounded-2xl bg-[var(--input-bg)] border border-[var(--border-soft)] hover:border-[var(--border)] transition-colors">
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[var(--signal-subtle)] border border-[var(--signal)]/30 text-[var(--signal)] font-bold text-xs flex-shrink-0">
+          <div className="flex items-center gap-2.5 p-2 rounded-[var(--radius-md)] bg-[var(--input-bg)] border border-[var(--border-soft)]">
+            <span className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] bg-[var(--signal-subtle)] border border-[var(--signal)]/30 text-[var(--signal)] font-bold text-xs flex-shrink-0">
               {user.username.slice(0, 1).toUpperCase()}
             </span>
             <div className="flex-1 min-w-0">
@@ -214,85 +205,75 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
                 {user.roles.includes("Super Admin") ? "Super Admin" : user.email}
               </small>
             </div>
-            <button
-              type="button"
-              className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger-subtle)] active:scale-95 transition-all flex-shrink-0 cursor-pointer"
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger-subtle)]"
               title={t("nav.logout")}
               aria-label={t("nav.logout")}
               onClick={logout}
-            >
-              <LogOut size={15} aria-hidden="true" />
-            </button>
+              icon={<LogOut size={14} aria-hidden="true" />}
+            />
           </div>
         </div>
       </aside>
 
-      {/* Mobile Drawer Overlay */}
       <AnimatePresence>
         {mobileOpen ? (
           <motion.button
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-30 bg-black/60 backdrop-blur-md lg:hidden border-0 cursor-pointer"
+            className="fixed inset-0 z-30 bg-black/55 lg:hidden border-0 cursor-pointer"
             aria-label="Close navigation menu"
             onClick={() => setMobileOpen(false)}
           />
         ) : null}
       </AnimatePresence>
 
-      {/* Main Workspace Area */}
       <div className="flex flex-1 flex-col min-w-0 lg:ml-64">
-        {/* Apple Translucent Topbar */}
-        <header className="sticky top-0 z-20 flex h-16 w-full items-center justify-between border-b border-[var(--border-soft)] bg-[var(--bg-elevated)] px-4 sm:px-6 lg:px-8 backdrop-blur-2xl flex-shrink-0">
-          {/* Left Side: Mobile Menu Button & Breadcrumb */}
+        <header className="sticky top-0 z-20 flex h-14 w-full items-center justify-between border-b border-[var(--border)] bg-[var(--bg-elevated)] px-4 sm:px-6 lg:px-8 flex-shrink-0">
           <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--panel)] text-[var(--text)] lg:hidden cursor-pointer active:scale-95 transition-all flex-shrink-0"
+            <Button
+              variant="secondary"
+              size="icon"
+              className="lg:hidden"
               aria-label={mobileOpen ? "Close menu" : "Open menu"}
               onClick={() => setMobileOpen((value) => !value)}
-            >
-              <Menu size={18} />
-            </button>
+              icon={<Menu size={16} />}
+            />
 
             <div className="flex items-center gap-2 min-w-0">
-              <span className={`p-1 rounded-lg ${currentNav.colorClass} hidden sm:inline-flex`}>
+              <span className={`p-1 rounded-[var(--radius-sm)] ${currentNav.colorClass} hidden sm:inline-flex`}>
                 <currentNav.Icon size={14} />
               </span>
-              <span className="text-xs font-semibold text-[var(--muted)] hidden md:inline truncate">
+              <span className="eyebrow hidden md:inline truncate">
                 {t(currentNav.eyebrow)}
               </span>
               <ChevronRight size={13} className="text-[var(--faint)] hidden md:inline" />
-              <h2 className="text-sm sm:text-base font-extrabold tracking-tight text-[var(--text)] truncate m-0">
+              <h2 className="text-sm sm:text-base font-bold tracking-tight text-[var(--text)] truncate m-0">
                 {t(currentNav.title)}
               </h2>
             </div>
           </div>
 
-          {/* Right Side: Live Ingestion Pulse + Controls */}
           <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-[var(--signal-subtle)] border border-[var(--signal)]/30 text-xs font-medium text-[var(--signal)]">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--signal)] opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-[var(--signal)]" />
-              </span>
-              <span className="font-semibold text-[11px]">System Live</span>
-            </div>
+            <Badge variant="success" dot pulse className="hidden sm:inline-flex py-1 px-2.5">
+              {t("shell.systemLive")}
+            </Badge>
 
             <ThemeSelect compact />
             <LocaleSelect compact />
           </div>
         </header>
 
-        {/* Content Viewport with Spring Page Transition */}
         <main id="main-content" className="flex-1 w-full min-w-0">
           <motion.div
             key={location.pathname}
-            initial={{ opacity: 0, y: 6 }}
+            initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             className="page-container"
           >
             <Outlet />

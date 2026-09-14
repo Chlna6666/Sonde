@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Modal } from "../components/Modal";
+import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input, EmptyState } from "../components/ui";
 import { api } from "../lib/api";
 
 type UserSummary = {
@@ -53,11 +54,15 @@ export function AccessPage() {
   const [assigningUser, setAssigningUser] = useState<UserSummary | null>(null);
   const [assignedAppIds, setAssignedAppIds] = useState<string[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string>("");
+  const [currentUserRoles, setCurrentUserRoles] = useState<string[]>([]);
 
   const loadData = () => {
     setLoading(true);
-    api<{ id: string }>("/api/v1/auth/me")
-      .then((me) => setCurrentUserId(me.id))
+    api<{ id: string; roles: string[] }>("/api/v1/auth/me")
+      .then((me) => {
+        setCurrentUserId(me.id);
+        setCurrentUserRoles(me.roles);
+      })
       .catch(() => {});
 
     Promise.all([
@@ -127,54 +132,54 @@ export function AccessPage() {
           <h1>{t("access.title")}</h1>
           <p>{t("access.subtitle")}</p>
         </div>
-        <button className="primary-button compact" onClick={() => setCreatingUser(true)}>
-          <UserPlus size={17} aria-hidden="true" />
+        <Button size="sm" onClick={() => setCreatingUser(true)} icon={<UserPlus size={15} aria-hidden="true" />}>
           {t("access.new")}
-        </button>
+        </Button>
       </header>
 
       {error ? (
-        <p className="form-error" role="alert">
+        <p className="text-xs text-[var(--danger)] mb-4 font-medium" role="alert">
           {error}
         </p>
       ) : null}
 
-      <div className="glass-panel overflow-hidden">
+      <div>
         {loading ? (
           <div className="p-8 text-center text-xs text-[var(--muted)]">
             {t("common.loading")}
           </div>
         ) : users.length === 0 ? (
-          <div className="empty-state">
-            <Users aria-hidden="true" />
-            <h2>{t("access.empty")}</h2>
-          </div>
+          <EmptyState
+            icon={<Users size={28} />}
+            title={t("access.empty")}
+            action={<Button size="sm" onClick={() => setCreatingUser(true)} icon={<UserPlus size={14} />}>{t("access.new")}</Button>}
+          />
         ) : (
-          <table className="w-full text-xs text-left border-collapse">
-            <thead>
-              <tr className="border-b border-[var(--border)] bg-[var(--panel-strong)]/60 text-[11px] font-bold text-[var(--muted)] uppercase tracking-wider">
-                <th className="py-3 px-4">{t("access.username")}</th>
-                <th className="py-3 px-4">{t("access.role")}</th>
-                <th className="py-3 px-4">{t("access.assignedApps")}</th>
-                <th className="py-3 px-4">{t("apps.status")}</th>
-                <th className="py-3 px-4">{t("apps.createdAt")}</th>
-                <th className="py-3 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("access.username")}</TableHead>
+                <TableHead>{t("access.role")}</TableHead>
+                <TableHead>{t("access.assignedApps")}</TableHead>
+                <TableHead>{t("apps.status")}</TableHead>
+                <TableHead>{t("apps.createdAt")}</TableHead>
+                <TableHead className="text-right">{t("common.actions")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {users.map((user) => {
                 const isAdmin = user.roles.some(
                   (r) => r === "Super Admin" || r === "Admin"
                 );
                 return (
-                  <tr key={user.id} className="border-b border-[var(--border-soft)] hover:bg-[var(--panel-hover)] transition-colors">
-                    <td className="py-3 px-4">
+                  <TableRow key={user.id}>
+                    <TableCell>
                       <div className="flex items-center gap-3">
                         <div
-                          className={`w-8 h-8 rounded-full border flex items-center justify-center text-xs font-bold flex-shrink-0 ${
+                          className={`w-8 h-8 rounded-[var(--radius-sm)] border flex items-center justify-center text-xs font-bold flex-shrink-0 ${
                             isAdmin
                               ? "bg-[var(--signal-subtle)] border-[var(--signal)]/30 text-[var(--signal)]"
-                              : "bg-[var(--panel-strong)] border-[var(--border)] text-[var(--text)]"
+                              : "bg-[var(--input-bg)] border-[var(--border)] text-[var(--text)]"
                           }`}
                         >
                           {user.username.slice(0, 2).toUpperCase()}
@@ -185,9 +190,9 @@ export function AccessPage() {
                               {user.username}
                             </strong>
                             {user.id === currentUserId ? (
-                              <span className="text-[10px] font-bold text-[var(--signal)]">
-                                (You)
-                              </span>
+                              <Badge variant="success" size="sm">
+                                {t("access.you")}
+                              </Badge>
                             ) : null}
                           </div>
                           <span className="text-[11px] text-[var(--muted)] truncate block">
@@ -195,97 +200,92 @@ export function AccessPage() {
                           </span>
                         </div>
                       </div>
-                    </td>
-                    <td className="py-3 px-4">
+                    </TableCell>
+                    <TableCell>
                       {isAdmin ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-[var(--signal-subtle)] text-[var(--signal)] border border-[var(--signal)]/30">
-                          <Shield size={13} className="flex-shrink-0" />
+                        <Badge variant="success" size="sm">
+                          <Shield size={12} className="flex-shrink-0" />
                           <span>{t("access.admin")}</span>
-                        </span>
+                        </Badge>
                       ) : (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-[var(--panel-strong)] text-[var(--muted)] border border-[var(--border)]">
-                          <UserCheck size={13} className="flex-shrink-0" />
+                        <Badge variant="outline" size="sm">
+                          <UserCheck size={12} className="flex-shrink-0" />
                           <span>{t("access.user")}</span>
-                        </span>
+                        </Badge>
                       )}
-                    </td>
-                    <td className="py-3 px-4">
+                    </TableCell>
+                    <TableCell>
                       {isAdmin ? (
                         <span className="text-xs font-bold text-[var(--signal)] font-sans">
                           {t("access.allApps")}
                         </span>
                       ) : (
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl border border-[var(--border)] bg-[var(--input-bg)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--panel-hover)] transition-colors cursor-pointer"
+                        <Button
+                          variant="secondary"
+                          size="sm"
                           onClick={() => openAppAssignment(user)}
+                          icon={<AppWindow size={13} />}
                         >
-                          <AppWindow size={13} />
                           <span>{user.assignedAppCount} {t("nav.applications")}</span>
-                        </button>
+                        </Button>
                       )}
-                    </td>
-                    <td className="py-3 px-4">
+                    </TableCell>
+                    <TableCell>
                       {user.active ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-[var(--signal-subtle)] text-[var(--signal)] border border-[var(--signal)]/30">
-                          <CheckCircle2 size={13} className="flex-shrink-0" />
+                        <Badge variant="success" size="sm" dot>
                           <span>{t("apps.active")}</span>
-                        </span>
+                        </Badge>
                       ) : (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-[var(--danger-subtle)] text-[var(--danger)] border border-[var(--danger)]/30">
-                          <ShieldAlert size={13} className="flex-shrink-0" />
-                          <span>Disabled</span>
-                        </span>
+                        <Badge variant="danger" size="sm" dot>
+                          <span>{t("access.disabled")}</span>
+                        </Badge>
                       )}
-                    </td>
-                    <td className="py-3 px-4 text-xs font-mono text-[var(--muted)] whitespace-nowrap">
+                    </TableCell>
+                    <TableCell className="text-xs font-mono text-[var(--muted)] whitespace-nowrap">
                       {new Intl.DateTimeFormat(undefined, {
                         dateStyle: "medium",
                       }).format(user.createdAt)}
-                    </td>
-                    <td className="py-3 px-4 text-right">
+                    </TableCell>
+                    <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
-                        <button
-                          type="button"
-                          className="p-1.5 rounded-lg text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--panel-hover)] transition-colors cursor-pointer"
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
                           title={t("access.manageApps")}
                           onClick={() => openAppAssignment(user)}
-                        >
-                          <AppWindow size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className="p-1.5 rounded-lg text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--panel-hover)] transition-colors cursor-pointer"
+                          icon={<AppWindow size={14} />}
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
                           title={t("access.resetPassword")}
                           onClick={() => setResettingUser(user)}
-                        >
-                          <KeyRound size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className="p-1.5 rounded-lg text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--panel-hover)] transition-colors cursor-pointer"
+                          icon={<KeyRound size={14} />}
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
                           title={t("access.editUser")}
                           onClick={() => setEditingUser(user)}
-                        >
-                          <Settings size={14} />
-                        </button>
+                          icon={<Settings size={14} />}
+                        />
                         {user.id !== currentUserId ? (
-                          <button
-                            type="button"
-                            className="p-1.5 rounded-lg text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger-subtle)] transition-colors cursor-pointer"
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            className="hover:text-[var(--danger)] hover:bg-[var(--danger-subtle)]"
                             title={t("access.deleteUser")}
                             onClick={() => handleDeleteUser(user)}
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                            icon={<Trash2 size={14} />}
+                          />
                         ) : null}
                       </div>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 );
               })}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
       </div>
 
@@ -293,6 +293,7 @@ export function AccessPage() {
       {creatingUser ? (
         <CreateUserModal
           applications={applications}
+          canAssignPrivileged={currentUserRoles.includes("Super Admin")}
           onClose={() => setCreatingUser(false)}
           onSuccess={() => {
             setCreatingUser(false);
@@ -305,6 +306,7 @@ export function AccessPage() {
       {editingUser ? (
         <EditUserModal
           user={editingUser}
+          canAssignPrivileged={currentUserRoles.includes("Super Admin")}
           onClose={() => setEditingUser(null)}
           onSuccess={() => {
             setEditingUser(null);
@@ -348,11 +350,11 @@ export function AccessPage() {
           }
         >
           <p className="text-xs text-muted" style={{ margin: 0 }}>
-            Select which applications <strong>{assigningUser.username}</strong> can view, manage API keys for, and inspect telemetry stats.
+            {t("access.appAccessDesc")}
           </p>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "300px", overflowY: "auto" }}>
             {applications.length === 0 ? (
-              <p className="text-xs text-muted">No applications created yet.</p>
+              <p className="text-xs text-muted">{t("access.noApps")}</p>
             ) : (
               applications.map((app) => {
                 const isChecked = assignedAppIds.includes(app.id);
@@ -400,10 +402,12 @@ export function AccessPage() {
 
 function CreateUserModal({
   applications,
+  canAssignPrivileged,
   onClose,
   onSuccess,
 }: {
   applications: Application[];
+  canAssignPrivileged: boolean;
   onClose: () => void;
   onSuccess: () => void;
 }) {
@@ -466,8 +470,8 @@ function CreateUserModal({
             <input
               name="password"
               type={showPassword ? "text" : "password"}
-              minLength={8}
-              placeholder="Min 8 characters"
+              minLength={15}
+              placeholder={t("access.min15Chars")}
               required
             />
             <button
@@ -497,7 +501,12 @@ function CreateUserModal({
             onChange={(e) => setSelectedRole(e.target.value)}
           >
             <option value="User">{t("access.user")}</option>
-            <option value="Super Admin">{t("access.admin")}</option>
+            {canAssignPrivileged ? (
+              <>
+                <option value="Admin">{t("access.admin")}</option>
+                <option value="Super Admin">{t("access.superAdmin")}</option>
+              </>
+            ) : null}
           </select>
         </label>
 
@@ -552,16 +561,22 @@ function CreateUserModal({
 
 function EditUserModal({
   user,
+  canAssignPrivileged,
   onClose,
   onSuccess,
 }: {
   user: UserSummary;
+  canAssignPrivileged: boolean;
   onClose: () => void;
   onSuccess: () => void;
 }) {
   const { t } = useTranslation();
-  const isAdmin = user.roles.some((r) => r === "Super Admin" || r === "Admin");
-  const [selectedRole, setSelectedRole] = useState(isAdmin ? "Super Admin" : "User");
+  const initialRole = user.roles.includes("Super Admin")
+    ? "Super Admin"
+    : user.roles.includes("Admin")
+      ? "Admin"
+      : "User";
+  const [selectedRole, setSelectedRole] = useState(initialRole);
   const [active, setActive] = useState(user.active);
   const [error, setError] = useState("");
 
@@ -578,7 +593,7 @@ function EditUserModal({
         body: JSON.stringify({
           email,
           username,
-          role: selectedRole,
+          ...(canAssignPrivileged ? { role: selectedRole } : {}),
           active,
         }),
       });
@@ -608,16 +623,19 @@ function EditUserModal({
           <input name="email" type="email" defaultValue={user.email} required />
         </label>
 
-        <label className="field">
-          <span>{t("access.role")}</span>
-          <select
-            value={selectedRole}
-            onChange={(e) => setSelectedRole(e.target.value)}
-          >
-            <option value="User">{t("access.user")}</option>
-            <option value="Super Admin">{t("access.admin")}</option>
-          </select>
-        </label>
+        {canAssignPrivileged ? (
+          <label className="field">
+            <span>{t("access.role")}</span>
+            <select
+              value={selectedRole}
+              onChange={(e) => setSelectedRole(e.target.value)}
+            >
+              <option value="User">{t("access.user")}</option>
+              <option value="Admin">{t("access.admin")}</option>
+              <option value="Super Admin">{t("access.superAdmin")}</option>
+            </select>
+          </label>
+        ) : null}
 
         <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", fontSize: "0.78rem" }}>
           <input
@@ -684,8 +702,8 @@ function ResetPasswordModal({
             <input
               name="newPassword"
               type={showPassword ? "text" : "password"}
-              minLength={8}
-              placeholder="Min 8 characters"
+              minLength={15}
+              placeholder={t("access.min15Chars")}
               required
               autoFocus
             />

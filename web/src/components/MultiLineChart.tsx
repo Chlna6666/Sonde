@@ -16,14 +16,14 @@ export type VersionSeriesData = {
 };
 
 const PALETTE = [
-  "#22c55e",
-  "#3b82f6",
-  "#f59e0b",
-  "#ec4899",
-  "#a855f7",
-  "#14b8a6",
-  "#f97316",
-  "#6366f1",
+  "#c8eca4",
+  "#7ec8c4",
+  "#e0b46a",
+  "#d98b7a",
+  "#c4b08a",
+  "#8fb4c8",
+  "#9fd47a",
+  "#4aa8a4",
 ];
 
 export function MultiLineChart({
@@ -89,7 +89,7 @@ export function MultiLineChart({
                 if (active && payload && payload.length) {
                   const activeVersions = payload.filter((p) => Number(p.value) > 0);
                   return (
-                    <div className="rounded-xl border border-[var(--border)] bg-[var(--panel-strong)] p-2.5 shadow-xl backdrop-blur-xl text-xs space-y-1 max-w-[200px]">
+                    <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-float)] p-2.5 shadow-xl text-xs space-y-1 max-w-[200px]">
                       <p className="font-bold text-[var(--text)] border-b border-[var(--border-soft)] pb-1">
                         {payload[0]?.payload?.fullDay || label}
                       </p>

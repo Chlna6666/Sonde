@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Activity,
   Clock3,
@@ -49,6 +50,7 @@ type Props = {
 };
 
 export function ActivityStatsPanel({ activity }: Props) {
+  const { t } = useTranslation();
   const { summary, trend } = activity;
   const activeTrend = trend.map((point) => ({
     bucket: point.bucket,
@@ -67,14 +69,14 @@ export function ActivityStatsPanel({ activity }: Props) {
         <div>
           <div className="flex items-center gap-2">
             <Activity size={16} className="text-[var(--signal)]" />
-            <h3 style={{ margin: 0 }}>在线行为与累计统计</h3>
+            <h3 style={{ margin: 0 }}>{t("activity.title")}</h3>
           </div>
           <p className="text-[11px] text-[var(--muted)]" style={{ margin: "5px 0 0" }}>
-            仅使用 Sonde 服务端观测到的可信活动间隔计算在线时长与 Session；历史导入仅计活跃设备，不反推在线时间。
+            {t("activity.subtitle")}
           </p>
         </div>
         <span className="status-chip">
-          <i /> 服务端权威统计
+          <i /> {t("activity.authoritative")}
         </span>
       </div>
 
@@ -85,22 +87,22 @@ export function ActivityStatsPanel({ activity }: Props) {
           gap: "10px",
         }}
       >
-        <MetricCard icon={<Clock3 size={14} />} label="窗口在线时长" value={formatDuration(summary.activeMillis)} />
-        <MetricCard icon={<History size={14} />} label="累计在线时长" value={formatDuration(summary.lifetimeActiveMillis)} />
-        <MetricCard icon={<Waypoints size={14} />} label="窗口 Session" value={formatCount(summary.sessions)} />
-        <MetricCard icon={<TimerReset size={14} />} label="累计 Session" value={formatCount(summary.lifetimeSessions)} />
-        <MetricCard icon={<Gauge size={14} />} label="平均 Session" value={formatDuration(summary.averageSessionMillis)} />
+        <MetricCard icon={<Clock3 size={14} />} label={t("activity.windowActiveTime")} value={formatDuration(summary.activeMillis)} />
+        <MetricCard icon={<History size={14} />} label={t("activity.cumulativeActiveTime")} value={formatDuration(summary.lifetimeActiveMillis)} />
+        <MetricCard icon={<Waypoints size={14} />} label={t("activity.windowSessions")} value={formatCount(summary.sessions)} />
+        <MetricCard icon={<TimerReset size={14} />} label={t("activity.cumulativeSessions")} value={formatCount(summary.lifetimeSessions)} />
+        <MetricCard icon={<Gauge size={14} />} label={t("activity.avgSession")} value={formatDuration(summary.averageSessionMillis)} />
         <MetricCard
           icon={<UsersRound size={14} />}
-          label="设备平均在线"
+          label={t("activity.avgActivePerDevice")}
           value={formatDuration(summary.averageActiveMillisPerDevice)}
         />
         <MetricCard icon={<Radio size={14} />} label="DAU / MAU" value={`${formatPercent(summary.stickinessPct)}%`} />
         <MetricCard
           icon={<Activity size={14} />}
-          label="在线测量覆盖率"
+          label={t("activity.coverage")}
           value={`${formatPercent(summary.measurementCoveragePct)}%`}
-          detail={`${formatCount(summary.measuredDevices)} 台有可信时长样本`}
+          detail={t("activity.coverageDetail", { count: formatCount(summary.measuredDevices) })}
         />
       </div>
 
@@ -114,7 +116,7 @@ export function ActivityStatsPanel({ activity }: Props) {
             background: "var(--input-bg)",
           }}
         >
-          在线时长均值只以产生过可信连续活动间隔的设备为样本；当前覆盖率为 {formatPercent(summary.measurementCoveragePct)}%。
+          {t("activity.coverageHint", { pct: formatPercent(summary.measurementCoveragePct) })}
         </div>
       ) : null}
 
@@ -126,20 +128,22 @@ export function ActivityStatsPanel({ activity }: Props) {
         }}
       >
         <CumulativeChart
-          title="累计在线时长"
+          title={t("activity.chartActiveTitle")}
           data={activeTrend}
           formatter={formatDuration}
           axisFormatter={compactDuration}
-          windowLabel="窗口累计"
-          lifetimeLabel="生命周期累计"
+          windowLabel={t("activity.chartWindow")}
+          lifetimeLabel={t("activity.chartLifetime")}
+          emptyLabel={t("activity.noData")}
         />
         <CumulativeChart
-          title="累计 Session"
+          title={t("activity.chartSessionTitle")}
           data={sessionTrend}
           formatter={formatCount}
           axisFormatter={compactNumber}
-          windowLabel="窗口累计"
-          lifetimeLabel="生命周期累计"
+          windowLabel={t("activity.chartWindow")}
+          lifetimeLabel={t("activity.chartLifetime")}
+          emptyLabel={t("activity.noData")}
         />
       </div>
     </section>
@@ -202,6 +206,7 @@ function CumulativeChart({
   axisFormatter,
   windowLabel,
   lifetimeLabel,
+  emptyLabel = "暂无可信在线数据",
 }: {
   title: string;
   data: Array<{ bucket: string; window: number; lifetime: number }>;
@@ -209,6 +214,7 @@ function CumulativeChart({
   axisFormatter: (value: number) => string;
   windowLabel: string;
   lifetimeLabel: string;
+  emptyLabel?: string;
 }) {
   return (
     <div
@@ -228,7 +234,7 @@ function CumulativeChart({
         </div>
       </div>
       {data.length === 0 ? (
-        <div className="h-[180px] flex items-center justify-center text-xs text-[var(--muted)]">暂无可信在线数据</div>
+        <div className="h-[180px] flex items-center justify-center text-xs text-[var(--muted)]">{emptyLabel}</div>
       ) : (
         <div style={{ width: "100%", height: 190 }}>
           <ResponsiveContainer width="100%" height="100%">

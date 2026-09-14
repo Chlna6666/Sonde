@@ -1,12 +1,12 @@
 import { FormEvent, useRef, useState, type InputHTMLAttributes, type Ref } from "react";
-import { ArrowLeft, ArrowRight, KeyRound, RadioTower, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, KeyRound, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
 import type { User } from "../App";
 import { LocaleSelect, ThemeSelect } from "../components/PreferenceSelects";
 import { ApiError, api } from "../lib/api";
 
-type Challenge = { id: string; prompt: string };
+type Challenge = { id: string };
 
 type LoginResponse = User | { requires2fa: true; tempToken: string };
 
@@ -17,7 +17,6 @@ export function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
   const [twoFactorToken, setTwoFactorToken] = useState<string | null>(null);
   const [twoFactorCode, setTwoFactorCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const challengeInput = useRef<HTMLInputElement>(null);
   const twoFactorInput = useRef<HTMLInputElement>(null);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -34,7 +33,6 @@ export function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
           password: form.get("password"),
           website: form.get("website"),
           challengeId: challenge?.id,
-          challengeResponse: form.get("challengeResponse"),
         }),
       });
 
@@ -51,11 +49,9 @@ export function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
       if (
         cause instanceof ApiError &&
         cause.body.code === "challenge_required" &&
-        cause.body.challengeId &&
-        cause.body.challengePrompt
+        cause.body.challengeId
       ) {
-        setChallenge({ id: cause.body.challengeId, prompt: cause.body.challengePrompt });
-        queueMicrotask(() => challengeInput.current?.focus());
+        setChallenge({ id: cause.body.challengeId });
       }
       if (
         cause instanceof ApiError &&
@@ -97,31 +93,22 @@ export function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
   }
 
   return (
-    <main className="relative flex min-h-screen w-full items-center justify-center p-4 bg-[radial-gradient(ellipse_at_center,var(--panel-strong)_0%,var(--bg)_100%)] overflow-hidden">
-      {/* Background Concentric Radar Rings */}
-      <div className="pointer-events-none absolute flex items-center justify-center text-[var(--signal)]/15">
-        <div className="absolute h-[640px] w-[640px] rounded-full border border-current opacity-30 animate-pulse" />
-        <div className="absolute h-[460px] w-[460px] rounded-full border border-current opacity-50" />
-        <div className="absolute h-[280px] w-[280px] rounded-full border border-current opacity-70" />
-        <RadioTower size={48} className="text-[var(--signal)]/25" />
-      </div>
-
-      {/* Glassmorphic Login Card */}
+    <main className="relative flex min-h-screen w-full items-center justify-center p-4 overflow-hidden">
       <motion.section
-        initial={{ opacity: 0, scale: 0.95, y: 14 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        transition={{ type: "spring", stiffness: 420, damping: 32 }}
-        className="relative z-10 w-full max-w-md rounded-3xl border border-[var(--border)] bg-[var(--bg-elevated)]/90 p-7 sm:p-8 shadow-2xl backdrop-blur-3xl transition-all"
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+        className="relative z-10 w-full max-w-md rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-elevated)] p-7 sm:p-8"
         aria-labelledby="login-title"
       >
-        {/* Card Header: Brand + Compact Theme/Locale Controls */}
         <div className="flex items-center justify-between border-b border-[var(--border-soft)] pb-4 mb-6">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--signal)] text-white shadow-sm flex-shrink-0">
-              <span className="h-3 w-3 rounded-sm bg-white" />
+          <div className="brand-lockup">
+            <div className="sonde-mark" aria-hidden="true">
+              <span />
             </div>
             <div>
-              <strong className="block text-sm font-bold tracking-tight text-[var(--text)] leading-none">Sonde</strong>
+              <strong>Sonde</strong>
+              <small>Telemetry</small>
             </div>
           </div>
 
@@ -132,12 +119,11 @@ export function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
         </div>
 
         {twoFactorToken ? (
-          /* 2FA Step Form */
           <div>
             <div className="mb-6">
               <div className="flex items-center gap-2 text-[var(--signal)] mb-1">
-                <KeyRound size={20} />
-                <span className="text-xs font-bold uppercase tracking-wider">Two-Factor Auth</span>
+                <KeyRound size={16} />
+                <span className="eyebrow">{t("login.twoFactorTitle")}</span>
               </div>
               <h1 id="login-title" className="text-xl sm:text-2xl font-bold tracking-tight text-[var(--text)]">
                 {t("login.twoFactorTitle")}
@@ -161,19 +147,19 @@ export function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
                   placeholder="123456"
                   value={twoFactorCode}
                   onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  className="w-full text-center text-2xl tracking-[0.5em] font-mono font-bold rounded-xl border border-[var(--border)] bg-[var(--input-bg)] px-3.5 py-3 text-[var(--text)] outline-none focus:border-[var(--signal)] focus:ring-2 focus:ring-[var(--signal)]/20 transition-all"
+                  className="w-full text-center text-2xl tracking-[0.4em] font-mono font-bold rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--input-bg)] px-3.5 py-3 text-[var(--text)] outline-none focus:border-[var(--signal)] focus:ring-2 focus:ring-[var(--signal)]/20 transition-colors"
                 />
               </label>
 
               {error ? (
-                <p className="text-xs text-[var(--danger)] bg-[var(--danger-subtle)] border border-[var(--danger)]/20 p-2.5 rounded-xl font-medium" role="alert">
+                <p className="text-xs text-[var(--danger)] bg-[var(--danger-subtle)] border border-[var(--danger)]/20 p-2.5 rounded-[var(--radius-md)] font-medium" role="alert">
                   {error}
                 </p>
               ) : null}
 
               <button
                 type="submit"
-                className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--signal)] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[var(--signal)]/25 hover:brightness-110 active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50 mt-2"
+                className="primary-button"
                 disabled={submitting || twoFactorCode.length < 6}
               >
                 {submitting ? t("common.loading") : t("login.twoFactorSubmit")}
@@ -194,15 +180,13 @@ export function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
             </form>
           </div>
         ) : (
-          /* Primary Username & Password Form */
           <div>
-            {/* Title & System Status */}
             <div className="mb-6">
               <h1 id="login-title" className="text-xl sm:text-2xl font-bold tracking-tight text-[var(--text)]">
                 {t("login.title")}
               </h1>
               <p className="mt-1.5 flex items-center gap-2 text-xs text-[var(--muted)]">
-                <span className="h-2 w-2 rounded-full bg-[var(--signal)] shadow-[0_0_8px_var(--signal)]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-[var(--signal)]" />
                 {t("login.available")}
               </p>
             </div>
@@ -215,33 +199,24 @@ export function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
               </label>
 
               {challenge ? (
-                <div className="rounded-xl border border-[var(--amber)]/30 bg-[var(--amber-subtle)] p-3 text-xs space-y-2">
+                <div className="rounded-[var(--radius-md)] border border-[var(--amber)]/30 bg-[var(--amber-subtle)] p-3 text-xs space-y-2">
                   <div className="flex items-center gap-2 text-[var(--amber)] font-bold">
                     <ShieldCheck size={16} aria-hidden="true" />
                     <span>{t("login.verification")}</span>
                   </div>
                   <p className="text-[var(--muted)]">{t("login.verificationHint")}</p>
-                  <output className="block font-mono font-bold text-center text-sm py-1 bg-[var(--panel-strong)] rounded-lg border border-[var(--border)]">
-                    {challenge.prompt}
-                  </output>
-                  <Field
-                    ref={challengeInput}
-                    label={t("login.verificationResponse")}
-                    name="challengeResponse"
-                    autoComplete="off"
-                  />
                 </div>
               ) : null}
 
               {error ? (
-                <p id="login-error" className="text-xs text-[var(--danger)] bg-[var(--danger-subtle)] border border-[var(--danger)]/20 p-2.5 rounded-xl font-medium" role="alert">
+                <p id="login-error" className="text-xs text-[var(--danger)] bg-[var(--danger-subtle)] border border-[var(--danger)]/20 p-2.5 rounded-[var(--radius-md)] font-medium" role="alert">
                   {error}
                 </p>
               ) : null}
 
               <button
                 type="submit"
-                className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--signal)] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[var(--signal)]/25 hover:brightness-110 active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50 mt-2"
+                className="primary-button"
                 disabled={submitting}
               >
                 {submitting ? t("common.loading") : t("login.submit")}
@@ -267,7 +242,7 @@ const Field = function Field({
         {...props}
         required
         ref={ref}
-        className="w-full rounded-xl border border-[var(--border)] bg-[var(--input-bg)] px-3.5 py-2.5 text-xs sm:text-sm text-[var(--text)] outline-none focus:border-[var(--signal)] focus:ring-2 focus:ring-[var(--signal)]/20 transition-all"
+        className="w-full rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--input-bg)] px-3.5 py-2.5 text-xs sm:text-sm text-[var(--text)] outline-none focus:border-[var(--signal)] focus:ring-2 focus:ring-[var(--signal)]/20 transition-colors"
       />
     </label>
   );

@@ -21,7 +21,7 @@ test("custom select exposes listbox semantics without a native select", () => {
   expect(screen.getByRole("option", { name: "System" })).toHaveAttribute("aria-selected", "true");
 });
 
-test("custom select supports keyboard selection", () => {
+test("custom select supports keyboard selection", async () => {
   const onChange = vi.fn();
   render(<CustomSelect label="Theme" value="auto" options={options} onChange={onChange} />);
   const trigger = screen.getByRole("combobox", { name: "Theme" });
@@ -29,5 +29,5 @@ test("custom select supports keyboard selection", () => {
   fireEvent.keyDown(trigger, { key: "ArrowDown" });
   fireEvent.keyDown(trigger, { key: "Enter" });
   expect(onChange).toHaveBeenCalledWith("light");
-  expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  expect(trigger).toHaveAttribute("aria-expanded", "false");
 });

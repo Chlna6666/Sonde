@@ -120,23 +120,23 @@ export function BuildBarChart({
       <div className="flex items-center gap-2 overflow-x-auto pb-1.5 mb-2 scrollbar-none flex-nowrap">
         <button
           type="button"
-          className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+          className={`px-3 py-1 rounded-[var(--radius-sm)] text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
             activeFamily === "all"
-              ? "bg-[var(--signal)] text-white shadow-xs font-bold"
+              ? "bg-[var(--signal)] text-[var(--signal-ink)] font-bold"
               : "bg-[var(--input-bg)] text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border-soft)]"
           }`}
           onClick={() => setActiveFamily("all")}
         >
-          <span>全部系统</span>
+          <span>{t("builds.allSystems")}</span>
           <span className="opacity-75 font-mono text-[10px]">({items.length})</span>
         </button>
 
         {hasWindows ? (
           <button
             type="button"
-            className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+            className={`px-3 py-1 rounded-[var(--radius-sm)] text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
               activeFamily === "windows"
-                ? "bg-[#38bdf8] text-white shadow-xs font-bold"
+                ? "bg-[var(--blue)] text-[var(--signal-ink)] font-bold"
                 : "bg-[var(--input-bg)] text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border-soft)]"
             }`}
             onClick={() => setActiveFamily(activeFamily === "windows" ? "all" : "windows")}
@@ -150,9 +150,9 @@ export function BuildBarChart({
         {hasLinux ? (
           <button
             type="button"
-            className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+            className={`px-3 py-1 rounded-[var(--radius-sm)] text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
               activeFamily === "linux"
-                ? "bg-[#22c55e] text-white shadow-xs font-bold"
+                ? "bg-[var(--signal)] text-[var(--signal-ink)] font-bold"
                 : "bg-[var(--input-bg)] text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border-soft)]"
             }`}
             onClick={() => setActiveFamily(activeFamily === "linux" ? "all" : "linux")}
@@ -166,9 +166,9 @@ export function BuildBarChart({
         {hasMac ? (
           <button
             type="button"
-            className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+            className={`px-3 py-1 rounded-[var(--radius-sm)] text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
               activeFamily === "macos"
-                ? "bg-[#a855f7] text-white shadow-xs font-bold"
+                ? "bg-[var(--purple)] text-[var(--signal-ink)] font-bold"
                 : "bg-[var(--input-bg)] text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border-soft)]"
             }`}
             onClick={() => setActiveFamily(activeFamily === "macos" ? "all" : "macos")}
@@ -182,9 +182,9 @@ export function BuildBarChart({
         {hasMobile ? (
           <button
             type="button"
-            className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+            className={`px-3 py-1 rounded-[var(--radius-sm)] text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
               activeFamily === "mobile"
-                ? "bg-[#f43f5e] text-white shadow-xs font-bold"
+                ? "bg-[var(--danger)] text-white font-bold"
                 : "bg-[var(--input-bg)] text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border-soft)]"
             }`}
             onClick={() => setActiveFamily(activeFamily === "mobile" ? "all" : "mobile")}
@@ -233,7 +233,7 @@ export function BuildBarChart({
                 if (active && payload && payload.length) {
                   const item = payload[0].payload;
                   return (
-                    <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] p-3 shadow-xl backdrop-blur-xl text-xs space-y-1.5 min-w-[150px]">
+                    <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-float)] p-3 shadow-xl text-xs space-y-1.5 min-w-[150px]">
                       <div className="flex items-center gap-1.5 font-bold text-[var(--text)]">
                         <PlatformIcon platform={item.name} size={14} />
                         <span>{item.name}</span>
@@ -243,7 +243,7 @@ export function BuildBarChart({
                         <strong style={{ color: item.fill }}>{item.count?.toLocaleString()}</strong>
                       </div>
                       <div className="flex items-center justify-between gap-3 font-mono text-[10px] text-[var(--muted)]">
-                        <span>占比:</span>
+                        <span>{t("builds.share")}</span>
                         <span>{item.percentage}%</span>
                       </div>
                     </div>

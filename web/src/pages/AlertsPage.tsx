@@ -16,6 +16,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
 import { CustomSelect } from "../components/CustomSelect";
+import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input, EmptyState } from "../components/ui";
 import { api } from "../lib/api";
 
 type Rule = {
@@ -144,7 +145,7 @@ export function AlertsPage() {
         }),
       });
       setCreatingRule(false);
-      setSuccessMsg("告警规则创建成功！");
+      setSuccessMsg(t("alerts.ruleCreated"));
       await loadAll();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -155,7 +156,7 @@ export function AlertsPage() {
     if (!window.confirm(t("alerts.deleteRuleConfirm"))) return;
     try {
       await api(`/api/v1/admin/alerts/rules/${id}`, { method: "DELETE" });
-      setSuccessMsg("规则已删除");
+      setSuccessMsg(t("alerts.ruleDeleted"));
       await loadAll();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -186,7 +187,7 @@ export function AlertsPage() {
         }),
       });
       setCreatingChannel(false);
-      setSuccessMsg("通知渠道创建成功！");
+      setSuccessMsg(t("alerts.channelCreated"));
       await loadAll();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -197,7 +198,7 @@ export function AlertsPage() {
     if (!window.confirm(t("alerts.deleteChannelConfirm"))) return;
     try {
       await api(`/api/v1/admin/alerts/channels/${id}`, { method: "DELETE" });
-      setSuccessMsg("通知渠道已删除");
+      setSuccessMsg(t("alerts.channelDeleted"));
       await loadAll();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -229,29 +230,26 @@ export function AlertsPage() {
         </div>
         <div className="flex items-center gap-2">
           {activeTab === "rules" ? (
-            <button className="primary-button compact" onClick={() => setCreatingRule(true)}>
-              <Plus size={17} aria-hidden="true" />
+            <Button size="sm" onClick={() => setCreatingRule(true)} icon={<Plus size={15} aria-hidden="true" />}>
               {t("alerts.new")}
-            </button>
+            </Button>
           ) : activeTab === "channels" ? (
-            <button className="primary-button compact" onClick={() => setCreatingChannel(true)}>
-              <Plus size={17} aria-hidden="true" />
+            <Button size="sm" onClick={() => setCreatingChannel(true)} icon={<Plus size={15} aria-hidden="true" />}>
               {t("alerts.newChannel")}
-            </button>
+            </Button>
           ) : null}
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="icon-sm"
             onClick={() => void loadAll()}
             disabled={loading}
-            className="p-2 rounded-xl border border-[var(--border-soft)] text-[var(--muted)] hover:text-[var(--text)] transition-colors cursor-pointer"
+            icon={<RefreshCw size={14} className={loading ? "animate-spin" : ""} />}
             title="Refresh"
-          >
-            <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
-          </button>
+          />
         </div>
       </header>
 
-      {/* Tabs Header with Apple Sliding Pill */}
+      {/* Tabs */}
       <div className="segmented-control mb-6 self-start">
         <button
           type="button"
@@ -268,7 +266,7 @@ export function AlertsPage() {
           <span className="relative z-10 flex items-center gap-2">
             <BellRing size={14} />
             <span>{t("alerts.tabRules")}</span>
-            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-[var(--input-bg)] border border-[var(--border-soft)] font-mono">
+            <span className="px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[10px] bg-[var(--input-bg)] border border-[var(--border-soft)] font-mono">
               {rules.length}
             </span>
           </span>
@@ -289,7 +287,7 @@ export function AlertsPage() {
           <span className="relative z-10 flex items-center gap-2">
             <Radio size={14} />
             <span>{t("alerts.tabChannels")}</span>
-            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-[var(--input-bg)] border border-[var(--border-soft)] font-mono">
+            <span className="px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[10px] bg-[var(--input-bg)] border border-[var(--border-soft)] font-mono">
               {channels.length}
             </span>
           </span>
@@ -310,7 +308,7 @@ export function AlertsPage() {
           <span className="relative z-10 flex items-center gap-2">
             <Send size={14} />
             <span>{t("alerts.tabDeliveries")}</span>
-            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-[var(--input-bg)] border border-[var(--border-soft)] font-mono">
+            <span className="px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[10px] bg-[var(--input-bg)] border border-[var(--border-soft)] font-mono">
               {deliveries.length}
             </span>
           </span>
@@ -329,7 +327,7 @@ export function AlertsPage() {
       {activeTab === "rules" ? (
         <div>
           {creatingRule ? (
-            <form className="rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-6 mb-6 space-y-4 shadow-sm" onSubmit={createRule}>
+            <form className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--panel)] p-6 mb-6 space-y-4" onSubmit={createRule}>
               <h3 className="text-sm font-bold text-[var(--text)] m-0">{t("alerts.new")}</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                 <Field name="name" label={t("alerts.ruleName")} placeholder="e.g. Ingestion Spikes Spike" />
@@ -367,11 +365,11 @@ export function AlertsPage() {
                     label={t("alerts.operator")}
                     value={ruleOperator}
                     options={[
-                      { value: "greater_or_equal", label: "≥ (Greater or equal)" },
-                      { value: "greater_than", label: "> (Greater than)" },
-                      { value: "less_or_equal", label: "≤ (Less or equal)" },
-                      { value: "less_than", label: "< (Less than)" },
-                      { value: "equal", label: "= (Equal)" },
+                      { value: "greater_or_equal", label: t("alerts.opGte") },
+                      { value: "greater_than", label: t("alerts.opGt") },
+                      { value: "less_or_equal", label: t("alerts.opLte") },
+                      { value: "less_than", label: t("alerts.opLt") },
+                      { value: "equal", label: t("alerts.opEq") },
                     ]}
                     onChange={setRuleOperator}
                   />
@@ -393,10 +391,10 @@ export function AlertsPage() {
                     label={t("alerts.window")}
                     value={ruleWindow}
                     options={[
-                      { value: "1", label: "1 min" },
-                      { value: "5", label: "5 min" },
-                      { value: "15", label: "15 min" },
-                      { value: "60", label: "60 min" },
+                      { value: "1", label: t("alerts.window1m") },
+                      { value: "5", label: t("alerts.window5m") },
+                      { value: "15", label: t("alerts.window15m") },
+                      { value: "60", label: t("alerts.window60m") },
                     ]}
                     onChange={setRuleWindow}
                   />
@@ -407,10 +405,10 @@ export function AlertsPage() {
                     label={t("alerts.cooldown")}
                     value={ruleCooldown}
                     options={[
-                      { value: "60", label: "1 min" },
-                      { value: "300", label: "5 min" },
-                      { value: "900", label: "15 min" },
-                      { value: "3600", label: "1 hr" },
+                      { value: "60", label: t("alerts.cooldown1m") },
+                      { value: "300", label: t("alerts.cooldown5m") },
+                      { value: "900", label: t("alerts.cooldown15m") },
+                      { value: "3600", label: t("alerts.cooldown1h") },
                     ]}
                     onChange={setRuleCooldown}
                   />
@@ -453,7 +451,7 @@ export function AlertsPage() {
                     </div>
 
                     <div className="flex items-center gap-3">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${isFiring ? "bg-[var(--danger)]/20 text-[var(--danger)] border border-[var(--danger)]/30" : "bg-[var(--signal)]/15 text-[var(--signal)] border border-[var(--signal)]/30"}`}>
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[var(--radius-sm)] text-xs font-semibold uppercase tracking-wider ${isFiring ? "bg-[var(--danger)]/20 text-[var(--danger)] border border-[var(--danger)]/30" : "bg-[var(--signal)]/15 text-[var(--signal)] border border-[var(--signal)]/30"}`}>
                         <span className={`h-1.5 w-1.5 rounded-full ${isFiring ? "bg-[var(--danger)]" : "bg-[var(--signal)]"}`} />
                         {isFiring ? t("alerts.stateFiring") : t("alerts.stateHealthy")}
                       </span>
@@ -479,7 +477,7 @@ export function AlertsPage() {
       {activeTab === "channels" ? (
         <div>
           {creatingChannel ? (
-            <form className="rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-6 mb-6 space-y-4 shadow-sm" onSubmit={createChannel}>
+            <form className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--panel)] p-6 mb-6 space-y-4" onSubmit={createChannel}>
               <h3 className="text-sm font-bold text-[var(--text)] m-0">{t("alerts.newChannel")}</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                 <Field name="name" label={t("alerts.channelName")} placeholder="e.g. SRE Slack Channel" />
@@ -582,7 +580,7 @@ export function AlertsPage() {
                       type="button"
                       onClick={() => deleteChannel(channel.id)}
                       className="p-2 rounded-xl text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-colors cursor-pointer"
-                      title="Delete channel"
+                      title={t("alerts.deleteChannel")}
                     >
                       <Trash2 size={15} />
                     </button>
@@ -596,62 +594,55 @@ export function AlertsPage() {
 
       {/* ----------------- TAB 3: DELIVERIES ----------------- */}
       {activeTab === "deliveries" ? (
-        <div className="rounded-2xl border border-[var(--border-soft)] bg-[var(--panel)] p-6 shadow-sm">
+        <div>
           {deliveries.length === 0 ? (
-            <p className="text-xs text-[var(--muted)] text-center py-6">
-              {t("alerts.noDeliveries")}
-            </p>
+            <EmptyState
+              icon={<Send size={24} />}
+              title={t("alerts.noDeliveries")}
+            />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-[var(--border-soft)] text-[var(--muted)]">
-                    <th className="py-2.5 px-3 font-semibold">Rule</th>
-                    <th className="py-2.5 px-3 font-semibold">Channel</th>
-                    <th className="py-2.5 px-3 font-semibold">{t("alerts.deliveryStatus")}</th>
-                    <th className="py-2.5 px-3 font-semibold">{t("alerts.deliveryAttempts")}</th>
-                    <th className="py-2.5 px-3 font-semibold">Time</th>
-                    <th className="py-2.5 px-3 font-semibold">{t("alerts.deliveryError")}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--border-soft)]">
-                  {deliveries.map((del) => {
-                    const isOk = del.status === "delivered";
-                    return (
-                      <tr key={del.id} className="hover:bg-[var(--panel-strong)]/50 transition-colors">
-                        <td className="py-2.5 px-3 font-medium text-[var(--text)]">
-                          {del.ruleName || del.ruleId.slice(0, 8)}
-                        </td>
-                        <td className="py-2.5 px-3 text-[var(--text)] font-medium">
-                          {del.channelName || del.channelId.slice(0, 8)}
-                        </td>
-                        <td className="py-2.5 px-3">
-                          <span
-                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold text-[10px] ${
-                              isOk
-                                ? "bg-[var(--signal)]/15 text-[var(--signal)]"
-                                : "bg-[var(--danger)]/15 text-[var(--danger)]"
-                            }`}
-                          >
-                            {isOk ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
-                            {del.status}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 font-mono text-[var(--muted)]">
-                          {del.attempts}
-                        </td>
-                        <td className="py-2.5 px-3 text-[var(--muted)]">
-                          {new Date(del.createdAt).toLocaleString()}
-                        </td>
-                        <td className="py-2.5 px-3 text-[var(--danger)] font-mono text-[11px] max-w-xs truncate">
-                          {del.lastError || "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("alerts.rule")}</TableHead>
+                  <TableHead>{t("alerts.channel")}</TableHead>
+                  <TableHead>{t("alerts.deliveryStatus")}</TableHead>
+                  <TableHead>{t("alerts.deliveryAttempts")}</TableHead>
+                  <TableHead>{t("common.time")}</TableHead>
+                  <TableHead>{t("alerts.deliveryError")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {deliveries.map((del) => {
+                  const isOk = del.status === "delivered";
+                  return (
+                    <TableRow key={del.id}>
+                      <TableCell className="font-semibold">
+                        {del.ruleName || del.ruleId.slice(0, 8)}
+                      </TableCell>
+                      <TableCell className="font-medium">
+                        {del.channelName || del.channelId.slice(0, 8)}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={isOk ? "success" : "danger"} size="sm">
+                          {isOk ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+                          {del.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="font-mono text-[var(--muted)]">
+                        {del.attempts}
+                      </TableCell>
+                      <TableCell className="text-[var(--muted)]">
+                        {new Date(del.createdAt).toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-[var(--danger)] font-mono text-[11px] max-w-xs truncate">
+                        {del.lastError || "—"}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
           )}
         </div>
       ) : null}
@@ -662,9 +653,9 @@ export function AlertsPage() {
 function Field(props: InputHTMLAttributes<HTMLInputElement> & { label: string }) {
   const { label, ...input } = props;
   return (
-    <label className="field">
-      <span>{label}</span>
-      <input {...input} required className="input-select" />
+    <label className="flex flex-col gap-1.5 text-xs text-[var(--muted)]">
+      <span className="font-semibold text-[var(--text)]">{label}</span>
+      <Input {...input} required />
     </label>
   );
 }

@@ -18,10 +18,35 @@ export default defineConfig({
     chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
-        manualChunks: {
-          "vendor-react": ["react", "react-dom", "react-router-dom"],
-          "vendor-i18n": ["i18next", "react-i18next"],
-          "vendor-icons": ["lucide-react"]
+        manualChunks(id) {
+          if (id.includes("locales/zh-CN.json") || id.includes("locales\\zh-CN.json")) {
+            return "locale-zh-CN";
+          }
+          if (id.includes("locales/en.json") || id.includes("locales\\en.json")) {
+            return "locale-en";
+          }
+          if (
+            id.includes("node_modules/react/") ||
+            id.includes("node_modules/react-dom/") ||
+            id.includes("node_modules/react-router-dom/")
+          ) {
+            return "vendor-react";
+          }
+          if (
+            id.includes("node_modules/i18next/") ||
+            id.includes("node_modules/react-i18next/")
+          ) {
+            return "vendor-i18n";
+          }
+          if (id.includes("node_modules/lucide-react/")) {
+            return "vendor-icons";
+          }
+          if (id.includes("node_modules/recharts/") || id.includes("node_modules/victory-vendor/")) {
+            return "vendor-charts";
+          }
+          if (id.includes("node_modules/motion/")) {
+            return "vendor-motion";
+          }
         },
         chunkFileNames: "assets/chunk-[name]-[hash].js",
         entryFileNames: "assets/[name]-[hash].js",

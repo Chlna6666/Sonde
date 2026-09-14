@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { api, setCsrfToken } from "./lib/api";
 import { Shell } from "./components/Shell";
@@ -136,6 +137,7 @@ function AppRoutes() {
           <Route path="devices" element={<DevicesPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="explorer" element={<ExplorerPage />} />
+          <Route path="logs" element={<ExplorerPage defaultKind="logs" />} />
           <Route path="migration" element={<MigrationPage />} />
           <Route path="access" element={<AccessPage />} />
           <Route path="backup" element={<BackupPage />} />
@@ -148,12 +150,13 @@ function AppRoutes() {
 }
 
 function LoadingScreen() {
+  const { t } = useTranslation();
   return (
     <main className="boot-screen" aria-live="polite">
       <div className="sonde-mark" aria-hidden="true">
         <span />
       </div>
-      <p>Calibrating Sonde</p>
+      <p>{t("app.calibrating")}</p>
     </main>
   );
 }

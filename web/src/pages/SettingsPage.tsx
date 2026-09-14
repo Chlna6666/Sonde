@@ -19,6 +19,7 @@ import { useTranslation } from "react-i18next";
 import QRCode from "qrcode";
 import { api } from "../lib/api";
 import type { User } from "../App";
+import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input, EmptyState } from "../components/ui";
 
 type SystemSettings = {
   timezone: string;
@@ -63,7 +64,7 @@ const POPULAR_TIMEZONES = [
 ];
 
 export function SettingsPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [selectedTz, setSelectedTz] = useState("Asia/Shanghai");
   const [selectedLocale, setSelectedLocale] = useState("zh-CN");
@@ -125,7 +126,7 @@ export function SettingsPage() {
         body: JSON.stringify({ timezone: selectedTz, locale: selectedLocale }),
       });
       setSettings(response);
-      setSuccessMsg("平台全局时区与系统偏好已成功更新并生效！全系统数据统计与日切点已基于该时区运行。");
+      setSuccessMsg(t("settings.timezoneUpdated"));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("common.error"));
     } finally {
@@ -210,7 +211,8 @@ export function SettingsPage() {
 
   const formattedPlatformTime = (() => {
     try {
-      return new Intl.DateTimeFormat("zh-CN", {
+      const loc = i18n.language.startsWith("zh") ? "zh-CN" : "en-US";
+      return new Intl.DateTimeFormat(loc, {
         timeZone: selectedTz,
         year: "numeric",
         month: "2-digit",
@@ -236,47 +238,34 @@ export function SettingsPage() {
 
       {error ? <div className="form-error mb-4">{error}</div> : null}
       {successMsg ? (
-        <div
-          style={{
-            padding: "12px 16px",
-            marginBottom: "16px",
-            background: "color-mix(in srgb, var(--signal) 12%, transparent)",
-            border: "1px solid var(--signal)",
-            borderRadius: "8px",
-            color: "var(--signal)",
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            fontSize: "0.85rem",
-          }}
-        >
+        <div className="flex items-center gap-2 p-3 mb-4 rounded-[var(--radius-lg)] bg-[var(--signal-subtle)] border border-[var(--signal)]/30 text-[var(--signal)] text-xs font-medium">
           <CheckCircle2 size={16} />
           {successMsg}
         </div>
       ) : null}
 
-      <div className="glass-panel p-6 mb-6">
+      <Card className="p-5 mb-6">
         <div className="flex items-center justify-between gap-4 mb-4 pb-3 border-b border-[var(--border-soft)]">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl icon-squircle-green font-bold">
+            <div className="p-1.5 rounded-[var(--radius-sm)] icon-squircle-green font-bold">
               <KeyRound size={18} />
             </div>
             <div>
-              <h3 className="text-base font-bold text-[var(--text)] m-0">{t("settings.twoFactor")}</h3>
+              <h3 className="text-sm sm:text-base font-bold text-[var(--text)] m-0">{t("settings.twoFactor")}</h3>
               <p className="text-xs text-[var(--muted)] m-0 mt-0.5">{t("settings.twoFactorDesc")}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             {currentUser?.totpEnabled ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-[var(--signal)]/15 text-[var(--signal)] border border-[var(--signal)]/30">
-                <ShieldCheck size={14} />
-                {t("settings.twoFactorEnabled")}
-              </span>
+              <Badge variant="success" dot size="sm">
+                <ShieldCheck size={13} />
+                <span>{t("settings.twoFactorEnabled")}</span>
+              </Badge>
             ) : (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-[var(--amber)]/15 text-[var(--amber)] border border-[var(--amber)]/30">
-                <ShieldAlert size={14} />
-                {t("settings.twoFactorDisabled")}
-              </span>
+              <Badge variant="warning" dot size="sm">
+                <ShieldAlert size={13} />
+                <span>{t("settings.twoFactorDisabled")}</span>
+              </Badge>
             )}
           </div>
         </div>
@@ -284,31 +273,31 @@ export function SettingsPage() {
         {currentUser?.totpEnabled ? (
           <div className="flex items-center justify-between pt-2">
             <p className="text-xs text-[var(--muted)] m-0">
-              您的账户已处于 TOTP 双因素认证保护中。每次登录均需输入 6 位动态验证码。
+              {t("settings.twoFactorProtected")}
             </p>
-            <button
-              type="button"
+            <Button
+              variant="danger-outline"
+              size="sm"
               onClick={() => setShowDisableModal(true)}
-              className="px-3.5 py-2 text-xs font-semibold rounded-xl border border-[var(--danger)]/40 text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-colors cursor-pointer"
             >
               {t("settings.disableTwoFactor")}
-            </button>
+            </Button>
           </div>
         ) : twoFactorSetup ? (
           <form onSubmit={handleConfirmEnable2FA} className="space-y-4 pt-2">
             <div className="flex flex-col md:flex-row items-center gap-6 p-4 rounded-xl border border-[var(--border-soft)] bg-[var(--input-bg)]">
               {twoFactorQr ? (
-                <div className="flex flex-col items-center gap-2 p-3 bg-white rounded-2xl shadow-md border border-gray-200 flex-shrink-0">
+                <div className="flex flex-col items-center gap-2 p-3 bg-white rounded-[var(--radius-md)] border border-gray-200 flex-shrink-0">
                   <img src={twoFactorQr} alt="2FA TOTP QR Code" className="w-44 h-44 rounded-lg block" />
-                  <span className="text-[11px] font-semibold text-gray-700">使用身份验证器扫码</span>
+                  <span className="text-[11px] font-semibold text-gray-700">{t("settings.twoFactorScanWithApp")}</span>
                 </div>
               ) : null}
 
               <div className="flex-1 space-y-3 text-xs w-full">
                 <div>
-                  <h4 className="font-bold text-sm text-[var(--text)] m-0 mb-1">第一步：扫描左侧二维码或手动导入密钥</h4>
+                  <h4 className="font-bold text-sm text-[var(--text)] m-0 mb-1">{t("settings.twoFactorStep1")}</h4>
                   <p className="text-[var(--muted)] m-0 leading-relaxed">
-                    打开 Google Authenticator、Microsoft Authenticator、1Password、Bitwarden 或 Apple 密码，扫描二维码即可自动添加。
+                    {t("settings.twoFactorStep1Desc")}
                   </p>
                 </div>
                 <div className="space-y-1.5">
@@ -319,7 +308,7 @@ export function SettingsPage() {
                       type="button"
                       onClick={() => {
                         navigator.clipboard.writeText(twoFactorSetup.secret);
-                        setSuccessMsg("密钥已复制到剪贴板！");
+                        setSuccessMsg(t("settings.twoFactorSecretCopied"));
                       }}
                       className="p-1.5 hover:text-white transition-colors cursor-pointer"
                       title="Copy secret"
@@ -329,7 +318,7 @@ export function SettingsPage() {
                   </div>
                 </div>
                 <p className="text-[var(--muted)] m-0">
-                  也可直接导入 URI：
+                  {t("settings.twoFactorUriPrompt")}
                   <a href={twoFactorSetup.otpauthUri} className="text-[var(--signal)] underline ml-1 font-mono break-all">
                     {twoFactorSetup.otpauthUri}
                   </a>
@@ -338,9 +327,9 @@ export function SettingsPage() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <label className="field">
-                <span>{t("settings.twoFactorConfirmCode")}</span>
-                <input
+              <label className="flex flex-col gap-1.5 text-xs text-[var(--muted)]">
+                <span className="font-semibold text-[var(--text)]">{t("settings.twoFactorConfirmCode")}</span>
+                <Input
                   type="text"
                   pattern="[0-9]*"
                   inputMode="numeric"
@@ -349,207 +338,230 @@ export function SettingsPage() {
                   placeholder="123456"
                   value={enableCode}
                   onChange={(event) => setEnableCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                  className="input-select font-mono text-center tracking-widest text-base font-bold"
+                  className="font-mono text-center tracking-widest text-base font-bold"
                 />
               </label>
-              <label className="field">
-                <span>{t("settings.twoFactorConfirmPassword")}</span>
-                <input
+              <label className="flex flex-col gap-1.5 text-xs text-[var(--muted)]">
+                <span className="font-semibold text-[var(--text)]">{t("settings.twoFactorConfirmPassword")}</span>
+                <Input
                   type="password"
                   required
                   placeholder="••••••••"
                   value={enablePassword}
                   onChange={(event) => setEnablePassword(event.target.value)}
-                  className="input-select"
                 />
               </label>
             </div>
 
-            <div className="flex items-center gap-3 pt-2">
-              <button
+            <div className="flex items-center gap-2 pt-2">
+              <Button
                 type="submit"
-                className="primary-button"
-                style={{ width: "auto" }}
-                disabled={twoFactorLoading || enableCode.length < 6 || !enablePassword}
+                size="sm"
+                loading={twoFactorLoading}
+                disabled={enableCode.length < 6 || !enablePassword}
+                icon={<ShieldCheck size={14} />}
               >
-                {twoFactorLoading ? <RefreshCw size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-                <span>确认绑定并启用</span>
-              </button>
-              <button type="button" onClick={() => setTwoFactorSetup(null)} className="secondary-button" style={{ width: "auto" }}>
+                {t("settings.twoFactorConfirmAndEnable")}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setTwoFactorSetup(null)}
+              >
                 {t("common.cancel")}
-              </button>
+              </Button>
             </div>
           </form>
         ) : (
           <div className="flex items-center justify-between pt-2">
             <p className="text-xs text-[var(--muted)] m-0">
-              启用 2FA 后，登录时需要同时提供密码与身份验证器动态码，防止密码泄露导致账户被盗。
+              {t("settings.twoFactorIntro")}
             </p>
-            <button type="button" onClick={handleStart2FASetup} disabled={twoFactorLoading} className="primary-button" style={{ width: "auto" }}>
-              {twoFactorLoading ? <RefreshCw size={14} className="animate-spin" /> : <KeyRound size={14} />}
-              <span>{t("settings.enableTwoFactor")}</span>
-            </button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleStart2FASetup}
+              loading={twoFactorLoading}
+              icon={<KeyRound size={14} />}
+            >
+              {t("settings.enableTwoFactor")}
+            </Button>
           </div>
         )}
 
         {showDisableModal ? (
           <div className="mt-4 pt-4 border-t border-[var(--border-soft)]">
             <form onSubmit={handleConfirmDisable2FA} className="space-y-3">
-              <p className="text-xs font-semibold text-[var(--danger)] m-0">关闭 2FA 需要验证您的 6 位动态验证码及账户密码：</p>
+              <p className="text-xs font-semibold text-[var(--danger)] m-0">{t("settings.twoFactorDisablePrompt")}</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <input
+                <Input
                   type="text"
                   pattern="[0-9]*"
                   inputMode="numeric"
                   maxLength={6}
                   required
-                  placeholder="6 位动态验证码"
+                  placeholder={t("settings.twoFactorCodePlaceholder")}
                   value={disableCode}
                   onChange={(event) => setDisableCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                  className="input-select font-mono text-center tracking-widest text-sm"
+                  className="font-mono text-center tracking-widest text-sm"
                 />
-                <input
+                <Input
                   type="password"
                   required
-                  placeholder="当前账户密码"
+                  placeholder={t("settings.currentPasswordPlaceholder")}
                   value={disablePassword}
                   onChange={(event) => setDisablePassword(event.target.value)}
-                  className="input-select text-sm"
                 />
               </div>
               <div className="flex items-center gap-2">
-                <button
+                <Button
                   type="submit"
-                  disabled={twoFactorLoading || disableCode.length < 6 || !disablePassword}
-                  className="px-4 py-2 bg-[var(--danger)] text-white text-xs font-bold rounded-xl hover:brightness-110 cursor-pointer disabled:opacity-50"
+                  variant="danger"
+                  size="sm"
+                  loading={twoFactorLoading}
+                  disabled={disableCode.length < 6 || !disablePassword}
                 >
-                  {twoFactorLoading ? "验证中..." : "确认关闭 2FA"}
-                </button>
-                <button type="button" onClick={() => setShowDisableModal(false)} className="secondary-button" style={{ width: "auto" }}>
+                  {t("settings.twoFactorConfirmDisable")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowDisableModal(false)}
+                >
                   {t("common.cancel")}
-                </button>
+                </Button>
               </div>
             </form>
           </div>
         ) : null}
-      </div>
+      </Card>
 
-      <div className="glass-panel p-6 mb-6">
+      <Card className="p-5 mb-6">
         <div className="flex items-center justify-between gap-4 mb-4 pb-3 border-b border-[var(--border-soft)]">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl icon-squircle-blue font-bold"><Globe size={18} /></div>
+            <div className="p-1.5 rounded-[var(--radius-sm)] icon-squircle-blue font-bold"><Globe size={18} /></div>
             <div>
-              <h3 className="text-base font-bold text-[var(--text)] m-0">平台全局时区与偏好设置</h3>
-              <p className="text-xs text-[var(--muted)] m-0 mt-0.5">配置 Sonde 遥测平台的统一基准时区，所有图表日切点、DAU/MAU 统计与数据聚合将严格基于该时区。</p>
+              <h3 className="text-sm sm:text-base font-bold text-[var(--text)] m-0">{t("settings.timezoneTitle")}</h3>
+              <p className="text-xs text-[var(--muted)] m-0 mt-0.5">{t("settings.timezoneDesc")}</p>
             </div>
           </div>
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[var(--input-bg)] border border-[var(--border-soft)] text-xs font-mono">
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-[var(--input-bg)] border border-[var(--border-soft)] text-xs font-mono">
             <Clock size={13} className="text-[var(--signal)]" />
-            <span className="text-[var(--muted)]">平台基准时间:</span>
+            <span className="text-[var(--muted)]">{t("settings.platformTime")}:</span>
             <strong className="text-[var(--text)]">{formattedPlatformTime}</strong>
           </div>
         </div>
 
         <form onSubmit={handleSaveSettings} className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <label className="field">
-              <span>全局基准时区 (IANA Timezone)</span>
-              <select value={selectedTz} onChange={(event) => setSelectedTz(event.target.value)} className="input-select">
+            <label className="flex flex-col gap-1.5 text-xs text-[var(--muted)]">
+              <span className="font-semibold text-[var(--text)]">{t("settings.ianaTimezone")}</span>
+              <select value={selectedTz} onChange={(event) => setSelectedTz(event.target.value)} className="h-9 px-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--input-bg)] text-xs text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--focus)]">
                 {POPULAR_TIMEZONES.map((timezone) => (
                   <option key={timezone.value} value={timezone.value}>{timezone.label}</option>
                 ))}
               </select>
             </label>
-            <label className="field">
-              <span>系统默认语言 (Default Language)</span>
-              <select value={selectedLocale} onChange={(event) => setSelectedLocale(event.target.value)} className="input-select">
+            <label className="flex flex-col gap-1.5 text-xs text-[var(--muted)]">
+              <span className="font-semibold text-[var(--text)]">{t("settings.defaultLanguage")}</span>
+              <select value={selectedLocale} onChange={(event) => setSelectedLocale(event.target.value)} className="h-9 px-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--input-bg)] text-xs text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--focus)]">
                 <option value="zh-CN">简体中文 (Simplified Chinese)</option>
                 <option value="en">English (US)</option>
               </select>
             </label>
           </div>
           <div className="flex justify-end pt-2">
-            <button type="submit" className="primary-button" style={{ width: "auto" }} disabled={savingTz}>
-              {savingTz ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
-              <span>{savingTz ? "保存中..." : "保存时区与偏好"}</span>
-            </button>
+            <Button
+              type="submit"
+              size="sm"
+              loading={savingTz}
+              icon={<Save size={14} />}
+            >
+              {savingTz ? t("settings.saving") : t("settings.saveTimezone")}
+            </Button>
           </div>
         </form>
-      </div>
+      </Card>
 
-      <div className="glass-panel p-6 mb-6">
+      <Card className="p-5 mb-6">
         <div className="flex items-center justify-between gap-4 mb-4 pb-3 border-b border-[var(--border-soft)]">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl icon-squircle-purple font-bold"><FileText size={18} /></div>
+            <div className="p-1.5 rounded-[var(--radius-sm)] icon-squircle-purple font-bold"><FileText size={18} /></div>
             <div>
-              <h3 className="text-base font-bold text-[var(--text)] m-0">{t("settings.auditLogs")}</h3>
+              <h3 className="text-sm sm:text-base font-bold text-[var(--text)] m-0">{t("settings.auditLogs")}</h3>
               <p className="text-xs text-[var(--muted)] m-0 mt-0.5">{t("settings.auditDesc")}</p>
             </div>
           </div>
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="icon-sm"
             onClick={() => loadAuditLogs(auditPage)}
             disabled={auditLoading}
-            className="p-1.5 rounded-lg border border-[var(--border-soft)] text-[var(--muted)] hover:text-[var(--text)] transition-colors cursor-pointer"
+            icon={<RefreshCw size={13} className={auditLoading ? "animate-spin" : ""} />}
             title="Refresh logs"
-          >
-            <RefreshCw size={14} className={auditLoading ? "animate-spin" : ""} />
-          </button>
+          />
         </div>
 
         {auditLogs.length === 0 ? (
-          <p className="text-xs text-[var(--muted)] text-center py-6">{t("settings.auditEmpty")}</p>
+          <EmptyState
+            icon={<FileText size={24} />}
+            title={t("settings.auditEmpty")}
+          />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[var(--border-soft)] text-[var(--muted)]">
-                  <th className="py-2.5 px-3 font-semibold">{t("settings.auditActor")}</th>
-                  <th className="py-2.5 px-3 font-semibold">{t("settings.auditAction")}</th>
-                  <th className="py-2.5 px-3 font-semibold">{t("settings.auditResource")}</th>
-                  <th className="py-2.5 px-3 font-semibold">{t("settings.auditTime")}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--border-soft)]">
-                {auditLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-[var(--panel-strong)]/50 transition-colors">
-                    <td className="py-2.5 px-3 font-medium text-[var(--text)]">{log.actorUsername || log.actorUserId || "System"}</td>
-                    <td className="py-2.5 px-3">
-                      <span className="inline-block px-2 py-0.5 rounded bg-[var(--input-bg)] border border-[var(--border-soft)] font-mono text-[11px] text-[var(--signal)]">{log.action}</span>
-                    </td>
-                    <td className="py-2.5 px-3 text-[var(--muted)] font-mono text-[11px]">
-                      {log.resourceType}{log.resourceId ? `:${log.resourceId.slice(0, 8)}` : ""}
-                    </td>
-                    <td className="py-2.5 px-3 text-[var(--muted)]">{new Date(log.createdAt).toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("settings.auditActor")}</TableHead>
+                <TableHead>{t("settings.auditAction")}</TableHead>
+                <TableHead>{t("settings.auditResource")}</TableHead>
+                <TableHead>{t("settings.auditTime")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {auditLogs.map((log) => (
+                <TableRow key={log.id}>
+                  <TableCell className="font-medium">
+                    {log.actorUsername || log.actorUserId || "System"}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" size="sm" className="font-mono text-[11px] text-[var(--signal)]">
+                      {log.action}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-[var(--muted)] font-mono text-[11px]">
+                    {log.resourceType}{log.resourceId ? `:${log.resourceId.slice(0, 8)}` : ""}
+                  </TableCell>
+                  <TableCell className="text-[var(--muted)]">
+                    {new Date(log.createdAt).toLocaleString()}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
 
         <div className="flex items-center justify-between pt-4 mt-2 border-t border-[var(--border-soft)]">
-          <span className="text-xs text-[var(--muted)]">第 {auditPage} 页</span>
+          <span className="text-xs text-[var(--muted)]">{t("settings.page", { page: auditPage })}</span>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="icon-sm"
               disabled={auditPage <= 1 || auditLoading}
               onClick={() => loadAuditLogs(auditPage - 1)}
-              className="p-1.5 rounded-lg border border-[var(--border-soft)] text-xs text-[var(--text)] disabled:opacity-40 cursor-pointer"
-            >
-              <ChevronLeft size={14} />
-            </button>
-            <button
-              type="button"
+              icon={<ChevronLeft size={14} />}
+            />
+            <Button
+              variant="outline"
+              size="icon-sm"
               disabled={!auditHasMore || auditLoading}
               onClick={() => loadAuditLogs(auditPage + 1)}
-              className="p-1.5 rounded-lg border border-[var(--border-soft)] text-xs text-[var(--text)] disabled:opacity-40 cursor-pointer"
-            >
-              <ChevronRight size={14} />
-            </button>
+              icon={<ChevronRight size={14} />}
+            />
           </div>
         </div>
-      </div>
+      </Card>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "16px", marginBottom: "24px" }}>
         <div style={{ background: "var(--panel)", border: "1px solid var(--border-soft)", borderRadius: "10px", padding: "20px", display: "flex", flexDirection: "column", gap: "14px" }}>

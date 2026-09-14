@@ -25,5 +25,5 @@ function applyTheme(mode: ThemeMode) {
   const resolved = mode === "auto" ? (matchMedia(QUERY).matches ? "dark" : "light") : mode;
   document.documentElement.dataset.theme = resolved;
   document.documentElement.dataset.themeMode = mode;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", resolved === "dark" ? "#090e12" : "#edf2f1");
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", resolved === "dark" ? "#0b1114" : "#f3efe6");
 }

@@ -10,15 +10,15 @@ export type VersionDistributionItem = {
 };
 
 const PALETTE = [
-  "#22c55e",
-  "#3b82f6",
-  "#f59e0b",
-  "#ec4899",
-  "#a855f7",
-  "#14b8a6",
-  "#f97316",
-  "#6366f1",
-  "#84cc16",
+  "#c8eca4",
+  "#7ec8c4",
+  "#e0b46a",
+  "#d98b7a",
+  "#c4b08a",
+  "#8fb4c8",
+  "#9fd47a",
+  "#4aa8a4",
+  "#e07a6a",
 ];
 
 export function DonutChart({
@@ -26,11 +26,13 @@ export function DonutChart({
   title,
   badge = "版本",
   height = 200,
+  centerLabel,
 }: {
   items: VersionDistributionItem[];
   title?: string;
   badge?: string;
   height?: number | string;
+  centerLabel?: string;
 }) {
   const { t } = useTranslation();
   const [viewMode, setViewMode] = useState<"donut" | "bar">("donut");
@@ -44,15 +46,18 @@ export function DonutChart({
     );
   }
 
-  const chartData = items.slice(0, 8).map((item, idx) => ({
-    name: item.name,
-    count: item.count,
-    percentage: item.percentage,
-    color: PALETTE[idx % PALETTE.length],
-  }));
+  const chartData = items.slice(0, 8).map((item, idx) => {
+    const computedPercentage = total > 0 ? Math.round((item.count / total) * 1000) / 10 : 0;
+    return {
+      name: item.name,
+      count: item.count,
+      percentage: item.percentage > 0 ? item.percentage : computedPercentage,
+      color: PALETTE[idx % PALETTE.length],
+    };
+  });
 
   return (
-    <div className="rounded-2xl border border-[var(--border-soft)] bg-[var(--panel)] p-5 shadow-sm flex flex-col justify-between h-full min-h-[280px]">
+    <div className="flex flex-col justify-between h-full min-h-[280px]">
       {/* Header */}
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
@@ -114,7 +119,7 @@ export function DonutChart({
                     if (active && payload && payload.length) {
                       const data = payload[0].payload;
                       return (
-                        <div className="rounded-xl border border-[var(--border)] bg-[var(--panel-strong)] p-2.5 shadow-xl backdrop-blur-xl text-xs space-y-1">
+                        <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-float)] p-2.5 shadow-xl text-xs space-y-1">
                           <p className="font-bold text-[var(--text)]">{data.name}</p>
                           <p style={{ color: data.color }} className="font-mono">
                             {data.count.toLocaleString()} ({data.percentage}%)
@@ -130,7 +135,7 @@ export function DonutChart({
 
             {/* Center Summary */}
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
-              <span className="text-[10px] text-[var(--muted)]">{t("stats.totalUsers")}</span>
+              <span className="text-[10px] text-[var(--muted)]">{centerLabel || t("apps.statsTotalEvents")}</span>
               <strong className="text-base font-extrabold font-mono text-[var(--text)]">
                 {total.toLocaleString()}
               </strong>
@@ -157,6 +162,7 @@ export function DonutChart({
         <div className="space-y-2 max-h-48 overflow-y-auto pr-1 flex-1">
           {items.map((item, idx) => {
             const color = PALETTE[idx % PALETTE.length];
+            const pct = item.percentage > 0 ? item.percentage : (total > 0 ? Math.round((item.count / total) * 1000) / 10 : 0);
             return (
               <div key={item.name} className="flex items-center gap-3 text-xs">
                 <span className="w-24 truncate font-medium text-[var(--text)]" title={item.name}>
@@ -165,12 +171,12 @@ export function DonutChart({
                 <div className="flex-1 h-2 rounded-full bg-[var(--input-bg)] overflow-hidden">
                   <div
                     className="h-full rounded-full transition-all duration-300"
-                    style={{ width: `${item.percentage}%`, backgroundColor: color }}
+                    style={{ width: `${pct}%`, backgroundColor: color }}
                   />
                 </div>
                 <span className="w-12 text-right font-mono text-[var(--muted)]">{item.count}</span>
                 <span className="w-12 text-right font-mono font-bold" style={{ color }}>
-                  {item.percentage}%
+                  {pct}%
                 </span>
               </div>
             );

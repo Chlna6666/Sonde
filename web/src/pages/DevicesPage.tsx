@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CustomSelect } from "../components/CustomSelect";
+import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input } from "../components/ui";
 import { api } from "../lib/api";
 
 type Application = { id: string; name: string };
@@ -34,6 +35,8 @@ type Device = {
   appVersion?: string | null;
   launcherVersion?: string | null;
   os?: string | null;
+  systemLanguage?: string | null;
+  architecture?: string | null;
   eventItems: number;
   metricItems: number;
   logItems: number;
@@ -156,7 +159,7 @@ export function DevicesPage() {
           </h1>
           <p className="m-0 mt-1 max-w-2xl text-xs text-[var(--muted)]">{copy.subtitle}</p>
         </div>
-        <div className="flex items-center gap-2 rounded-full border border-[var(--signal)]/30 bg-[var(--signal-subtle)] px-3 py-1.5 text-[11px] font-bold text-[var(--signal)]">
+        <div className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--signal)]/30 bg-[var(--signal-subtle)] px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--signal)]">
           <ShieldAlert size={14} />
           {copy.observeOnly}
         </div>
@@ -241,19 +244,18 @@ export function DevicesPage() {
           </div>
         </div>
 
-        <button type="submit" className="primary-button compact h-9 flex-shrink-0 px-4 font-bold">
-          <Search size={14} />
-          <span>{copy.apply}</span>
-        </button>
+        <Button type="submit" size="default" icon={<Search size={14} />}>
+          {copy.apply}
+        </Button>
       </form>
 
       {error ? (
-        <div className="rounded-2xl border border-[var(--danger)]/30 bg-[var(--danger-subtle)] p-4 text-xs font-semibold text-[var(--danger)]">
+        <div className="rounded-[var(--radius-lg)] border border-[var(--danger)]/30 bg-[var(--danger-subtle)] p-4 text-xs font-semibold text-[var(--danger)] mb-4">
           {error}
         </div>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6 mb-5">
         <SummaryCard icon={MonitorSmartphone} label={copy.total} value={data?.summary.total ?? 0} />
         <SummaryCard icon={Activity} label={copy.active} value={data?.summary.active ?? 0} tone="signal" />
         <SummaryCard icon={CircleDot} label={copy.recent} value={data?.summary.recent ?? 0} />
@@ -262,99 +264,112 @@ export function DevicesPage() {
         <SummaryCard icon={ShieldAlert} label={copy.critical} value={data?.summary.critical ?? 0} tone="danger" />
       </div>
 
-      <section className="glass-panel overflow-hidden" aria-busy={loading}>
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-left text-xs">
-            <thead>
-              <tr className="border-b border-[var(--border)] bg-[var(--panel-strong)]/60 text-[11px] font-bold uppercase tracking-wider text-[var(--muted)]">
-                <th className="px-4 py-3">{copy.device}</th>
-                <th className="px-4 py-3">{copy.status}</th>
-                <th className="px-4 py-3">{copy.risk}</th>
-                <th className="px-4 py-3">{copy.currentState}</th>
-                <th className="px-4 py-3">{copy.volume}</th>
-                <th className="px-4 py-3">{copy.anomalies}</th>
-                <th className="px-4 py-3">{copy.lastSeen}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[var(--border-soft)]">
-              {data?.items.map((device) => (
-                <tr key={device.id} className="align-top transition-colors hover:bg-[var(--panel-hover)]">
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <code className="max-w-[150px] truncate text-[11px] font-bold text-[var(--text)]" title={device.id}>
-                        {device.id.slice(0, 16)}…
-                      </code>
-                      <button
-                        type="button"
-                        className="text-[var(--muted)] hover:text-[var(--signal)]"
-                        onClick={() => void copyDeviceId(device.id)}
-                        title={copy.copyId}
-                      >
-                        <Copy size={13} />
-                      </button>
-                    </div>
-                    <div className="mt-1 text-[10px] text-[var(--faint)]">
-                      {environmentNames.get(device.environmentId) ?? device.environmentId}
-                      {copied === device.id ? ` · ${copy.copied}` : ""}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3"><StatusBadge status={device.status} copy={copy} /></td>
-                  <td className="px-4 py-3"><RiskBadge level={device.riskLevel} score={device.riskScore} copy={copy} /></td>
-                  <td className="px-4 py-3 text-[11px] text-[var(--muted)]">
-                    <div><strong className="text-[var(--text)]">{device.appVersion ?? "-"}</strong> / {device.launcherVersion ?? "-"}</div>
-                    <div className="mt-1">{device.os ?? "-"}</div>
-                    <div className="mt-1 max-w-[180px] truncate font-mono text-[10px]" title={device.sessionId ?? ""}>
-                      {copy.session}: {device.sessionId ?? "-"}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 font-mono text-[10px] text-[var(--muted)]">
-                    <div>E {device.eventItems} · M {device.metricItems}</div>
-                    <div className="mt-1">L {device.logItems} · X {device.errorItems}</div>
-                    <div className="mt-1 text-[var(--faint)]">
-                      Δ S{device.sessionChanges} V{device.appVersionChanges} O{device.osChanges}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex max-w-[260px] flex-wrap gap-1">
-                      {device.anomalyReasons.length ? device.anomalyReasons.map((reason) => (
-                        <span key={reason} className="rounded-full border border-[var(--danger)]/20 bg-[var(--danger-subtle)] px-2 py-0.5 text-[9px] font-bold text-[var(--danger)]">
-                          {reasonLabel(reason, zh)}
+      <section aria-busy={loading}>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{copy.device}</TableHead>
+              <TableHead>{copy.status}</TableHead>
+              <TableHead>{copy.risk}</TableHead>
+              <TableHead>{copy.currentState}</TableHead>
+              <TableHead>{copy.volume}</TableHead>
+              <TableHead>{copy.anomalies}</TableHead>
+              <TableHead>{copy.lastSeen}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {data?.items.map((device) => (
+              <TableRow key={device.id} className="align-top">
+                <TableCell>
+                  <div className="flex items-center gap-2">
+                    <code className="max-w-[150px] truncate text-[11px] font-bold text-[var(--text)]" title={device.id}>
+                      {device.id.slice(0, 16)}…
+                    </code>
+                    <button
+                      type="button"
+                      className="text-[var(--muted)] hover:text-[var(--signal)] cursor-pointer"
+                      onClick={() => void copyDeviceId(device.id)}
+                      title={copy.copyId}
+                    >
+                      <Copy size={13} />
+                    </button>
+                  </div>
+                  <div className="mt-1 text-[10px] text-[var(--faint)]">
+                    {environmentNames.get(device.environmentId) ?? device.environmentId}
+                    {copied === device.id ? ` · ${copy.copied}` : ""}
+                  </div>
+                </TableCell>
+                <TableCell><StatusBadge status={device.status} copy={copy} /></TableCell>
+                <TableCell><RiskBadge level={device.riskLevel} score={device.riskScore} copy={copy} /></TableCell>
+                <TableCell className="text-[11px] text-[var(--muted)]">
+                  <div><strong className="text-[var(--text)]">{device.appVersion ?? "-"}</strong> / {device.launcherVersion ?? "-"}</div>
+                  <div className="mt-1">{device.os ?? "-"}</div>
+                  {(device.systemLanguage || device.architecture) ? (
+                    <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                      {device.systemLanguage ? (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-[var(--input-bg)] border border-[var(--border-soft)] text-[10px] font-mono text-[var(--text)]" title={copy.language}>
+                          {device.systemLanguage}
                         </span>
-                      )) : <span className="text-[11px] text-[var(--faint)]">{copy.none}</span>}
+                      ) : null}
+                      {device.architecture ? (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-[var(--input-bg)] border border-[var(--border-soft)] text-[10px] font-mono text-[var(--muted)]" title={copy.architecture}>
+                          {device.architecture}
+                        </span>
+                      ) : null}
                     </div>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-[11px] text-[var(--muted)]">
-                    {formatTime(device.lastSeenAt)}
-                  </td>
-                </tr>
-              ))}
-              {!loading && data && data.items.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-xs text-[var(--muted)]">{copy.empty}</td></tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+                  ) : null}
+                  <div className="mt-1 max-w-[180px] truncate font-mono text-[10px]" title={device.sessionId ?? ""}>
+                    {copy.session}: {device.sessionId ?? "-"}
+                  </div>
+                </TableCell>
+                <TableCell className="font-mono text-[10px] text-[var(--muted)]">
+                  <div>E {device.eventItems} · M {device.metricItems}</div>
+                  <div className="mt-1">L {device.logItems} · X {device.errorItems}</div>
+                  <div className="mt-1 text-[var(--faint)]">
+                    Δ S{device.sessionChanges} V{device.appVersionChanges} O{device.osChanges}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="flex max-w-[260px] flex-wrap gap-1">
+                    {device.anomalyReasons.length ? device.anomalyReasons.map((reason) => (
+                      <Badge key={reason} variant="danger" size="sm">
+                        {reasonLabel(reason, zh)}
+                      </Badge>
+                    )) : <span className="text-[11px] text-[var(--faint)]">{copy.none}</span>}
+                  </div>
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-[11px] text-[var(--muted)]">
+                  {formatTime(device.lastSeenAt)}
+                </TableCell>
+              </TableRow>
+            ))}
+            {!loading && data && data.items.length === 0 ? (
+              <TableRow><TableCell colSpan={7} className="px-4 py-10 text-center text-xs text-[var(--muted)]">{copy.empty}</TableCell></TableRow>
+            ) : null}
+          </TableBody>
+        </Table>
 
-        <div className="flex items-center justify-between border-t border-[var(--border-soft)] px-4 py-3 text-xs text-[var(--muted)]">
+        <div className="flex items-center justify-between border border-t-0 border-[var(--card-border)] rounded-b-[var(--radius-lg)] bg-[var(--card)] px-4 py-3 text-xs text-[var(--muted)]">
           <span>{copy.total}: {data?.total ?? 0}</span>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               disabled={page <= 1 || loading}
-              className="secondary-button compact"
               onClick={() => setPage((value) => Math.max(1, value - 1))}
+              icon={<ChevronLeft size={14} />}
             >
-              <ChevronLeft size={14} /> {copy.previous}
-            </button>
+              {copy.previous}
+            </Button>
             <span className="min-w-12 text-center font-mono">{page}</span>
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               disabled={!data?.hasMore || loading}
-              className="secondary-button compact"
               onClick={() => setPage((value) => value + 1)}
             >
               {copy.next} <ChevronRight size={14} />
-            </button>
+            </Button>
           </div>
         </div>
       </section>
@@ -378,30 +393,31 @@ function SummaryCard({ icon: Icon, label, value, tone, muted }: { icon: typeof A
       ? "text-[var(--signal)] bg-[var(--signal-subtle)]"
       : "text-[var(--muted)] bg-[var(--input-bg)]";
   return (
-    <div className={`glass-panel p-4 ${muted ? "opacity-75" : ""}`}>
+    <Card className={`p-4 ${muted ? "opacity-75" : ""}`}>
       <div className={`mb-3 inline-flex rounded-xl p-2 ${toneClass}`}><Icon size={16} /></div>
       <div className="text-2xl font-extrabold tracking-tight text-[var(--text)]">{value.toLocaleString()}</div>
       <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-[var(--muted)]">{label}</div>
-    </div>
+    </Card>
   );
 }
 
 function StatusBadge({ status, copy }: { status: DeviceStatus; copy: ReturnType<typeof deviceCopy> }) {
   const label = status === "active" ? copy.active : status === "recent" ? copy.recent : copy.offline;
-  const className = status === "active"
-    ? "bg-[var(--signal-subtle)] text-[var(--signal)] border-[var(--signal)]/30"
-    : "bg-[var(--input-bg)] text-[var(--muted)] border-[var(--border)]";
-  return <span className={`rounded-full border px-2 py-1 text-[10px] font-bold ${className}`}>{label}</span>;
+  return (
+    <Badge variant={status === "active" ? "success" : "default"} dot size="sm">
+      {label}
+    </Badge>
+  );
 }
 
 function RiskBadge({ level, score, copy }: { level: RiskLevel; score: number; copy: ReturnType<typeof deviceCopy> }) {
   const label = level === "critical" ? copy.critical : level === "high" ? copy.high : level === "medium" ? copy.medium : copy.low;
-  const className = level === "critical" || level === "high"
-    ? "bg-[var(--danger-subtle)] text-[var(--danger)] border-[var(--danger)]/30"
-    : level === "medium"
-      ? "bg-[var(--panel-strong)] text-[var(--text)] border-[var(--border)]"
-      : "bg-[var(--signal-subtle)] text-[var(--signal)] border-[var(--signal)]/20";
-  return <span className={`rounded-full border px-2 py-1 text-[10px] font-bold ${className}`}>{label} · {score}</span>;
+  const variant = level === "critical" || level === "high" ? "danger" : level === "medium" ? "warning" : "success";
+  return (
+    <Badge variant={variant} size="sm">
+      {label} · {score}
+    </Badge>
+  );
 }
 
 function formatTime(value: number) {
@@ -429,17 +445,17 @@ function deviceCopy(zh: boolean) {
     observeOnly: "观察模式 · 不自动封禁",
     status: "活动状态", allStatuses: "全部状态", active: "活跃（15分钟）", recent: "近期（24小时）", offline: "离线",
     risk: "风险等级", allRisk: "全部风险", risky: "有风险（≥20）", low: "低", medium: "中", high: "高", critical: "严重",
-    search: "设备检索", searchHint: "设备哈希、Session、版本或 OS...", apply: "应用筛选",
+    search: "设备检索", searchHint: "设备哈希、Session、版本、OS 或系统语言...", apply: "应用筛选",
     total: "设备总数", highRisk: "高风险设备", device: "设备", currentState: "平台推导当前状态", volume: "可信遥测量", anomalies: "异常信号", lastSeen: "最后活动",
-    session: "Session", copyId: "复制设备哈希", copied: "已复制", none: "无", empty: "当前筛选条件下没有设备画像。", previous: "上一页", next: "下一页",
+    session: "Session", language: "系统语言", architecture: "系统架构", copyId: "复制设备哈希", copied: "已复制", none: "无", empty: "当前筛选条件下没有设备画像。", previous: "上一页", next: "下一页",
   } : {
     eyebrow: "SECURITY / DEVICE ABUSE",
     subtitle: "Inspect server-derived current device state, activity and anomaly signals from trusted signed telemetry. Risk scores are observational and do not automatically block devices.",
     observeOnly: "Observe only · no auto-block",
     status: "Activity", allStatuses: "All statuses", active: "Active (15m)", recent: "Recent (24h)", offline: "Offline",
     risk: "Risk", allRisk: "All risk", risky: "Risky (≥20)", low: "Low", medium: "Medium", high: "High", critical: "Critical",
-    search: "Device search", searchHint: "Device hash, session, version or OS...", apply: "Apply filters",
+    search: "Device search", searchHint: "Device hash, session, version, OS or language...", apply: "Apply filters",
     total: "Total devices", highRisk: "High risk", device: "Device", currentState: "Server-derived state", volume: "Trusted telemetry", anomalies: "Anomaly signals", lastSeen: "Last seen",
-    session: "Session", copyId: "Copy device hash", copied: "Copied", none: "None", empty: "No device profiles match the current filters.", previous: "Previous", next: "Next",
+    session: "Session", language: "System Language", architecture: "Architecture", copyId: "Copy device hash", copied: "Copied", none: "None", empty: "No device profiles match the current filters.", previous: "Previous", next: "Next",
   };
 }

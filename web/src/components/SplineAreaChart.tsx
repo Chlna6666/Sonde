@@ -18,8 +18,8 @@ export type SplinePoint = {
 export function SplineAreaChart({
   data,
   height = 180,
-  strokeColor = "#22c55e",
-  fillColor = "#22c55e",
+  strokeColor = "#c8eca4",
+  fillColor = "#c8eca4",
   valueLabel = "Events",
   secondaryLabel = "Users",
 }: {
@@ -85,7 +85,7 @@ export function SplineAreaChart({
               if (active && payload && payload.length) {
                 const item = payload[0].payload;
                 return (
-                  <div className="rounded-xl border border-[var(--border)] bg-[var(--panel-strong)] p-2.5 shadow-xl backdrop-blur-xl text-xs space-y-1">
+                  <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-float)] p-2.5 shadow-xl text-xs space-y-1">
                     <p className="font-bold text-[var(--text)]">{item.fullName}</p>
                     <p style={{ color: strokeColor }} className="font-mono">
                       {valueLabel}: <strong>{item.value?.toLocaleString()}</strong>
