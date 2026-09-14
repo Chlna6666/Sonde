@@ -6,7 +6,7 @@ RUN pnpm install --frozen-lockfile
 COPY web/ ./
 RUN pnpm build
 
-FROM rust:1.95-bookworm AS server
+FROM rust:1.98-bookworm AS server
 WORKDIR /source
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
