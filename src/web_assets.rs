@@ -9,15 +9,8 @@ pub async fn serve(request: HttpRequest) -> HttpResponse {
     let raw_path = request.path();
     let path = raw_path.trim_start_matches('/');
 
-    if path.contains("..")
-        || path.contains('\\')
-        || path.contains('\0')
-        || path.contains("%2e")
-        || path.contains("%2E")
-        || path.contains("%2f")
-        || path.contains("%2F")
-        || path.contains("%5c")
-        || path.contains("%5C")
+    if crate::security::validate_safe_relative_path(raw_path).is_err()
+        || crate::security::validate_safe_relative_path(path).is_err()
     {
         return HttpResponse::BadRequest().finish();
     }

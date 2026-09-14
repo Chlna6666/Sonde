@@ -40,7 +40,7 @@ async fn token(
 ) -> Result<HttpResponse, AppError> {
     let _permit = state.try_acquire_ingest()?;
     let installed = state.installed().await?;
-    let client_ip = extract_client_ip(&request);
+    let client_ip = super::request_auth::client_ip(&request, &state.runtime.trusted_proxies);
     let context = IngestTokenContext {
         client_ip: &client_ip,
         user_agent: user_agent(&request),
@@ -59,7 +59,7 @@ async fn heartbeat(
     preflight_device_token(&request)?;
     let body = read_body(body, MAX_DEVICE_FACTS_BODY_BYTES).await?;
     let installed = state.installed().await?;
-    let client_ip = extract_client_ip(&request);
+    let client_ip = super::request_auth::client_ip(&request, &state.runtime.trusted_proxies);
     let scope = telemetry::scope_from_context_with_permission(
         &installed,
         ingest_request_context(&request, &client_ip),
@@ -82,7 +82,7 @@ async fn events(
     preflight_device_token(&request)?;
     let body = read_body(body, MAX_INGEST_BODY_BYTES).await?;
     let installed = state.installed().await?;
-    let client_ip = extract_client_ip(&request);
+    let client_ip = super::request_auth::client_ip(&request, &state.runtime.trusted_proxies);
     let scope = telemetry::scope_from_context_with_permission(
         &installed,
         ingest_request_context(&request, &client_ip),
@@ -105,7 +105,7 @@ async fn metrics(
     preflight_device_token(&request)?;
     let body = read_body(body, MAX_INGEST_BODY_BYTES).await?;
     let installed = state.installed().await?;
-    let client_ip = extract_client_ip(&request);
+    let client_ip = super::request_auth::client_ip(&request, &state.runtime.trusted_proxies);
     let scope = telemetry::scope_from_context_with_permission(
         &installed,
         ingest_request_context(&request, &client_ip),
@@ -128,7 +128,7 @@ async fn logs(
     preflight_device_token(&request)?;
     let body = read_body(body, MAX_INGEST_BODY_BYTES).await?;
     let installed = state.installed().await?;
-    let client_ip = extract_client_ip(&request);
+    let client_ip = super::request_auth::client_ip(&request, &state.runtime.trusted_proxies);
     let scope = telemetry::scope_from_context_with_permission(
         &installed,
         ingest_request_context(&request, &client_ip),
@@ -151,7 +151,7 @@ async fn errors(
     preflight_device_token(&request)?;
     let body = read_body(body, MAX_INGEST_BODY_BYTES).await?;
     let installed = state.installed().await?;
-    let client_ip = extract_client_ip(&request);
+    let client_ip = super::request_auth::client_ip(&request, &state.runtime.trusted_proxies);
     let scope = telemetry::scope_from_context_with_permission(
         &installed,
         ingest_request_context(&request, &client_ip),
@@ -166,10 +166,11 @@ async fn errors(
 }
 
 async fn read_body(mut payload: web::Payload, max_bytes: usize) -> Result<web::Bytes, AppError> {
-    let mut body = web::BytesMut::new();
+    let mut body = web::BytesMut::with_capacity(4_096.min(max_bytes));
     while let Some(chunk) = payload.next().await {
-        let chunk = chunk
-            .map_err(|error| AppError::Validation(format!("request body could not be read: {error}")))?;
+        let chunk = chunk.map_err(|error| {
+            AppError::Validation(format!("request body could not be read: {error}"))
+        })?;
         if body.len().saturating_add(chunk.len()) > max_bytes {
             return Err(AppError::PayloadTooLarge);
         }
@@ -179,28 +180,20 @@ async fn read_body(mut payload: web::Payload, max_bytes: usize) -> Result<web::B
 }
 
 fn parse_json<T: DeserializeOwned>(body: &[u8]) -> Result<T, AppError> {
-    serde_json::from_slice(body)
+    crate::json::from_slice(body)
         .map_err(|_| AppError::Validation("invalid telemetry JSON payload".into()))
 }
 
 fn publish(state: &AppState, application_id: &str, kind: &str, accepted: usize) {
-    let message =
-        serde_json::json!({ "applicationId": application_id, "kind": kind, "accepted": accepted })
-            .to_string();
+    let mut message = String::with_capacity(64 + application_id.len() + kind.len());
+    message.push_str("{\"applicationId\":");
+    crate::json::write_string(&mut message, application_id);
+    message.push_str(",\"kind\":");
+    crate::json::write_string(&mut message, kind);
+    message.push_str(",\"accepted\":");
+    crate::json::write_usize(&mut message, accepted);
+    message.push('}');
     let _ = state.live_updates.send(message);
-}
-
-/// Return the transport peer address used by Actix.
-///
-/// Forwarded/X-Forwarded-For are deliberately not trusted by default: accepting them without a
-/// configured trusted-proxy boundary would allow a direct client to bypass IP based throttling by
-/// spoofing request headers. Reverse proxies should therefore enforce rate limits themselves until
-/// Sonde grows an explicit trusted-proxy configuration.
-fn extract_client_ip(request: &HttpRequest) -> String {
-    request
-        .peer_addr()
-        .map(|address| address.ip().to_string())
-        .unwrap_or_else(|| "unknown".into())
 }
 
 fn user_agent(request: &HttpRequest) -> &str {

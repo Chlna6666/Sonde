@@ -53,9 +53,8 @@ pub async fn api_key_context(
             .and_where(
                 Expr::col(Alias::new("last_used_at"))
                     .is_null()
-                    .or(Expr::col(Alias::new("last_used_at")).lte(
-                        now.saturating_sub(LAST_USED_FLUSH_INTERVAL_MILLIS),
-                    )),
+                    .or(Expr::col(Alias::new("last_used_at"))
+                        .lte(now.saturating_sub(LAST_USED_FLUSH_INTERVAL_MILLIS))),
             )
             .to_owned();
         database.execute(&update).await?;

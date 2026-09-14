@@ -11,7 +11,7 @@ use crate::{
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DeviceQueryParams {
+pub(crate) struct DeviceQueryParams {
     environment_id: Option<String>,
     status: Option<String>,
     risk: Option<String>,
@@ -21,14 +21,7 @@ struct DeviceQueryParams {
     page_size: Option<u64>,
 }
 
-pub fn configure(config: &mut web::ServiceConfig) {
-    config.service(
-        web::scope("/api/v1/admin/applications/{application_id}/devices")
-            .route("", web::get().to(list)),
-    );
-}
-
-async fn list(
+pub(crate) async fn list(
     state: web::Data<Arc<AppState>>,
     request: HttpRequest,
     path: web::Path<String>,
@@ -37,10 +30,14 @@ async fn list(
     let _permit = state.try_acquire_analytics()?;
     let installed = state.installed().await?;
     let user = authentication::authenticate(&installed, &request).await?;
-    let application_id = required_limited(path.into_inner(), 128, "applicationId")?;
+    let application_id =
+        crate::security::validate_safe_identifier("applicationId", &path.into_inner())?;
     let query = query.into_inner();
-    let environment_id = optional_limited(query.environment_id, 128, "environmentId")?;
-    let search = optional_limited(query.search, 128, "search")?;
+    let environment_id = crate::security::validate_optional_safe_identifier(
+        "environmentId",
+        query.environment_id.as_deref(),
+    )?;
+    let search = optional_text(query.search, 128, "search")?;
     let status = parse_status(query.status.as_deref())?;
     let risk = parse_risk(query.risk.as_deref())?;
     let min_risk = query
@@ -49,7 +46,9 @@ async fn list(
             if (0..=100).contains(&value) {
                 Ok(value)
             } else {
-                Err(AppError::Validation("minRisk must be between 0 and 100".into()))
+                Err(AppError::Validation(
+                    "minRisk must be between 0 and 100".into(),
+                ))
             }
         })
         .transpose()?;
@@ -98,34 +97,20 @@ fn parse_risk(value: Option<&str>) -> Result<Option<devices::RiskFilter>, AppErr
     }
 }
 
-fn required_limited(value: String, max_len: usize, field: &str) -> Result<String, AppError> {
-    let value = value.trim();
-    if value.is_empty() || value.len() > max_len {
-        return Err(AppError::Validation(format!(
-            "{field} must be 1..{max_len} bytes"
-        )));
-    }
-    Ok(value.to_owned())
-}
-
-fn optional_limited(
+fn optional_text(
     value: Option<String>,
     max_len: usize,
     field: &str,
 ) -> Result<Option<String>, AppError> {
-    value
-        .map(|value| {
-            let value = value.trim();
-            if value.is_empty() {
-                Ok(None)
-            } else if value.len() > max_len {
-                Err(AppError::Validation(format!(
-                    "{field} must be at most {max_len} bytes"
-                )))
-            } else {
-                Ok(Some(value.to_owned()))
+    match value.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty()) {
+        None => Ok(None),
+        Some(v) => {
+            if v.len() > max_len || v.chars().any(|c| c.is_control() || c == '\0') {
+                return Err(AppError::Validation(format!(
+                    "{field} is invalid or too long"
+                )));
             }
-        })
-        .transpose()
-        .map(Option::flatten)
+            Ok(Some(v))
+        }
+    }
 }

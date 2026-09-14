@@ -1,6 +1,6 @@
 use sea_orm::{DatabaseConnection, DbErr};
 
-use crate::{database::ingest_bootstrap, security::hmac_sha256};
+use crate::{database::ingest_bootstrap, error::AppError, security::hmac_sha256};
 
 const MINUTE_MILLIS: i64 = 60_000;
 const HOUR_MILLIS: i64 = 60 * MINUTE_MILLIS;
@@ -67,7 +67,8 @@ async fn charge_ip_token_at(
     now: i64,
 ) -> Result<bool, DbErr> {
     let (window_id, expires_at) = fixed_window(now, MINUTE_MILLIS);
-    let bucket_key = opaque_key(pepper, b"ip-token", &[client_ip], window_id);
+    let bucket_key = opaque_key(pepper, b"ip-token", &[client_ip], window_id)
+        .map_err(|error| DbErr::Custom(error.to_string()))?;
     ingest_bootstrap::charge_window(
         database,
         &bucket_key,
@@ -92,13 +93,15 @@ async fn check_device_enrollment_at(
         b"device-enrollment-budget",
         &[client_ip, application_id],
         window_id,
-    );
+    )
+    .map_err(|error| DbErr::Custom(error.to_string()))?;
     let enrollment_key = opaque_key(
         pepper,
         b"device-enrollment",
         &[client_ip, application_id, device_id],
         window_id,
-    );
+    )
+    .map_err(|error| DbErr::Custom(error.to_string()))?;
     ingest_bootstrap::record_enrollment_with_budget(
         database,
         &enrollment_key,
@@ -124,7 +127,8 @@ async fn charge_device_token_at(
         b"device-token",
         &[application_id, device_id],
         window_id,
-    );
+    )
+    .map_err(|error| DbErr::Custom(error.to_string()))?;
     ingest_bootstrap::charge_window(
         database,
         &bucket_key,
@@ -145,7 +149,12 @@ fn fixed_window(now: i64, window_millis: i64) -> (i64, i64) {
     )
 }
 
-fn opaque_key(pepper: &[u8], purpose: &[u8], parts: &[&str], window_id: i64) -> String {
+fn opaque_key(
+    pepper: &[u8],
+    purpose: &[u8],
+    parts: &[&str],
+    window_id: i64,
+) -> Result<String, AppError> {
     let payload_capacity = OPAQUE_KEY_CONTEXT.len()
         + purpose.len()
         + 1
@@ -160,7 +169,7 @@ fn opaque_key(pepper: &[u8], purpose: &[u8], parts: &[&str], window_id: i64) -> 
         payload.extend_from_slice(&(part.len() as u64).to_be_bytes());
         payload.extend_from_slice(part.as_bytes());
     }
-    hex::encode(hmac_sha256(pepper, &payload))
+    Ok(hex::encode(hmac_sha256(pepper, &payload)?))
 }
 
 #[cfg(test)]
@@ -176,7 +185,8 @@ mod tests {
             b"device-token",
             &["203.0.113.44", "app-1", "device-visible-value"],
             1234,
-        );
+        )
+        .unwrap();
         assert_eq!(key.len(), 64);
         assert!(!key.contains("203.0.113.44"));
         assert!(!key.contains("device-visible-value"));
@@ -214,14 +224,9 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            charge_ip_token_at(
-                &replica_b,
-                pepper,
-                "203.0.113.10",
-                now + MINUTE_MILLIS,
-            )
-            .await
-            .unwrap()
+            charge_ip_token_at(&replica_b, pepper, "203.0.113.10", now + MINUTE_MILLIS,)
+                .await
+                .unwrap()
         );
     }
 }

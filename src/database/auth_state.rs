@@ -55,9 +55,7 @@ pub async fn session(
 ) -> Result<Option<SharedSession>, DbErr> {
     let now = chrono::Utc::now().timestamp_millis();
     let query = Query::select()
-        .columns(
-            ["user_id", "csrf_token", "expires_at", "last_seen_at"].map(Alias::new),
-        )
+        .columns(["user_id", "csrf_token", "expires_at", "last_seen_at"].map(Alias::new))
         .from(Alias::new("auth_sessions"))
         .and_where(Expr::col(Alias::new("token_hash")).eq(token_hash))
         .limit(1)
@@ -78,8 +76,7 @@ pub async fn session(
             .value(Alias::new("last_seen_at"), now)
             .and_where(Expr::col(Alias::new("token_hash")).eq(token_hash))
             .and_where(
-                Expr::col(Alias::new("last_seen_at"))
-                    .lte(now.saturating_sub(SESSION_TOUCH_MILLIS)),
+                Expr::col(Alias::new("last_seen_at")).lte(now.saturating_sub(SESSION_TOUCH_MILLIS)),
             )
             .to_owned();
         database.execute(&touch).await?;
@@ -91,16 +88,24 @@ pub async fn session(
     }))
 }
 
-pub async fn revoke_session(
-    database: &DatabaseConnection,
-    token_hash: &str,
-) -> Result<(), DbErr> {
+pub async fn revoke_session(database: &DatabaseConnection, token_hash: &str) -> Result<(), DbErr> {
     let delete = Query::delete()
         .from_table(Alias::new("auth_sessions"))
         .and_where(Expr::col(Alias::new("token_hash")).eq(token_hash))
         .to_owned();
     database.execute(&delete).await?;
     Ok(())
+}
+
+pub async fn revoke_sessions_for_user(
+    database: &DatabaseConnection,
+    user_id: &str,
+) -> Result<u64, DbErr> {
+    let delete = Query::delete()
+        .from_table(Alias::new("auth_sessions"))
+        .and_where(Expr::col(Alias::new("user_id")).eq(user_id))
+        .to_owned();
+    Ok(database.execute(&delete).await?.rows_affected())
 }
 
 pub async fn issue_2fa_temp_token(
@@ -216,10 +221,7 @@ async fn advance_totp_step(
     Ok(database.execute(&update).await?.rows_affected() == 1)
 }
 
-pub async fn clear_totp_replay(
-    database: &DatabaseConnection,
-    user_id: &str,
-) -> Result<(), DbErr> {
+pub async fn clear_totp_replay(database: &DatabaseConnection, user_id: &str) -> Result<(), DbErr> {
     let delete = Query::delete()
         .from_table(Alias::new("auth_totp_replay"))
         .and_where(Expr::col(Alias::new("user_id")).eq(user_id))
@@ -254,6 +256,7 @@ pub async fn cleanup_expired(database: &DatabaseConnection) -> Result<(), DbErr>
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use crate::database;
 
@@ -271,9 +274,11 @@ mod tests {
         super::revoke_session(&database, &crate::auth::token_hash(&token))
             .await
             .unwrap();
-        assert!(super::session(&database, &crate::auth::token_hash(&token))
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            super::session(&database, &crate::auth::token_hash(&token))
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

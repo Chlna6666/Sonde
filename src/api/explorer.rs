@@ -84,13 +84,20 @@ async fn authorize(
             "the start time must be before the end time".into(),
         ));
     }
-    let application_id = required_limited(query.application_id, 128, "applicationId")?;
-    let environment_id = optional_limited(query.environment_id, 128, "environmentId")?;
-    let name = optional_limited(query.name, 128, "name")?;
-    let text = optional_limited(query.text, 512, "text")?;
-    let level = optional_limited(query.level, 16, "level")?;
+    let application_id =
+        crate::security::validate_safe_identifier("applicationId", &query.application_id)?;
+    let environment_id = crate::security::validate_optional_safe_identifier(
+        "environmentId",
+        query.environment_id.as_deref(),
+    )?;
+    let name = optional_text(query.name, 128, "name")?;
+    let text = optional_text(query.text, 512, "text")?;
+    let level = optional_text(query.level, 16, "level")?;
     if let Some(level) = level.as_deref()
-        && !matches!(level, "trace" | "debug" | "info" | "warn" | "error" | "fatal")
+        && !matches!(
+            level,
+            "trace" | "debug" | "info" | "warn" | "error" | "fatal"
+        )
     {
         return Err(AppError::Validation("invalid log level".into()));
     }
@@ -112,34 +119,20 @@ async fn authorize(
     ))
 }
 
-fn required_limited(value: String, max_len: usize, field: &str) -> Result<String, AppError> {
-    let value = value.trim();
-    if value.is_empty() || value.len() > max_len {
-        return Err(AppError::Validation(format!(
-            "{field} must be 1..{max_len} bytes"
-        )));
-    }
-    Ok(value.to_owned())
-}
-
-fn optional_limited(
+fn optional_text(
     value: Option<String>,
     max_len: usize,
     field: &str,
 ) -> Result<Option<String>, AppError> {
-    value
-        .map(|value| {
-            let value = value.trim();
-            if value.is_empty() {
-                Ok(None)
-            } else if value.len() > max_len {
-                Err(AppError::Validation(format!(
-                    "{field} must be at most {max_len} bytes"
-                )))
-            } else {
-                Ok(Some(value.to_owned()))
+    match value.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty()) {
+        None => Ok(None),
+        Some(v) => {
+            if v.len() > max_len || v.chars().any(|c| c.is_control() || c == '\0') {
+                return Err(AppError::Validation(format!(
+                    "{field} is invalid or too long"
+                )));
             }
-        })
-        .transpose()
-        .map(Option::flatten)
+            Ok(Some(v))
+        }
+    }
 }

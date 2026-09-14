@@ -163,11 +163,7 @@ pub async fn get_rule(
         .and_where(Expr::col(Alias::new("id")).eq(id))
         .limit(1)
         .to_owned();
-    database
-        .query_one(&query)
-        .await?
-        .map(map_rule)
-        .transpose()
+    database.query_one(&query).await?.map(map_rule).transpose()
 }
 
 pub async fn update_rule(
@@ -352,18 +348,16 @@ pub async fn list_deliveries(
     limit: u64,
 ) -> Result<Vec<AlertDeliveryRecord>, DbErr> {
     let query = Query::select()
-        .columns(
-            [
-                (Alias::new("ad"), Alias::new("id")),
-                (Alias::new("ad"), Alias::new("rule_id")),
-                (Alias::new("ad"), Alias::new("channel_id")),
-                (Alias::new("ad"), Alias::new("status")),
-                (Alias::new("ad"), Alias::new("attempts")),
-                (Alias::new("ad"), Alias::new("last_error")),
-                (Alias::new("ad"), Alias::new("next_attempt_at")),
-                (Alias::new("ad"), Alias::new("created_at")),
-            ],
-        )
+        .columns([
+            (Alias::new("ad"), Alias::new("id")),
+            (Alias::new("ad"), Alias::new("rule_id")),
+            (Alias::new("ad"), Alias::new("channel_id")),
+            (Alias::new("ad"), Alias::new("status")),
+            (Alias::new("ad"), Alias::new("attempts")),
+            (Alias::new("ad"), Alias::new("last_error")),
+            (Alias::new("ad"), Alias::new("next_attempt_at")),
+            (Alias::new("ad"), Alias::new("created_at")),
+        ])
         .expr_as(
             Expr::col((Alias::new("ar"), Alias::new("name"))),
             Alias::new("rule_name"),
@@ -383,16 +377,21 @@ pub async fn list_deliveries(
             Expr::col((Alias::new("ad"), Alias::new("channel_id")))
                 .equals((Alias::new("nc"), Alias::new("id"))),
         )
-        .order_by((Alias::new("ad"), Alias::new("created_at")), sea_orm::Order::Desc)
+        .order_by(
+            (Alias::new("ad"), Alias::new("created_at")),
+            sea_orm::Order::Desc,
+        )
         .limit(limit)
         .to_owned();
 
     let rows = database.query_all(&query).await?;
     let mut result = Vec::with_capacity(rows.len());
     for row in rows {
-        let attempts: i32 = row
-            .try_get::<i32>("", "attempts")
-            .unwrap_or_else(|_| row.try_get::<i64>("", "attempts").map(|v| v as i32).unwrap_or(1));
+        let attempts: i32 = row.try_get::<i32>("", "attempts").unwrap_or_else(|_| {
+            row.try_get::<i64>("", "attempts")
+                .map(|v| v as i32)
+                .unwrap_or(1)
+        });
         result.push(AlertDeliveryRecord {
             id: row.try_get("", "id")?,
             rule_id: row.try_get("", "rule_id")?,
@@ -430,15 +429,25 @@ async fn cancel_pending_deliveries(
 
 fn map_rule(row: QueryResult) -> Result<AlertRuleRecord, DbErr> {
     let query_json: String = row.try_get("", "query_json")?;
-    let enabled = row
-        .try_get::<bool>("", "enabled")
-        .unwrap_or_else(|_| row.try_get::<i32>("", "enabled").map(|v| v == 1).unwrap_or(true));
+    let enabled = row.try_get::<bool>("", "enabled").unwrap_or_else(|_| {
+        row.try_get::<i32>("", "enabled")
+            .map(|v| v == 1)
+            .unwrap_or(true)
+    });
     let window_minutes = row
         .try_get::<i32>("", "window_minutes")
-        .unwrap_or_else(|_| row.try_get::<i64>("", "window_minutes").map(|v| v as i32).unwrap_or(5));
+        .unwrap_or_else(|_| {
+            row.try_get::<i64>("", "window_minutes")
+                .map(|v| v as i32)
+                .unwrap_or(5)
+        });
     let cooldown_seconds = row
         .try_get::<i32>("", "cooldown_seconds")
-        .unwrap_or_else(|_| row.try_get::<i64>("", "cooldown_seconds").map(|v| v as i32).unwrap_or(300));
+        .unwrap_or_else(|_| {
+            row.try_get::<i64>("", "cooldown_seconds")
+                .map(|v| v as i32)
+                .unwrap_or(300)
+        });
     Ok(AlertRuleRecord {
         id: row.try_get("", "id")?,
         application_id: row.try_get("", "application_id")?,
@@ -456,9 +465,11 @@ fn map_rule(row: QueryResult) -> Result<AlertRuleRecord, DbErr> {
 
 fn map_channel(row: QueryResult) -> Result<NotificationChannelRecord, DbErr> {
     let config_json: String = row.try_get("", "config_json")?;
-    let enabled = row
-        .try_get::<bool>("", "enabled")
-        .unwrap_or_else(|_| row.try_get::<i32>("", "enabled").map(|v| v == 1).unwrap_or(true));
+    let enabled = row.try_get::<bool>("", "enabled").unwrap_or_else(|_| {
+        row.try_get::<i32>("", "enabled")
+            .map(|v| v == 1)
+            .unwrap_or(true)
+    });
     Ok(NotificationChannelRecord {
         id: row.try_get("", "id")?,
         name: row.try_get("", "name")?,

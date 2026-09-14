@@ -29,14 +29,6 @@ pub struct UpdateSystemSettingsRequest {
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route(
-        "/api/v1/admin/applications/{application_id}/export",
-        web::get().to(export_application),
-    )
-    .route(
-        "/api/v1/admin/applications/import",
-        web::post().to(import_application),
-    )
-    .route(
         "/api/v1/admin/system/backup",
         web::get().to(export_system_backup),
     )
@@ -84,15 +76,15 @@ async fn update_system_settings(
         .get_ref()
         .as_ref()
         .update_installed_config(|cfg| {
-            if let Some(tz) = payload.timezone {
-                if !tz.trim().is_empty() {
-                    cfg.timezone = tz.trim().to_string();
-                }
+            if let Some(tz) = payload.timezone
+                && !tz.trim().is_empty()
+            {
+                cfg.timezone = tz.trim().to_string();
             }
-            if let Some(loc) = payload.locale {
-                if !loc.trim().is_empty() {
-                    cfg.locale = loc.trim().to_string();
-                }
+            if let Some(loc) = payload.locale
+                && !loc.trim().is_empty()
+            {
+                cfg.locale = loc.trim().to_string();
             }
         })
         .await?;
@@ -106,21 +98,21 @@ async fn update_system_settings(
     }))
 }
 
-async fn export_application(
+pub(crate) async fn export_application(
     state: web::Data<Arc<AppState>>,
     req: HttpRequest,
     path: web::Path<String>,
 ) -> Result<impl Responder, AppError> {
     let installed = state.installed().await?;
     let user = authentication::authenticate(&installed, &req).await?;
-    let app_id = path.into_inner();
+    let app_id = crate::security::validate_safe_identifier("applicationId", &path.into_inner())?;
     let export_data = backup::export_application(&installed, &user, &app_id).await?;
     Ok(HttpResponse::Ok()
         .insert_header(("cache-control", "no-store"))
         .json(export_data))
 }
 
-async fn import_application(
+pub(crate) async fn import_application(
     state: web::Data<Arc<AppState>>,
     req: HttpRequest,
     body: web::Json<application_backup::SingleAppExport>,
@@ -181,8 +173,9 @@ async fn restore_system_backup(
     let mut current_record_bytes = 0_usize;
 
     while let Some(chunk) = body.next().await {
-        let chunk = chunk
-            .map_err(|error| AppError::Validation(format!("backup upload was interrupted: {error}")))?;
+        let chunk = chunk.map_err(|error| {
+            AppError::Validation(format!("backup upload was interrupted: {error}"))
+        })?;
         for byte in chunk.as_ref() {
             if *byte == b'\n' {
                 current_record_bytes = 0;

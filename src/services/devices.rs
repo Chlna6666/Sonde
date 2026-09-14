@@ -12,8 +12,10 @@ use crate::{
     state::InstalledState,
 };
 
-pub use super::device_models::{DeviceRiskFilter as RiskFilter, DeviceStatusFilter as StatusFilter};
 pub use super::device_models::DeviceQuery as Query;
+pub use super::device_models::{
+    DeviceRiskFilter as RiskFilter, DeviceStatusFilter as StatusFilter,
+};
 
 const ACTIVE_WINDOW_MILLIS: i64 = 15 * 60_000;
 const RECENT_WINDOW_MILLIS: i64 = 24 * 60 * 60_000;
@@ -23,7 +25,8 @@ pub async fn list(
     user: &AuthenticatedUser,
     query: DeviceQuery,
 ) -> Result<DevicePage, AppError> {
-    applications::ensure_app_access(&installed.database, user, &query.application_id, false).await?;
+    applications::ensure_app_access(&installed.database, user, &query.application_id, false)
+        .await?;
 
     let now = chrono::Utc::now().timestamp_millis();
     let active_since = now.saturating_sub(ACTIVE_WINDOW_MILLIS);
@@ -176,7 +179,7 @@ fn classify_risk(score: i32) -> DeviceRiskLevel {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_risk, classify_status, DeviceRiskLevel, DeviceStatus};
+    use super::{DeviceRiskLevel, DeviceStatus, classify_risk, classify_status};
 
     #[test]
     fn status_thresholds_are_stable() {

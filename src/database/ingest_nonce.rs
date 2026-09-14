@@ -36,10 +36,7 @@ pub async fn record_once(
     }
 }
 
-pub async fn cleanup_expired(
-    database: &impl ConnectionTrait,
-    now: i64,
-) -> Result<u64, DbErr> {
+pub async fn cleanup_expired(database: &impl ConnectionTrait, now: i64) -> Result<u64, DbErr> {
     let delete = Query::delete()
         .from_table(Alias::new("ingest_nonce_replay"))
         .and_where(Expr::col(Alias::new("expires_at")).lte(now))

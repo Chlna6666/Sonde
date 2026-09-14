@@ -68,7 +68,10 @@ impl AlertExpression {
             if filter.value.is_empty() || filter.value.len() > 256 {
                 return Err("alert filter values must be 1..256 bytes");
             }
-            if !self.allowed_filter_fields().contains(&filter.field.as_str()) {
+            if !self
+                .allowed_filter_fields()
+                .contains(&filter.field.as_str())
+            {
                 return Err("alert filter field is not supported for this source");
             }
         }
@@ -87,13 +90,7 @@ impl AlertExpression {
             AlertSource::MetricAverage | AlertSource::MetricSum => {
                 &["environment_id", "name", "metric_type", "unit"]
             }
-            AlertSource::LogCount => &[
-                "environment_id",
-                "level",
-                "logger",
-                "trace_id",
-                "span_id",
-            ],
+            AlertSource::LogCount => &["environment_id", "level", "logger", "trace_id", "span_id"],
         }
     }
 }
@@ -118,13 +115,29 @@ mod tests {
 
     #[test]
     fn rejects_unknown_filter_columns() {
-        assert!(expression(AlertSource::EventCount, "password_hash").validate().is_err());
-        assert!(expression(AlertSource::MetricAverage, "message").validate().is_err());
+        assert!(
+            expression(AlertSource::EventCount, "password_hash")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            expression(AlertSource::MetricAverage, "message")
+                .validate()
+                .is_err()
+        );
     }
 
     #[test]
     fn accepts_supported_filter_columns() {
-        assert!(expression(AlertSource::EventCount, "app_version").validate().is_ok());
-        assert!(expression(AlertSource::LogCount, "level").validate().is_ok());
+        assert!(
+            expression(AlertSource::EventCount, "app_version")
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            expression(AlertSource::LogCount, "level")
+                .validate()
+                .is_ok()
+        );
     }
 }

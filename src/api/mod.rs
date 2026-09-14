@@ -31,7 +31,6 @@ pub fn configure(config: &mut web::ServiceConfig) {
         .configure(authentication::configure)
         .configure(access::configure)
         .configure(applications::configure)
-        .configure(devices::configure)
         .configure(backup::configure)
         .configure(public::configure)
         .configure(explorer::configure)

@@ -1,7 +1,5 @@
 use crate::{
-    database::error_query,
-    error::AppError,
-    services::authentication::AuthenticatedUser,
+    database::error_query, error::AppError, services::authentication::AuthenticatedUser,
     state::InstalledState,
 };
 
@@ -56,15 +54,8 @@ pub async fn occurrences(
         .await?
         .ok_or(AppError::NotFound)?;
     user.require("telemetry.read", Some(&group.application_id))?;
-    let record = error_query::occurrences(
-        &installed.database,
-        group_id,
-        page,
-        page_size,
-        from,
-        to,
-    )
-    .await?;
+    let record =
+        error_query::occurrences(&installed.database, group_id, page, page_size, from, to).await?;
     Ok(map_occurrence_page(record))
 }
 

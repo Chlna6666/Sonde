@@ -3,7 +3,9 @@ use std::path::Path;
 use futures_util::Stream;
 
 use crate::{
-    database::{application_backup, applications, backup_archive, backup_validation, dimension_restore},
+    database::{
+        application_backup, applications, backup_archive, backup_validation, dimension_restore,
+    },
     error::AppError,
     services::{applications::ensure_app_access, authentication::AuthenticatedUser},
     state::InstalledState,
@@ -44,12 +46,9 @@ pub async fn import_application(
     user.require("apps.manage", None)?;
     validate_application_backup_header(&payload.format_version, &payload.export_type)?;
     validate_application_backup_metrics(&payload)?;
-    let new_app_id = application_backup::import_single_application(
-        &installed.database,
-        Some(&user.id),
-        payload,
-    )
-    .await?;
+    let new_app_id =
+        application_backup::import_single_application(&installed.database, Some(&user.id), payload)
+            .await?;
 
     applications::audit(
         &installed.database,
@@ -66,10 +65,7 @@ pub async fn import_application(
 pub async fn export_system_backup(
     installed: &InstalledState,
     user: &AuthenticatedUser,
-) -> Result<
-    impl Stream<Item = Result<Vec<u8>, backup_archive::BackupError>> + use<>,
-    AppError,
-> {
+) -> Result<impl Stream<Item = Result<Vec<u8>, backup_archive::BackupError>> + use<>, AppError> {
     require_system_backup_access(user)?;
 
     applications::audit(
@@ -93,12 +89,10 @@ pub async fn restore_system_backup(
 ) -> Result<u64, AppError> {
     require_system_backup_access(user)?;
 
-    let restored = backup_validation::restore_full_system_exact_validated(
-        &installed.database,
-        path,
-    )
-    .await
-    .map_err(map_backup_error)?;
+    let restored =
+        backup_validation::restore_full_system_exact_validated(&installed.database, path)
+            .await
+            .map_err(map_backup_error)?;
 
     // Rollups are derived cache state. Readers fall back to authoritative raw telemetry until the
     // normal dirty-day workers rebuild every projection after an exact restore.
@@ -247,12 +241,7 @@ fn validate_histogram_backup(
 }
 
 fn require_system_backup_access(user: &AuthenticatedUser) -> Result<(), AppError> {
-    if user
-        .roles
-        .iter()
-        .any(|role| role == "Super Admin" || role == "Admin")
-        || user.grants.iter().any(|grant| grant.allows("*", None))
-    {
+    if user.is_unscoped_owner() {
         Ok(())
     } else {
         Err(AppError::Forbidden)
@@ -266,8 +255,6 @@ fn map_backup_error(error: backup_archive::BackupError) -> AppError {
         backup_archive::BackupError::Json(error) => {
             AppError::Validation(format!("invalid backup JSON: {error}"))
         }
-        backup_archive::BackupError::Io(error) => {
-            AppError::internal("restore backup file", error)
-        }
+        backup_archive::BackupError::Io(error) => AppError::internal("restore backup file", error),
     }
 }

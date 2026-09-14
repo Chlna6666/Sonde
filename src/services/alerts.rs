@@ -1,4 +1,5 @@
-use std::{net::Ipv4Addr, sync::OnceLock, time::Duration};
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use reqwest::redirect::Policy;
 use sea_orm::{
@@ -6,18 +7,21 @@ use sea_orm::{
     sea_query::{Alias, Expr, ExprTrait, Func, Query},
 };
 use tracing::{info, warn};
-use url::{Host, Url};
+use url::Url;
 
-use crate::{
-    database::{alert_delivery, applications},
-    domain::alert::{AlertExpression, AlertSource},
-    error::AppError,
-    services::authentication::AuthenticatedUser,
-    state::InstalledState,
-};
 use crate::database::alerts::{
     self as alert_store, AlertDeliveryRecord, AlertRuleRecord, NewRule, NotificationChannelRecord,
     UpdateRule,
+};
+use crate::{
+    database::{alert_delivery, applications},
+    domain::{
+        alert::{AlertExpression, AlertSource},
+        outbound,
+    },
+    error::AppError,
+    services::authentication::AuthenticatedUser,
+    state::InstalledState,
 };
 
 const DELIVERY_MAX_ATTEMPTS: i32 = 3;
@@ -404,21 +408,16 @@ pub async fn process_due_deliveries(
     database: &DatabaseConnection,
     limit: u64,
 ) -> Result<usize, DbErr> {
-    let deliveries = alert_delivery::list_due(
-        database,
-        chrono::Utc::now().timestamp_millis(),
-        limit,
-    )
-    .await?;
+    let deliveries =
+        alert_delivery::list_due(database, chrono::Utc::now().timestamp_millis(), limit).await?;
     let mut processed = 0_usize;
 
     for delivery in deliveries {
         let payload = match serde_json::from_str::<serde_json::Value>(&delivery.payload_json) {
             Ok(payload) => payload,
             Err(error) => {
-                let message = truncate_delivery_error(&format!(
-                    "invalid persisted alert payload: {error}"
-                ));
+                let message =
+                    truncate_delivery_error(&format!("invalid persisted alert payload: {error}"));
                 if alert_delivery::mark_failed(
                     database,
                     &delivery.id,
@@ -465,12 +464,7 @@ pub async fn process_due_deliveries(
 
         match dispatch_to_channel(&channel, &payload).await {
             Ok(()) => {
-                if alert_delivery::mark_delivered(
-                    database,
-                    &delivery.id,
-                    delivery.attempts,
-                )
-                .await?
+                if alert_delivery::mark_delivered(database, &delivery.id, delivery.attempts).await?
                 {
                     processed = processed.saturating_add(1);
                 } else {
@@ -556,7 +550,10 @@ async fn metric_aggregate_value(
 
     let mut query = Query::select();
     query
-        .expr_as(Expr::cust(format!("SUM({contribution})")), Alias::new("total"))
+        .expr_as(
+            Expr::cust(format!("SUM({contribution})")),
+            Alias::new("total"),
+        )
         .expr_as(
             Func::count(Expr::cust(missing_sum)),
             Alias::new("missing_sums"),
@@ -598,7 +595,10 @@ async fn evaluate_rule_condition(
         AlertSource::EventCount => {
             let mut query = Query::select();
             query
-                .expr(Func::count(Expr::col(Alias::new("id"))))
+                .expr_as(
+                    Func::count(Expr::col(Alias::new("id"))),
+                    Alias::new("count"),
+                )
                 .from(Alias::new("events"))
                 .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
                 .and_where(Expr::col(Alias::new("timestamp")).gte(window_start))
@@ -611,7 +611,10 @@ async fn evaluate_rule_condition(
         AlertSource::LogCount => {
             let mut query = Query::select();
             query
-                .expr(Func::count(Expr::col(Alias::new("id"))))
+                .expr_as(
+                    Func::count(Expr::col(Alias::new("id"))),
+                    Alias::new("count"),
+                )
                 .from(Alias::new("logs"))
                 .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
                 .and_where(Expr::col(Alias::new("timestamp")).gte(window_start))
@@ -645,7 +648,10 @@ async fn evaluate_rule_condition(
         }
         AlertSource::MissingData => {
             let query = Query::select()
-                .expr(Func::count(Expr::col(Alias::new("id"))))
+                .expr_as(
+                    Func::count(Expr::col(Alias::new("id"))),
+                    Alias::new("count"),
+                )
                 .from(Alias::new("events"))
                 .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
                 .and_where(Expr::col(Alias::new("timestamp")).gte(window_start))
@@ -659,7 +665,10 @@ async fn evaluate_rule_condition(
         }
         AlertSource::ChangeRate => {
             let curr_query = Query::select()
-                .expr(Func::count(Expr::col(Alias::new("id"))))
+                .expr_as(
+                    Func::count(Expr::col(Alias::new("id"))),
+                    Alias::new("count"),
+                )
                 .from(Alias::new("events"))
                 .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
                 .and_where(Expr::col(Alias::new("timestamp")).gte(window_start))
@@ -667,7 +676,10 @@ async fn evaluate_rule_condition(
                 .to_owned();
             let prev_start = window_start - (window_end - window_start);
             let prev_query = Query::select()
-                .expr(Func::count(Expr::col(Alias::new("id"))))
+                .expr_as(
+                    Func::count(Expr::col(Alias::new("id"))),
+                    Alias::new("count"),
+                )
                 .from(Alias::new("events"))
                 .and_where(Expr::col(Alias::new("application_id")).eq(app_id))
                 .and_where(Expr::col(Alias::new("timestamp")).gte(prev_start))
@@ -729,6 +741,7 @@ async fn dispatch_to_channel(
     match channel.kind.as_str() {
         "webhook" => {
             let url = channel_url(&channel.config)?;
+            ensure_public_destination(url).await?;
             let mut request = client.post(url).header("content-type", "application/json");
             if let Some(headers) = channel
                 .config
@@ -839,6 +852,7 @@ async fn send_json(
     payload: &serde_json::Value,
     channel_name: &str,
 ) -> Result<(), String> {
+    ensure_public_destination(url).await?;
     let response = client
         .post(url)
         .json(payload)
@@ -920,67 +934,33 @@ fn channel_url(config: &serde_json::Value) -> Result<&str, String> {
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
         .ok_or("Missing 'url' in channel config")?;
-    validate_outbound_url(url)?;
+    outbound::validate_outbound_url(url)?;
     Ok(url)
 }
 
-fn validate_outbound_url(raw: &str) -> Result<(), String> {
-    if raw.len() > 2_048 {
-        return Err("notification URL is too long".into());
-    }
+async fn ensure_public_destination(raw: &str) -> Result<(), String> {
+    outbound::validate_outbound_url(raw)?;
     let parsed = Url::parse(raw).map_err(|_| "notification URL is invalid".to_string())?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("notification URL must use http or https".into());
+    let host = parsed
+        .host_str()
+        .ok_or("notification URL must contain a host")?;
+    let port = parsed
+        .port_or_known_default()
+        .ok_or("notification URL must include a port")?;
+    let resolved = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|error| format!("notification URL could not be resolved: {error}"))?;
+    let mut saw_address = false;
+    for address in resolved {
+        saw_address = true;
+        if !outbound::is_public_ip(address.ip()) {
+            return Err("notification URL resolved to a non-public address".into());
+        }
     }
-    if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err("notification URL must not contain userinfo credentials".into());
-    }
-
-    match parsed
-        .host()
-        .ok_or("notification URL must contain a host")?
-    {
-        Host::Domain(domain) => {
-            let domain = domain.trim_end_matches('.').to_ascii_lowercase();
-            if domain == "localhost"
-                || domain.ends_with(".localhost")
-                || domain.ends_with(".local")
-                || domain.ends_with(".internal")
-                || domain == "metadata.google.internal"
-            {
-                return Err("notification URL must not target a local host".into());
-            }
-        }
-        Host::Ipv4(address) => {
-            if !is_public_ipv4(address) {
-                return Err("notification URL must target a public IPv4 address".into());
-            }
-        }
-        Host::Ipv6(address) => {
-            if address.is_loopback()
-                || address.is_unspecified()
-                || address.is_unique_local()
-                || address.is_unicast_link_local()
-                || address.is_multicast()
-            {
-                return Err("notification URL must target a public IPv6 address".into());
-            }
-        }
+    if !saw_address {
+        return Err("notification URL did not resolve to an address".into());
     }
     Ok(())
-}
-
-fn is_public_ipv4(address: Ipv4Addr) -> bool {
-    let [a, b, _, _] = address.octets();
-    !(a == 0
-        || a == 10
-        || a == 127
-        || a >= 224
-        || (a == 100 && (64..=127).contains(&b))
-        || (a == 169 && b == 254)
-        || (a == 172 && (16..=31).contains(&b))
-        || (a == 192 && b == 168)
-        || (a == 198 && (18..=19).contains(&b)))
 }
 
 fn redact_channel_config(config: &mut serde_json::Value) {
@@ -1024,8 +1004,8 @@ fn source_name(expression: &AlertExpression) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_public_ipv4, parse_pending_hits, truncate_delivery_error, validate_outbound_url};
-    use std::net::Ipv4Addr;
+    use super::{parse_pending_hits, truncate_delivery_error};
+    use crate::domain::outbound;
 
     #[test]
     fn pending_alert_state_is_parsed() {
@@ -1035,11 +1015,9 @@ mod tests {
 
     #[test]
     fn private_notification_targets_are_rejected() {
-        assert!(!is_public_ipv4(Ipv4Addr::new(127, 0, 0, 1)));
-        assert!(!is_public_ipv4(Ipv4Addr::new(10, 0, 0, 1)));
-        assert!(validate_outbound_url("http://127.0.0.1/hook").is_err());
-        assert!(validate_outbound_url("http://localhost/hook").is_err());
-        assert!(validate_outbound_url("https://example.com/hook").is_ok());
+        assert!(outbound::validate_outbound_url("http://127.0.0.1/hook").is_err());
+        assert!(outbound::validate_outbound_url("http://localhost/hook").is_err());
+        assert!(outbound::validate_outbound_url("https://example.com/hook").is_ok());
     }
 
     #[test]

@@ -35,10 +35,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
         web::scope("/api/v1/admin/errors")
             .route("/groups", web::get().to(groups))
             .route("/groups/{group_id}", web::get().to(group))
-            .route(
-                "/groups/{group_id}/occurrences",
-                web::get().to(occurrences),
-            ),
+            .route("/groups/{group_id}/occurrences", web::get().to(occurrences)),
     );
 }
 
@@ -132,11 +129,7 @@ fn validate_window(from: Option<i64>, to: Option<i64>) -> Result<(), AppError> {
 }
 
 fn validate_identifier(name: &str, value: &str) -> Result<(), AppError> {
-    if value.is_empty() || value.len() > 128 {
-        return Err(AppError::Validation(format!(
-            "{name} must be 1..128 bytes"
-        )));
-    }
+    crate::security::validate_safe_identifier(name, value)?;
     Ok(())
 }
 

@@ -36,7 +36,9 @@ pub async fn persist_transition(
     let payload_json = serde_json::to_string(payload)
         .map_err(|error| DbErr::Custom(format!("alert payload serialization failed: {error}")))?;
     if payload_json.len() > MAX_DELIVERY_PAYLOAD_BYTES {
-        return Err(DbErr::Custom("alert delivery payload exceeds 64 KiB".into()));
+        return Err(DbErr::Custom(
+            "alert delivery payload exceeds 64 KiB".into(),
+        ));
     }
 
     let transaction = database.begin().await?;
@@ -128,16 +130,7 @@ pub async fn list_due(
     limit: u64,
 ) -> Result<Vec<PendingDelivery>, DbErr> {
     let query = Query::select()
-        .columns(
-            [
-                "id",
-                "rule_id",
-                "channel_id",
-                "attempts",
-                "payload_json",
-            ]
-            .map(Alias::new),
-        )
+        .columns(["id", "rule_id", "channel_id", "attempts", "payload_json"].map(Alias::new))
         .from(Alias::new("alert_deliveries"))
         .and_where(Expr::col(Alias::new("status")).eq("pending"))
         .and_where(

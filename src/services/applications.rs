@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     auth,
     database::{application_delete, applications as application_store},
+    domain::{outbound, permission},
     error::AppError,
     services::authentication::AuthenticatedUser,
     state::InstalledState,
@@ -17,11 +18,7 @@ pub async fn list(
     installed: &InstalledState,
     user: &AuthenticatedUser,
 ) -> Result<Vec<ApplicationSummary>, AppError> {
-    let is_admin = user
-        .roles
-        .iter()
-        .any(|r| r == "Super Admin" || r == "Admin")
-        || user.grants.iter().any(|g| g.allows("*", None));
+    let is_admin = user.is_unscoped_admin();
     let records =
         application_store::list_applications(&installed.database, Some(&user.id), is_admin).await?;
     Ok(records.into_iter().map(map_application).collect())
@@ -31,9 +28,11 @@ pub async fn public_by_slug(
     installed: &InstalledState,
     slug: &str,
 ) -> Result<Option<PublicApplicationInfo>, AppError> {
-    Ok(application_store::get_public_application_by_slug(&installed.database, slug)
-        .await?
-        .map(map_public_application))
+    Ok(
+        application_store::get_public_application_by_slug(&installed.database, slug)
+            .await?
+            .map(map_public_application),
+    )
 }
 
 pub async fn list_environments(
@@ -52,9 +51,11 @@ pub async fn create(
     name: &str,
     slug: &str,
 ) -> Result<(String, String), AppError> {
+    user.require("apps.create", None)?;
     validate_application(name, slug)?;
     let created =
-        application_store::create_application(&installed.database, name, slug, Some(&user.id)).await?;
+        application_store::create_application(&installed.database, name, slug, Some(&user.id))
+            .await?;
     application_store::audit(
         &installed.database,
         Some(&user.id),
@@ -121,7 +122,8 @@ pub async fn revoke_key(
     key_id: &str,
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
-    let revoked = application_store::revoke_api_key(&installed.database, application_id, key_id).await?;
+    let revoked =
+        application_store::revoke_api_key(&installed.database, application_id, key_id).await?;
     if !revoked {
         return Err(AppError::NotFound);
     }
@@ -143,7 +145,8 @@ pub async fn delete_key(
     key_id: &str,
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
-    let deleted = application_store::delete_api_key(&installed.database, application_id, key_id).await?;
+    let deleted =
+        application_store::delete_api_key(&installed.database, application_id, key_id).await?;
     if !deleted {
         return Err(AppError::NotFound);
     }
@@ -164,7 +167,8 @@ pub async fn clear_revoked_keys(
     application_id: &str,
 ) -> Result<u64, AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
-    let count = application_store::delete_revoked_api_keys(&installed.database, application_id).await?;
+    let count =
+        application_store::delete_revoked_api_keys(&installed.database, application_id).await?;
     application_store::audit(
         &installed.database,
         Some(&user.id),
@@ -225,6 +229,8 @@ pub async fn update(
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
     validate_application(params.name, params.slug)?;
+    validate_optional_public_url(params.github_url.as_ref())?;
+    validate_optional_public_url(params.website_url.as_ref())?;
     application_store::update_application(
         &installed.database,
         application_id,
@@ -275,7 +281,8 @@ pub async fn list_members(
     application_id: &str,
 ) -> Result<Vec<AppMemberSummary>, AppError> {
     ensure_app_access(&installed.database, user, application_id, false).await?;
-    let records = application_store::list_application_members(&installed.database, application_id).await?;
+    let records =
+        application_store::list_application_members(&installed.database, application_id).await?;
     Ok(records.into_iter().map(map_member).collect())
 }
 
@@ -287,8 +294,18 @@ pub async fn grant_member(
     role: &str,
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
-    application_store::grant_application_access(&installed.database, application_id, target_user_id, role)
-        .await?;
+    if !permission::is_assignable_application_role(role) {
+        return Err(AppError::Validation(
+            "application members must use Manager, Analyst, or Viewer".into(),
+        ));
+    }
+    application_store::grant_application_access(
+        &installed.database,
+        application_id,
+        target_user_id,
+        role,
+    )
+    .await?;
     application_store::audit(
         &installed.database,
         Some(&user.id),
@@ -307,8 +324,12 @@ pub async fn revoke_member(
     target_user_id: &str,
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
-    application_store::revoke_application_access(&installed.database, application_id, target_user_id)
-        .await?;
+    application_store::revoke_application_access(
+        &installed.database,
+        application_id,
+        target_user_id,
+    )
+    .await?;
     application_store::audit(
         &installed.database,
         Some(&user.id),
@@ -326,12 +347,7 @@ pub async fn ensure_app_access(
     application_id: &str,
     write: bool,
 ) -> Result<(), AppError> {
-    if user
-        .roles
-        .iter()
-        .any(|r| r == "Super Admin" || r == "Admin")
-        || user.grants.iter().any(|g| g.allows("*", None))
-    {
+    if user.is_unscoped_admin() {
         return Ok(());
     }
     let app = application_store::get_application(database, application_id)
@@ -346,6 +362,16 @@ pub async fn ensure_app_access(
         user.require("apps.read", Some(application_id))?;
     }
     Ok(())
+}
+
+fn validate_optional_public_url(value: Option<&Option<String>>) -> Result<(), AppError> {
+    let Some(Some(url)) = value else {
+        return Ok(());
+    };
+    if url.trim().is_empty() {
+        return Ok(());
+    }
+    outbound::validate_public_link(url).map_err(|message| AppError::Validation(message.into()))
 }
 
 fn validate_application(name: &str, slug: &str) -> Result<(), AppError> {
@@ -383,7 +409,9 @@ fn map_application(record: application_store::ApplicationSummary) -> Application
     }
 }
 
-fn map_public_application(record: application_store::PublicApplicationInfo) -> PublicApplicationInfo {
+fn map_public_application(
+    record: application_store::PublicApplicationInfo,
+) -> PublicApplicationInfo {
     PublicApplicationInfo {
         id: record.id,
         name: record.name,

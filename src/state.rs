@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
-use tokio::sync::{
-    Mutex, OwnedSemaphorePermit, RwLock, Semaphore, TryAcquireError, broadcast,
-};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore, TryAcquireError, broadcast};
 
 use crate::{
     config::{InstallationConfig, RuntimeConfig},

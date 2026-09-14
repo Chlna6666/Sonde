@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
-use rand::RngCore;
 use sha2::Sha256;
 use tokio::sync::Mutex;
 
@@ -32,20 +31,14 @@ struct Attempt {
 struct Challenge {
     account_key: String,
     source_key: String,
-    answer_hash: String,
     expires_at: i64,
 }
 
 #[derive(Debug)]
 pub enum LoginGate {
     Allowed,
-    ChallengeRequired {
-        challenge_id: String,
-        prompt: String,
-    },
-    Delayed {
-        retry_after_seconds: u64,
-    },
+    ChallengeRequired { challenge_id: String },
+    Delayed { retry_after_seconds: u64 },
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -156,14 +149,12 @@ impl IngestSecurity {
     }
 
     pub async fn check_device_rate(&self, app_id: &str, device_id: &str) -> bool {
-        let key = format!("{app_id}:{device_id}");
-        charge_rate(
+        charge_device_rate(
             &self.device_rate,
-            &key,
+            app_id,
+            device_id,
             1,
             DEVICE_INGEST_REQUESTS_PER_MINUTE,
-            RATE_WINDOW_MILLIS,
-            50_000,
         )
         .await
     }
@@ -174,14 +165,12 @@ impl IngestSecurity {
         device_id: &str,
         body_bytes: usize,
     ) -> bool {
-        let key = format!("{app_id}:{device_id}");
-        charge_rate(
+        charge_device_rate(
             &self.device_ingest_bytes,
-            &key,
+            app_id,
+            device_id,
             body_bytes.max(1) as u64,
             DEVICE_INGEST_BYTES_PER_MINUTE,
-            RATE_WINDOW_MILLIS,
-            50_000,
         )
         .await
     }
@@ -192,23 +181,22 @@ impl IngestSecurity {
         device_id: &str,
         item_count: usize,
     ) -> bool {
-        let key = format!("{app_id}:{device_id}");
-        charge_rate(
+        charge_device_rate(
             &self.device_ingest_items,
-            &key,
+            app_id,
+            device_id,
             item_count.max(1) as u64,
             DEVICE_INGEST_ITEMS_PER_MINUTE,
-            RATE_WINDOW_MILLIS,
-            50_000,
         )
         .await
     }
 
-    pub fn client_binding(&self, user_agent: &str, pepper: &[u8]) -> String {
-        let mut context = Vec::with_capacity(INGEST_CLIENT_BINDING_CONTEXT.len() + user_agent.len());
+    pub fn client_binding(&self, user_agent: &str, pepper: &[u8]) -> Result<String, AppError> {
+        let mut context =
+            Vec::with_capacity(INGEST_CLIENT_BINDING_CONTEXT.len() + user_agent.len());
         context.extend_from_slice(INGEST_CLIENT_BINDING_CONTEXT);
         context.extend_from_slice(user_agent.as_bytes());
-        hex::encode(hmac_sha256(pepper, &context))
+        Ok(hex::encode(hmac_sha256(pepper, &context)?))
     }
 
     /// Issue a short-lived ingest token bound only to the current pseudonymous device identity and
@@ -227,7 +215,7 @@ impl IngestSecurity {
         let now = chrono::Utc::now().timestamp_millis();
         let expires_at = now.saturating_add(ttl_seconds.saturating_mul(1_000));
         let token_id = auth::random_token(18);
-        let signing_key = derive_ingest_signing_key(pepper, &token_id);
+        let signing_key = derive_ingest_signing_key(pepper, &token_id)?;
 
         let claims = IngestTokenClaims {
             application_id: application_id.to_owned(),
@@ -243,17 +231,13 @@ impl IngestSecurity {
         let json_bytes = serde_json::to_vec(&claims)
             .map_err(|error| AppError::internal("serialize ingest token claims", error))?;
         let payload_b64 = URL_SAFE_NO_PAD.encode(json_bytes);
-        let sig = hmac_sha256(pepper, payload_b64.as_bytes());
+        let sig = hmac_sha256(pepper, payload_b64.as_bytes())?;
         let token = format!("sndt_{}.{}", payload_b64, hex::encode(sig));
 
         Ok((token, signing_key, expires_at))
     }
 
-    pub fn verify_ingest_token(
-        &self,
-        token_str: &str,
-        pepper: &[u8],
-    ) -> Option<IngestTokenClaims> {
+    pub fn verify_ingest_token(&self, token_str: &str, pepper: &[u8]) -> Option<IngestTokenClaims> {
         let without_prefix = token_str.strip_prefix("sndt_")?;
         let (payload_b64, sig_hex) = without_prefix.split_once('.')?;
         let provided_sig = hex::decode(sig_hex).ok()?;
@@ -280,7 +264,11 @@ impl IngestSecurity {
         Some(claims)
     }
 
-    pub fn signing_key_for_claims(&self, claims: &IngestTokenClaims, pepper: &[u8]) -> String {
+    pub fn signing_key_for_claims(
+        &self,
+        claims: &IngestTokenClaims,
+        pepper: &[u8],
+    ) -> Result<String, AppError> {
         derive_ingest_signing_key(pepper, &claims.token_id)
     }
 }
@@ -308,11 +296,41 @@ async fn charge_rate(
     }
 }
 
-fn derive_ingest_signing_key(pepper: &[u8], token_id: &str) -> String {
+async fn charge_device_rate(
+    buckets: &Mutex<HashMap<String, RateBucket>>,
+    app_id: &str,
+    device_id: &str,
+    cost: u64,
+    limit: u64,
+) -> bool {
+    let total = app_id
+        .len()
+        .saturating_add(device_id.len())
+        .saturating_add(1);
+    if total <= 384 {
+        let mut buffer = [0_u8; 384];
+        buffer[..app_id.len()].copy_from_slice(app_id.as_bytes());
+        buffer[app_id.len()] = b':';
+        buffer[app_id.len() + 1..total].copy_from_slice(device_id.as_bytes());
+        if let Ok(key) = std::str::from_utf8(&buffer[..total]) {
+            return charge_rate(buckets, key, cost, limit, RATE_WINDOW_MILLIS, 50_000).await;
+        }
+    }
+    let mut key = String::with_capacity(total);
+    key.push_str(app_id);
+    key.push(':');
+    key.push_str(device_id);
+    charge_rate(buckets, &key, cost, limit, RATE_WINDOW_MILLIS, 50_000).await
+}
+
+fn derive_ingest_signing_key(pepper: &[u8], token_id: &str) -> Result<String, AppError> {
     let mut context = Vec::with_capacity(INGEST_SIGNING_CONTEXT.len() + token_id.len());
     context.extend_from_slice(INGEST_SIGNING_CONTEXT);
     context.extend_from_slice(token_id.as_bytes());
-    format!("sec_{}", URL_SAFE_NO_PAD.encode(hmac_sha256(pepper, &context)))
+    Ok(format!(
+        "sec_{}",
+        URL_SAFE_NO_PAD.encode(hmac_sha256(pepper, &context)?)
+    ))
 }
 
 fn verify_hmac_sha256(key: &[u8], data: &[u8], provided: &[u8]) -> bool {
@@ -323,15 +341,14 @@ fn verify_hmac_sha256(key: &[u8], data: &[u8], provided: &[u8]) -> bool {
     mac.verify_slice(provided).is_ok()
 }
 
-pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
-    let Ok(mut mac) = HmacSha256::new_from_slice(key) else {
-        return [0_u8; 32];
-    };
+pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Result<[u8; 32], AppError> {
+    let mut mac = HmacSha256::new_from_slice(key)
+        .map_err(|error| AppError::internal("initialize hmac-sha256", error))?;
     mac.update(data);
     let bytes = mac.finalize().into_bytes();
     let mut output = [0_u8; 32];
     output.copy_from_slice(&bytes);
-    output
+    Ok(output)
 }
 
 pub struct AuthSecurity {
@@ -349,10 +366,7 @@ impl AuthSecurity {
             challenges: Mutex::new(HashMap::new()),
             ingest: Arc::new(IngestSecurity::new()),
             pepper: pepper.to_vec(),
-            dummy_password_hash: auth::hash_password(
-                "sonde-dummy-credential-never-used",
-                pepper,
-            )?,
+            dummy_password_hash: auth::hash_password("sonde-dummy-credential-never-used", pepper)?,
         })
     }
 
@@ -369,7 +383,6 @@ impl AuthSecurity {
         account_key: &str,
         source_key: &str,
         challenge_id: Option<&str>,
-        challenge_response: Option<&str>,
     ) -> LoginGate {
         let now = chrono::Utc::now().timestamp_millis();
         let attempts = self.attempts.lock().await;
@@ -390,13 +403,7 @@ impl AuthSecurity {
             return LoginGate::Allowed;
         }
         if self
-            .consume_challenge(
-                account_key,
-                source_key,
-                challenge_id,
-                challenge_response,
-                now,
-            )
+            .consume_challenge(account_key, source_key, challenge_id, now)
             .await
         {
             LoginGate::Allowed
@@ -432,8 +439,6 @@ impl AuthSecurity {
 
     async fn issue_challenge(&self, account_key: &str, source_key: &str, now: i64) -> LoginGate {
         let challenge_id = auth::random_token(18);
-        let prompt = challenge_code();
-        let answer_hash = auth::token_hash(&prompt);
         let mut challenges = self.challenges.lock().await;
         if challenges.len() > 20_000 {
             challenges.retain(|_, c| c.expires_at > now);
@@ -443,14 +448,10 @@ impl AuthSecurity {
             Challenge {
                 account_key: account_key.to_owned(),
                 source_key: source_key.to_owned(),
-                answer_hash,
                 expires_at: now + CHALLENGE_MILLIS,
             },
         );
-        LoginGate::ChallengeRequired {
-            challenge_id,
-            prompt,
-        }
+        LoginGate::ChallengeRequired { challenge_id }
     }
 
     async fn consume_challenge(
@@ -458,11 +459,9 @@ impl AuthSecurity {
         account_key: &str,
         source_key: &str,
         challenge_id: Option<&str>,
-        challenge_response: Option<&str>,
         now: i64,
     ) -> bool {
-        let (Some(challenge_id), Some(challenge_response)) = (challenge_id, challenge_response)
-        else {
+        let Some(challenge_id) = challenge_id else {
             return false;
         };
         let mut challenges = self.challenges.lock().await;
@@ -472,15 +471,99 @@ impl AuthSecurity {
         challenge.expires_at > now
             && challenge.account_key == account_key
             && challenge.source_key == source_key
-            && challenge.answer_hash == auth::token_hash(challenge_response.trim())
     }
 }
 
-fn challenge_code() -> String {
-    let mut bytes = [0_u8; 3];
-    rand::rng().fill_bytes(&mut bytes);
-    let value = u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]) % 1_000_000;
-    format!("{value:06}")
+/// Validates that an identifier (application ID, environment ID, key ID, user ID, slug, etc.)
+/// is non-empty, within max_len (1..128 bytes), and strictly contains only safe characters
+/// (`[a-zA-Z0-9_.-]`), does not contain path traversal sequences like `..`, `/`, `\`,
+/// null bytes, control characters, and does not start with `.` or `-`.
+pub fn validate_safe_identifier(field: &str, value: &str) -> Result<String, AppError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 128 {
+        return Err(AppError::Validation(format!(
+            "{field} must be 1..128 characters"
+        )));
+    }
+    // Disallow starting with dot, hyphen or slash
+    if trimmed.starts_with('.')
+        || trimmed.starts_with('-')
+        || trimmed.starts_with('/')
+        || trimmed.starts_with('\\')
+    {
+        return Err(AppError::Validation(format!(
+            "{field} must start with an alphanumeric character or underscore"
+        )));
+    }
+    // Disallow path traversal, slashes, nulls
+    if trimmed.contains("..")
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.contains('\0')
+    {
+        return Err(AppError::Validation(format!(
+            "{field} contains invalid or traversal characters"
+        )));
+    }
+    // Whitelist character set: [a-zA-Z0-9_.-]
+    for ch in trimmed.chars() {
+        if !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' && ch != '.' {
+            return Err(AppError::Validation(format!(
+                "{field} contains forbidden character '{ch}'"
+            )));
+        }
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// Validates an optional identifier, returning Ok(None) if empty or None,
+/// or Ok(Some(safe_id)) if present and valid.
+pub fn validate_optional_safe_identifier(
+    field: &str,
+    value: Option<&str>,
+) -> Result<Option<String>, AppError> {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        None => Ok(None),
+        Some(v) => validate_safe_identifier(field, v).map(Some),
+    }
+}
+
+/// Validates a relative file/asset path to ensure it cannot escape its base directory via path traversal.
+pub fn validate_safe_relative_path(raw: &str) -> Result<String, AppError> {
+    if raw.is_empty() {
+        return Ok(String::new());
+    }
+    // Reject explicit path traversal tokens, null bytes, backslashes, percent encoding tricks
+    if raw.contains('\0')
+        || raw.contains('\\')
+        || raw.contains("%2e")
+        || raw.contains("%2E")
+        || raw.contains("%2f")
+        || raw.contains("%2F")
+        || raw.contains("%5c")
+        || raw.contains("%5C")
+        || raw.contains("%00")
+        || raw.contains("%25")
+    // reject double percent-encoding
+    {
+        return Err(AppError::Validation(
+            "invalid path characters or traversal detected".into(),
+        ));
+    }
+    let path = std::path::Path::new(raw.trim_start_matches('/'));
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(_) | std::path::Component::CurDir => {}
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {
+                return Err(AppError::Validation(
+                    "path traversal component detected".into(),
+                ));
+            }
+        }
+    }
+    Ok(raw.to_owned())
 }
 
 #[cfg(test)]
@@ -497,22 +580,18 @@ pub mod tests {
         runtime.block_on(async {
             let security = AuthSecurity::new(b"pepper").unwrap();
             assert!(matches!(
-                security.login_gate("admin", "127.0.0.1", None, None).await,
+                security.login_gate("admin", "127.0.0.1", None).await,
                 LoginGate::Allowed
             ));
 
             let challenge = security.record_failure("admin", "127.0.0.1").await;
-            let LoginGate::ChallengeRequired {
-                challenge_id,
-                prompt,
-            } = challenge
-            else {
+            let LoginGate::ChallengeRequired { challenge_id } = challenge else {
                 panic!("expected challenge");
             };
 
             assert!(matches!(
                 security
-                    .login_gate("admin", "127.0.0.1", Some(&challenge_id), Some(&prompt))
+                    .login_gate("admin", "127.0.0.1", Some(&challenge_id))
                     .await,
                 LoginGate::Allowed
             ));
@@ -524,7 +603,7 @@ pub mod tests {
         let pepper = b"test-secret-pepper-32-bytes-long!";
         let ingest = IngestSecurity::new();
         let user_agent = "SondeTest/1.0";
-        let client_binding = ingest.client_binding(user_agent, pepper);
+        let client_binding = ingest.client_binding(user_agent, pepper).unwrap();
 
         let (token, signing_key, expires_at) = ingest
             .issue_ingest_token(
@@ -543,7 +622,10 @@ pub mod tests {
         assert_eq!(claims.application_id, "app-uuid-1");
         assert_eq!(claims.device_id, "device-12345");
         assert_eq!(claims.client_binding, client_binding);
-        assert_eq!(ingest.signing_key_for_claims(&claims, pepper), signing_key);
+        assert_eq!(
+            ingest.signing_key_for_claims(&claims, pepper).unwrap(),
+            signing_key
+        );
         assert_eq!(claims.expires_at, expires_at);
         assert!(claims.scopes.contains(&"telemetry.events".to_string()));
 
@@ -575,11 +657,7 @@ pub mod tests {
                     .check_device_ingest_bytes("app", "device", 1024 * 1024)
                     .await
             );
-            assert!(
-                !ingest
-                    .check_device_ingest_bytes("app", "device", 1)
-                    .await
-            );
+            assert!(!ingest.check_device_ingest_bytes("app", "device", 1).await);
         });
     }
 
@@ -601,11 +679,44 @@ pub mod tests {
                     .check_device_ingest_items("app", "device", 1_000)
                     .await
             );
-            assert!(
-                !ingest
-                    .check_device_ingest_items("app", "device", 1)
-                    .await
-            );
+            assert!(!ingest.check_device_ingest_items("app", "device", 1).await);
         });
+    }
+
+    #[test]
+    fn safe_identifier_accepts_valid_ids_and_rejects_traversal() {
+        assert!(validate_safe_identifier("id", "06f2e1e2-6e89-4988-937c-d52967077522").is_ok());
+        assert!(validate_safe_identifier("id", "production_v1.0").is_ok());
+        assert!(validate_safe_identifier("id", "demo-app").is_ok());
+
+        // Rejections:
+        assert!(validate_safe_identifier("id", "").is_err());
+        assert!(validate_safe_identifier("id", "   ").is_err());
+        assert!(validate_safe_identifier("id", "../app").is_err());
+        assert!(validate_safe_identifier("id", "..\\app").is_err());
+        assert!(validate_safe_identifier("id", "app/sub").is_err());
+        assert!(validate_safe_identifier("id", "app\\sub").is_err());
+        assert!(validate_safe_identifier("id", "app\0bad").is_err());
+        assert!(validate_safe_identifier("id", ".hidden").is_err());
+        assert!(validate_safe_identifier("id", "-flag").is_err());
+        assert!(validate_safe_identifier("id", "app space").is_err());
+        assert!(validate_safe_identifier("id", "app:colon").is_err());
+        assert!(validate_safe_identifier("id", &"a".repeat(129)).is_err());
+    }
+
+    #[test]
+    fn safe_relative_path_blocks_traversal_and_encoding_tricks() {
+        assert!(validate_safe_relative_path("assets/index.js").is_ok());
+        assert!(validate_safe_relative_path("index.html").is_ok());
+        assert!(validate_safe_relative_path("").is_ok());
+
+        // Rejections:
+        assert!(validate_safe_relative_path("../etc/passwd").is_err());
+        assert!(validate_safe_relative_path("assets/../../secret").is_err());
+        assert!(validate_safe_relative_path("assets\\secret").is_err());
+        assert!(validate_safe_relative_path("assets/%2e%2e/secret").is_err());
+        assert!(validate_safe_relative_path("assets/%252e%252e/secret").is_err());
+        assert!(validate_safe_relative_path("assets/%00.js").is_err());
+        assert!(validate_safe_relative_path("assets/\0.js").is_err());
     }
 }

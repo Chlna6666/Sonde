@@ -110,9 +110,7 @@ fn tier_name(tier: RiskTier) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        RiskTier, claims_scopes, policy_for_claims, policy_for_score, scaled_cost,
-    };
+    use super::{RiskTier, claims_scopes, policy_for_claims, policy_for_score, scaled_cost};
 
     #[test]
     fn risk_tiers_reduce_ingest_budget_without_blocking() {

@@ -17,7 +17,6 @@ pub struct LoginInput<'a> {
     pub password: &'a str,
     pub source: &'a str,
     pub challenge_id: Option<&'a str>,
-    pub challenge_response: Option<&'a str>,
     pub website: Option<&'a str>,
 }
 
@@ -40,13 +39,8 @@ pub struct TwoFactorSetup {
 }
 
 pub enum LoginFailure {
-    ChallengeRequired {
-        challenge_id: String,
-        prompt: String,
-    },
-    Delayed {
-        retry_after_seconds: u64,
-    },
+    ChallengeRequired { challenge_id: String },
+    Delayed { retry_after_seconds: u64 },
     Application(AppError),
 }
 
@@ -68,6 +62,26 @@ impl AuthenticatedUser {
             .any(|grant| grant.allows(permission, application_id))
             .then_some(())
             .ok_or(AppError::Forbidden)
+    }
+
+    #[must_use]
+    pub fn has_unscoped_permission(&self, permission: &str) -> bool {
+        self.grants
+            .iter()
+            .any(|grant| grant.application_id.is_none() && grant.allows(permission, None))
+    }
+
+    #[must_use]
+    pub fn is_unscoped_admin(&self) -> bool {
+        self.has_unscoped_permission("*")
+            || (self.has_unscoped_permission("members.manage")
+                && self.has_unscoped_permission("apps.manage")
+                && self.has_unscoped_permission("settings.manage"))
+    }
+
+    #[must_use]
+    pub fn is_unscoped_owner(&self) -> bool {
+        self.has_unscoped_permission("*")
     }
 }
 
@@ -216,7 +230,10 @@ pub async fn setup_2fa(
     }
     let secret = crate::totp::generate_totp_secret();
     let otpauth_uri = crate::totp::build_otpauth_uri(&credential.username, &secret);
-    Ok(TwoFactorSetup { secret, otpauth_uri })
+    Ok(TwoFactorSetup {
+        secret,
+        otpauth_uri,
+    })
 }
 
 pub async fn enable_2fa(
@@ -284,6 +301,7 @@ pub async fn disable_2fa(
 
     auth_store::disable_totp(&installed.database, &user.id).await?;
     auth_state::clear_totp_replay(&installed.database, &user.id).await?;
+    auth_state::revoke_sessions_for_user(&installed.database, &user.id).await?;
     applications::audit(
         &installed.database,
         Some(&user.id),
@@ -318,7 +336,7 @@ pub async fn authenticate_mutation(
 ) -> Result<AuthenticatedUser, AppError> {
     let (user, expected_csrf) = authenticate_session(installed, request).await?;
     let supplied_csrf = request.csrf_token().ok_or(AppError::Forbidden)?;
-    if supplied_csrf != expected_csrf {
+    if !constant_time_eq(supplied_csrf.as_bytes(), expected_csrf.as_bytes()) {
         return Err(AppError::Forbidden);
     }
     Ok(user)
@@ -342,22 +360,13 @@ async fn require_login_gate(
 ) -> Result<(), LoginFailure> {
     match installed
         .auth_security
-        .login_gate(
-            account_key,
-            source_key,
-            input.challenge_id,
-            input.challenge_response,
-        )
+        .login_gate(account_key, source_key, input.challenge_id)
         .await
     {
         LoginGate::Allowed => Ok(()),
-        LoginGate::ChallengeRequired {
-            challenge_id,
-            prompt,
-        } => Err(LoginFailure::ChallengeRequired {
-            challenge_id,
-            prompt,
-        }),
+        LoginGate::ChallengeRequired { challenge_id } => {
+            Err(LoginFailure::ChallengeRequired { challenge_id })
+        }
         LoginGate::Delayed {
             retry_after_seconds,
         } => Err(LoginFailure::Delayed {
@@ -378,10 +387,7 @@ async fn authenticate_session(
         .await?
         .filter(|user| user.active)
         .ok_or(AppError::Unauthorized)?;
-    Ok((
-        load_user(installed, credential).await?,
-        session.csrf_token,
-    ))
+    Ok((load_user(installed, credential).await?, session.csrf_token))
 }
 
 async fn load_user(
@@ -411,13 +417,9 @@ async fn login_challenge(
         .record_failure(account_key, source_key)
         .await
     {
-        LoginGate::ChallengeRequired {
-            challenge_id,
-            prompt,
-        } => LoginFailure::ChallengeRequired {
-            challenge_id,
-            prompt,
-        },
+        LoginGate::ChallengeRequired { challenge_id } => {
+            LoginFailure::ChallengeRequired { challenge_id }
+        }
         LoginGate::Delayed {
             retry_after_seconds,
         } => LoginFailure::Delayed {
@@ -450,4 +452,65 @@ async fn verify_totp_once(
         return Ok(false);
     };
     Ok(auth_state::consume_totp_step(&installed.database, user_id, step).await?)
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |acc, (a, b)| acc | (a ^ b))
+        == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AuthenticatedUser, constant_time_eq};
+    use crate::domain::permission::PermissionGrant;
+
+    fn user_with(grants: Vec<PermissionGrant>) -> AuthenticatedUser {
+        AuthenticatedUser {
+            id: "user".into(),
+            email: "user@example.com".into(),
+            username: "user".into(),
+            locale: "en".into(),
+            roles: Vec::new(),
+            grants,
+            totp_enabled: false,
+        }
+    }
+
+    #[test]
+    fn application_scoped_wildcard_is_not_unscoped_owner() {
+        let user = user_with(vec![PermissionGrant {
+            permissions: vec!["*".into()],
+            application_id: Some("app-1".into()),
+        }]);
+        assert!(!user.is_unscoped_owner());
+        assert!(!user.is_unscoped_admin());
+        assert!(user.require("apps.manage", Some("app-1")).is_ok());
+        assert!(user.require("apps.manage", None).is_err());
+    }
+
+    #[test]
+    fn global_admin_permissions_are_unscoped_admin_not_owner() {
+        let user = user_with(vec![PermissionGrant {
+            permissions: vec![
+                "members.manage".into(),
+                "apps.manage".into(),
+                "settings.manage".into(),
+            ],
+            application_id: None,
+        }]);
+        assert!(user.is_unscoped_admin());
+        assert!(!user.is_unscoped_owner());
+    }
+
+    #[test]
+    fn csrf_compare_rejects_length_mismatch() {
+        assert!(!constant_time_eq(b"abc", b"ab"));
+        assert!(constant_time_eq(b"token", b"token"));
+        assert!(!constant_time_eq(b"token", b"tokem"));
+    }
 }

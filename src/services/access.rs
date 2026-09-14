@@ -1,6 +1,7 @@
 use crate::{
     auth,
-    database::{applications, auth as auth_store},
+    database::{applications, auth as auth_store, auth_state},
+    domain::permission,
     error::AppError,
     services::authentication::AuthenticatedUser,
     state::InstalledState,
@@ -25,14 +26,10 @@ pub async fn list_audit_logs(
     user.require("audit.read", None)?;
     let page = page.max(1);
     let page_size = page_size.clamp(1, 100);
-    Ok(applications::list_audit_logs(
-        &installed.database,
-        page,
-        page_size,
-        action,
-        resource_type,
+    Ok(
+        applications::list_audit_logs(&installed.database, page, page_size, action, resource_type)
+            .await?,
     )
-    .await?)
 }
 
 pub struct CreateUserInput<'a> {
@@ -50,12 +47,13 @@ pub async fn create_user(
     input: CreateUserInput<'_>,
 ) -> Result<String, AppError> {
     user.require("members.manage", None)?;
-    if input.email.trim().is_empty() || input.username.trim().is_empty() || input.password.len() < 8
-    {
+    validate_assignable_global_role(user, input.role)?;
+    if input.email.trim().is_empty() || input.username.trim().is_empty() {
         return Err(AppError::Validation(
-            "email, username and password (>= 8 chars) are required".into(),
+            "email and username are required".into(),
         ));
     }
+    auth::validate_password(input.password)?;
     let password_hash = auth::hash_password(input.password, input.pepper)?;
     let user_id = auth_store::create_user(
         &installed.database,
@@ -98,6 +96,9 @@ pub async fn update_user(
     input: UpdateUserInput<'_>,
 ) -> Result<(), AppError> {
     user.require("members.manage", None)?;
+    if let Some(role) = input.role {
+        validate_assignable_global_role(user, role)?;
+    }
     if input.email.trim().is_empty() || input.username.trim().is_empty() {
         return Err(AppError::Validation(
             "email and username are required".into(),
@@ -113,6 +114,9 @@ pub async fn update_user(
         input.role,
     )
     .await?;
+    if !input.active {
+        auth_state::revoke_sessions_for_user(&installed.database, target_user_id).await?;
+    }
 
     applications::audit(
         &installed.database,
@@ -134,13 +138,10 @@ pub async fn reset_password(
     pepper: &[u8],
 ) -> Result<(), AppError> {
     user.require("members.manage", None)?;
-    if new_password.len() < 8 {
-        return Err(AppError::Validation(
-            "password must be at least 8 characters".into(),
-        ));
-    }
+    auth::validate_password(new_password)?;
     let password_hash = auth::hash_password(new_password, pepper)?;
     auth_store::update_password_hash(&installed.database, target_user_id, &password_hash).await?;
+    auth_state::revoke_sessions_for_user(&installed.database, target_user_id).await?;
 
     applications::audit(
         &installed.database,
@@ -165,6 +166,7 @@ pub async fn delete_user(
             "cannot delete current user account".into(),
         ));
     }
+    auth_state::revoke_sessions_for_user(&installed.database, target_user_id).await?;
     auth_store::delete_user(&installed.database, target_user_id).await?;
 
     applications::audit(
@@ -193,11 +195,7 @@ pub async fn get_user_assigned_applications(
     target_user_id: &str,
 ) -> Result<Vec<String>, AppError> {
     user.require("members.read", None)?;
-    Ok(applications::get_user_assigned_applications(
-        &installed.database,
-        target_user_id,
-    )
-    .await?)
+    Ok(applications::get_user_assigned_applications(&installed.database, target_user_id).await?)
 }
 
 pub async fn set_user_assigned_applications(
@@ -208,6 +206,11 @@ pub async fn set_user_assigned_applications(
     role: &str,
 ) -> Result<(), AppError> {
     user.require("members.manage", None)?;
+    if !permission::is_assignable_application_role(role) {
+        return Err(AppError::Validation(
+            "assigned applications must use Manager, Analyst, or Viewer".into(),
+        ));
+    }
     applications::set_user_assigned_applications(
         &installed.database,
         target_user_id,
@@ -225,5 +228,17 @@ pub async fn set_user_assigned_applications(
     )
     .await?;
 
+    Ok(())
+}
+
+fn validate_assignable_global_role(actor: &AuthenticatedUser, role: &str) -> Result<(), AppError> {
+    if !permission::is_assignable_global_role(role) {
+        return Err(AppError::Validation(
+            "role must be Super Admin, Admin, or User".into(),
+        ));
+    }
+    if permission::is_privileged_global_role(role) && !actor.is_unscoped_owner() {
+        return Err(AppError::Forbidden);
+    }
     Ok(())
 }

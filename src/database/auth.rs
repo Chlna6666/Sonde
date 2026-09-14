@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::permission::{
-    ADMIN_PERMISSIONS, MANAGER_PERMISSIONS, OWNER_PERMISSIONS, PermissionGrant, USER_PERMISSIONS,
-    VIEWER_PERMISSIONS,
+    ADMIN_PERMISSIONS, ANALYST_PERMISSIONS, MANAGER_PERMISSIONS, OWNER_PERMISSIONS,
+    PermissionGrant, USER_PERMISSIONS, VIEWER_PERMISSIONS,
 };
 
 use super::query::insert;
@@ -104,52 +104,7 @@ pub async fn create_super_admin(
         id
     };
 
-    let mut super_admin_role_id = None;
-    for (name, permissions) in [
-        ("Super Admin", OWNER_PERMISSIONS),
-        ("Admin", ADMIN_PERMISSIONS),
-        ("User", USER_PERMISSIONS),
-        ("Manager", MANAGER_PERMISSIONS),
-        ("Viewer", VIEWER_PERMISSIONS),
-    ] {
-        let permissions_json = serde_json::to_string(permissions).map_err(json_error)?;
-        let role_query = Query::select()
-            .column(Alias::new("id"))
-            .from(Alias::new("roles"))
-            .and_where(Expr::col(Alias::new("name")).eq(name))
-            .limit(1)
-            .to_owned();
-        let role_id = if let Some(row) = transaction.query_one(&role_query).await? {
-            let existing_id: String = row.try_get("", "id")?;
-            let update_role = Query::update()
-                .table(Alias::new("roles"))
-                .value(Alias::new("builtin"), true)
-                .value(Alias::new("permissions"), permissions_json)
-                .and_where(Expr::col(Alias::new("id")).eq(&existing_id))
-                .to_owned();
-            transaction.execute(&update_role).await?;
-            existing_id
-        } else {
-            let id = Uuid::now_v7().to_string();
-            insert(
-                &transaction,
-                "roles",
-                &["id", "name", "builtin", "permissions", "created_at"],
-                vec![
-                    id.clone().into(),
-                    name.into(),
-                    true.into(),
-                    permissions_json.into(),
-                    now.into(),
-                ],
-            )
-            .await?;
-            id
-        };
-        if name == "Super Admin" {
-            super_admin_role_id = Some(role_id);
-        }
-    }
+    let super_admin_role_id = ensure_builtin_roles_on(&transaction).await?;
 
     if let Some(role_id) = super_admin_role_id {
         let binding_query = Query::select()
@@ -201,6 +156,100 @@ pub async fn create_super_admin(
     }
 
     transaction.commit().await
+}
+
+pub async fn ensure_builtin_roles(database: &DatabaseConnection) -> Result<(), DbErr> {
+    let _ = ensure_builtin_roles_on(database).await?;
+    remap_privileged_application_bindings(database).await
+}
+
+async fn remap_privileged_application_bindings(database: &DatabaseConnection) -> Result<(), DbErr> {
+    let manager_query = Query::select()
+        .column(Alias::new("id"))
+        .from(Alias::new("roles"))
+        .and_where(Expr::col(Alias::new("name")).eq("Manager"))
+        .limit(1)
+        .to_owned();
+    let Some(manager_row) = database.query_one(&manager_query).await? else {
+        return Ok(());
+    };
+    let manager_id: String = manager_row.try_get("", "id")?;
+    let privileged_query = Query::select()
+        .column(Alias::new("id"))
+        .from(Alias::new("roles"))
+        .and_where(Expr::col(Alias::new("name")).is_in(["Super Admin", "Admin"]))
+        .to_owned();
+    let privileged_ids: Vec<String> = database
+        .query_all(&privileged_query)
+        .await?
+        .into_iter()
+        .map(|row| row.try_get("", "id"))
+        .collect::<Result<_, _>>()?;
+    if privileged_ids.is_empty() {
+        return Ok(());
+    }
+    let update = Query::update()
+        .table(Alias::new("role_bindings"))
+        .value(Alias::new("role_id"), manager_id)
+        .and_where(Expr::col(Alias::new("application_id")).is_not_null())
+        .and_where(Expr::col(Alias::new("role_id")).is_in(privileged_ids))
+        .to_owned();
+    database.execute(&update).await?;
+    Ok(())
+}
+
+async fn ensure_builtin_roles_on(
+    connection: &impl ConnectionTrait,
+) -> Result<Option<String>, DbErr> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut super_admin_role_id = None;
+    for (name, permissions) in [
+        ("Super Admin", OWNER_PERMISSIONS),
+        ("Admin", ADMIN_PERMISSIONS),
+        ("User", USER_PERMISSIONS),
+        ("Manager", MANAGER_PERMISSIONS),
+        ("Analyst", ANALYST_PERMISSIONS),
+        ("Viewer", VIEWER_PERMISSIONS),
+    ] {
+        let permissions_json = serde_json::to_string(permissions).map_err(json_error)?;
+        let role_query = Query::select()
+            .column(Alias::new("id"))
+            .from(Alias::new("roles"))
+            .and_where(Expr::col(Alias::new("name")).eq(name))
+            .limit(1)
+            .to_owned();
+        let role_id = if let Some(row) = connection.query_one(&role_query).await? {
+            let existing_id: String = row.try_get("", "id")?;
+            let update_role = Query::update()
+                .table(Alias::new("roles"))
+                .value(Alias::new("builtin"), true)
+                .value(Alias::new("permissions"), permissions_json)
+                .and_where(Expr::col(Alias::new("id")).eq(&existing_id))
+                .to_owned();
+            connection.execute(&update_role).await?;
+            existing_id
+        } else {
+            let id = Uuid::now_v7().to_string();
+            insert(
+                connection,
+                "roles",
+                &["id", "name", "builtin", "permissions", "created_at"],
+                vec![
+                    id.clone().into(),
+                    name.into(),
+                    true.into(),
+                    permissions_json.into(),
+                    now.into(),
+                ],
+            )
+            .await?;
+            id
+        };
+        if name == "Super Admin" {
+            super_admin_role_id = Some(role_id);
+        }
+    }
+    Ok(super_admin_role_id)
 }
 
 pub async fn user_by_identifier(
@@ -287,6 +336,7 @@ pub async fn role_names_for_user(
                 .equals((Alias::new("roles"), Alias::new("id"))),
         )
         .and_where(Expr::col((Alias::new("role_bindings"), Alias::new("user_id"))).eq(user_id))
+        .and_where(Expr::col((Alias::new("role_bindings"), Alias::new("application_id"))).is_null())
         .to_owned();
     database
         .query_all(&query)
@@ -337,7 +387,18 @@ pub async fn grants_for_user(
 
 pub async fn list_users(database: &DatabaseConnection) -> Result<Vec<UserSummary>, DbErr> {
     let users_query = Query::select()
-        .columns(["id", "email", "username", "locale", "active", "created_at", "totp_enabled"].map(Alias::new))
+        .columns(
+            [
+                "id",
+                "email",
+                "username",
+                "locale",
+                "active",
+                "created_at",
+                "totp_enabled",
+            ]
+            .map(Alias::new),
+        )
         .from(Alias::new("users"))
         .order_by(Alias::new("created_at"), sea_orm::Order::Asc)
         .to_owned();
@@ -360,9 +421,11 @@ pub async fn list_users(database: &DatabaseConnection) -> Result<Vec<UserSummary
             .and_then(|r| r.try_get("", "count").ok())
             .unwrap_or(0);
 
-        let totp_enabled: bool = row
-            .try_get::<bool>("", "totp_enabled")
-            .unwrap_or_else(|_| row.try_get::<i32>("", "totp_enabled").map(|v| v == 1).unwrap_or(false));
+        let totp_enabled: bool = row.try_get::<bool>("", "totp_enabled").unwrap_or_else(|_| {
+            row.try_get::<i32>("", "totp_enabled")
+                .map(|v| v == 1)
+                .unwrap_or(false)
+        });
 
         result.push(UserSummary {
             id: user_id,
@@ -431,26 +494,10 @@ pub async fn create_user(
         .and_where(Expr::col(Alias::new("name")).eq(role_name))
         .limit(1)
         .to_owned();
-    let role_id = if let Some(row) = transaction.query_one(&role_query).await? {
-        row.try_get("", "id")?
-    } else {
-        let id = Uuid::now_v7().to_string();
-        let perms = serde_json::to_string(USER_PERMISSIONS).map_err(json_error)?;
-        insert(
-            &transaction,
-            "roles",
-            &["id", "name", "builtin", "permissions", "created_at"],
-            vec![
-                id.clone().into(),
-                role_name.into(),
-                true.into(),
-                perms.into(),
-                now.into(),
-            ],
-        )
-        .await?;
-        id
+    let Some(row) = transaction.query_one(&role_query).await? else {
+        return Err(DbErr::Custom(format!("Role '{role_name}' not found")));
     };
+    let role_id: String = row.try_get("", "id")?;
 
     insert(
         &transaction,
@@ -500,30 +547,31 @@ pub async fn update_user(
             .and_where(Expr::col(Alias::new("name")).eq(role))
             .limit(1)
             .to_owned();
-        if let Some(row) = transaction.query_one(&role_query).await? {
-            let role_id: String = row.try_get("", "id")?;
-            let delete_binding = Query::delete()
-                .from_table(Alias::new("role_bindings"))
-                .and_where(Expr::col(Alias::new("user_id")).eq(user_id))
-                .and_where(Expr::col(Alias::new("application_id")).is_null())
-                .to_owned();
-            transaction.execute(&delete_binding).await?;
+        let Some(row) = transaction.query_one(&role_query).await? else {
+            return Err(DbErr::Custom(format!("Role '{role}' not found")));
+        };
+        let role_id: String = row.try_get("", "id")?;
+        let delete_binding = Query::delete()
+            .from_table(Alias::new("role_bindings"))
+            .and_where(Expr::col(Alias::new("user_id")).eq(user_id))
+            .and_where(Expr::col(Alias::new("application_id")).is_null())
+            .to_owned();
+        transaction.execute(&delete_binding).await?;
 
-            let now = chrono::Utc::now().timestamp_millis();
-            insert(
-                &transaction,
-                "role_bindings",
-                &["id", "user_id", "role_id", "application_id", "created_at"],
-                vec![
-                    Uuid::now_v7().to_string().into(),
-                    user_id.into(),
-                    role_id.into(),
-                    Value::String(None),
-                    now.into(),
-                ],
-            )
-            .await?;
-        }
+        let now = chrono::Utc::now().timestamp_millis();
+        insert(
+            &transaction,
+            "role_bindings",
+            &["id", "user_id", "role_id", "application_id", "created_at"],
+            vec![
+                Uuid::now_v7().to_string().into(),
+                user_id.into(),
+                role_id.into(),
+                Value::String(None),
+                now.into(),
+            ],
+        )
+        .await?;
     }
 
     transaction.commit().await
@@ -604,9 +652,11 @@ pub async fn get_totp_info(
         .limit(1)
         .to_owned();
     if let Some(row) = database.query_one(&query).await? {
-        let enabled = row
-            .try_get::<bool>("", "totp_enabled")
-            .unwrap_or_else(|_| row.try_get::<i32>("", "totp_enabled").map(|v| v == 1).unwrap_or(false));
+        let enabled = row.try_get::<bool>("", "totp_enabled").unwrap_or_else(|_| {
+            row.try_get::<i32>("", "totp_enabled")
+                .map(|v| v == 1)
+                .unwrap_or(false)
+        });
         let secret: Option<String> = row.try_get("", "totp_secret").ok();
         Ok((enabled, secret))
     } else {
@@ -615,9 +665,11 @@ pub async fn get_totp_info(
 }
 
 fn map_credential(row: QueryResult) -> Result<UserCredential, DbErr> {
-    let totp_enabled = row
-        .try_get::<bool>("", "totp_enabled")
-        .unwrap_or_else(|_| row.try_get::<i32>("", "totp_enabled").map(|v| v == 1).unwrap_or(false));
+    let totp_enabled = row.try_get::<bool>("", "totp_enabled").unwrap_or_else(|_| {
+        row.try_get::<i32>("", "totp_enabled")
+            .map(|v| v == 1)
+            .unwrap_or(false)
+    });
     Ok(UserCredential {
         id: row.try_get("", "id")?,
         email: row.try_get("", "email")?,

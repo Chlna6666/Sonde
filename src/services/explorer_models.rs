@@ -1,5 +1,5 @@
 use serde::Serialize;
-use serde_json::Value as JsonValue;
+use serde_json::value::RawValue;
 
 #[derive(Clone, Debug)]
 pub struct ExplorerFilter {
@@ -33,7 +33,7 @@ pub struct EventRecord {
     pub app_version: Option<String>,
     pub launcher_version: Option<String>,
     pub os: Option<String>,
-    pub attributes: JsonValue,
+    pub attributes: Box<RawValue>,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,7 +48,7 @@ pub struct MetricRecord {
     pub histogram: Option<HistogramRecord>,
     pub unit: Option<String>,
     pub timestamp: i64,
-    pub attributes: JsonValue,
+    pub attributes: Box<RawValue>,
 }
 
 #[derive(Debug, Serialize)]
@@ -72,5 +72,5 @@ pub struct LogRecord {
     pub trace_id: Option<String>,
     pub span_id: Option<String>,
     pub timestamp: i64,
-    pub attributes: JsonValue,
+    pub attributes: Box<RawValue>,
 }

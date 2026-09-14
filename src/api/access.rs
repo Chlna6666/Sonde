@@ -128,13 +128,11 @@ async fn create_user(
     )
     .await?;
 
-    if let Some(ref app_ids) = body.application_ids {
-        if !app_ids.is_empty() {
-            let _ = access::set_user_assigned_applications(
-                &installed, &user, &user_id, app_ids, "Manager",
-            )
-            .await;
-        }
+    if let Some(ref app_ids) = body.application_ids
+        && !app_ids.is_empty()
+    {
+        access::set_user_assigned_applications(&installed, &user, &user_id, app_ids, "Manager")
+            .await?;
     }
 
     Ok(HttpResponse::Created().json(serde_json::json!({ "id": user_id })))

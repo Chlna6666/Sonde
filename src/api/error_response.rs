@@ -34,9 +34,7 @@ impl ResponseError for AppError {
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
             Self::Upstream { .. } => StatusCode::BAD_GATEWAY,
-            Self::Database(_) | Self::InternalContext { .. } => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            Self::Database(_) | Self::InternalContext { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 

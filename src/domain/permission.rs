@@ -8,6 +8,7 @@ pub const PERM_TELEMETRY_INGEST: &str = "telemetry.ingest";
 
 pub const OWNER_PERMISSIONS: &[&str] = &["*"];
 pub const ADMIN_PERMISSIONS: &[&str] = &[
+    "apps.create",
     "apps.read",
     "apps.manage",
     "telemetry.read",
@@ -36,6 +37,31 @@ pub const ANALYST_PERMISSIONS: &[&str] = &[
     "alerts.manage",
 ];
 pub const VIEWER_PERMISSIONS: &[&str] = &["apps.read", "telemetry.read", "alerts.read"];
+
+pub const SUPER_ADMIN_ROLE: &str = "Super Admin";
+pub const ADMIN_ROLE: &str = "Admin";
+pub const USER_ROLE: &str = "User";
+pub const MANAGER_ROLE: &str = "Manager";
+pub const ANALYST_ROLE: &str = "Analyst";
+pub const VIEWER_ROLE: &str = "Viewer";
+
+const ASSIGNABLE_GLOBAL_ROLES: &[&str] = &[SUPER_ADMIN_ROLE, ADMIN_ROLE, USER_ROLE];
+const ASSIGNABLE_APPLICATION_ROLES: &[&str] = &[MANAGER_ROLE, ANALYST_ROLE, VIEWER_ROLE];
+
+#[must_use]
+pub fn is_assignable_global_role(role: &str) -> bool {
+    ASSIGNABLE_GLOBAL_ROLES.contains(&role)
+}
+
+#[must_use]
+pub fn is_assignable_application_role(role: &str) -> bool {
+    ASSIGNABLE_APPLICATION_ROLES.contains(&role)
+}
+
+#[must_use]
+pub fn is_privileged_global_role(role: &str) -> bool {
+    role == SUPER_ADMIN_ROLE || role == ADMIN_ROLE
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PermissionGrant {
@@ -78,5 +104,17 @@ mod tests {
             application_id: None,
         };
         assert!(grant.allows("settings.manage", None));
+    }
+
+    #[test]
+    fn application_roles_cannot_be_used_as_global_roles() {
+        assert!(super::is_assignable_application_role("Manager"));
+        assert!(super::is_assignable_application_role("Analyst"));
+        assert!(super::is_assignable_application_role("Viewer"));
+        assert!(!super::is_assignable_application_role("Super Admin"));
+        assert!(!super::is_assignable_application_role("Admin"));
+        assert!(super::is_assignable_global_role("Super Admin"));
+        assert!(super::is_assignable_global_role("User"));
+        assert!(!super::is_assignable_global_role("Manager"));
     }
 }

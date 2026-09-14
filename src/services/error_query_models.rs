@@ -51,7 +51,7 @@ pub struct ErrorOccurrenceRecord {
     pub os: Option<String>,
     pub stack_trace: Option<String>,
     pub handled: Option<bool>,
-    pub attributes: serde_json::Value,
+    pub attributes: Box<serde_json::value::RawValue>,
     pub received_at: i64,
 }
 

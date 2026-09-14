@@ -27,7 +27,7 @@ pub async fn test_connection(
     database_url: Option<&str>,
 ) -> Result<(), AppError> {
     let database_url = resolve_database_url(state, database_type, database_url)?;
-    prepare_sqlite_path(&database_url)?;
+    prepare_sqlite_path(&state.runtime.data_dir, &database_url)?;
     let database = database::connect(&database_url).await?;
     database.ping().await?;
     database.close().await?;
@@ -38,7 +38,7 @@ pub async fn complete(state: &AppState, input: SetupInput<'_>) -> Result<(), App
     let database_url = resolve_database_url(state, input.database_type, input.database_url)?;
     validate_identity(input.email, input.username)?;
     auth::validate_password(input.password)?;
-    prepare_sqlite_path(&database_url)?;
+    prepare_sqlite_path(&state.runtime.data_dir, &database_url)?;
     let database = database::connect(&database_url).await?;
     database::migrate(&database).await?;
     let password = input.password.to_owned();
@@ -109,7 +109,7 @@ fn validate_remote_url(url: Option<&str>, accepted: &[&str]) -> Result<String, A
     Ok(url.to_owned())
 }
 
-fn prepare_sqlite_path(database_url: &str) -> Result<(), AppError> {
+fn prepare_sqlite_path(data_dir: &Path, database_url: &str) -> Result<(), AppError> {
     let raw_path = if let Some(stripped) = database_url.strip_prefix("sqlite:///") {
         stripped
     } else if let Some(stripped) = database_url.strip_prefix("sqlite://") {
@@ -123,13 +123,32 @@ fn prepare_sqlite_path(database_url: &str) -> Result<(), AppError> {
         return Ok(());
     }
     let path_text = raw_path.split('?').next().unwrap_or_default();
-    if path_text.contains("..") || path_text.contains('\0') {
+    if path_text.contains('\0') {
         return Err(AppError::Validation(
-            "SQLite database path cannot contain traversal sequences or null bytes".into(),
+            "SQLite database path cannot contain null bytes".into(),
         ));
     }
     let path = Path::new(path_text);
-    if let Some(parent) = path
+    fs::create_dir_all(data_dir)
+        .map_err(|error| AppError::internal("create Sonde data directory", error))?;
+    let data_dir = normalize_path(&if data_dir.is_absolute() {
+        data_dir.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| AppError::internal("resolve working directory", error))?
+            .join(data_dir)
+    });
+    let candidate = normalize_path(&if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        data_dir.join(path)
+    });
+    if !candidate.starts_with(&data_dir) {
+        return Err(AppError::Validation(
+            "SQLite database path must stay inside the Sonde data directory".into(),
+        ));
+    }
+    if let Some(parent) = candidate
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
@@ -137,6 +156,22 @@ fn prepare_sqlite_path(database_url: &str) -> Result<(), AppError> {
             .map_err(|error| AppError::internal("create SQLite database directory", error))?;
     }
     Ok(())
+}
+
+fn normalize_path(path: &Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => out.push(prefix.as_os_str()),
+            std::path::Component::RootDir => out.push(component.as_os_str()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                let _ = out.pop();
+            }
+            std::path::Component::Normal(part) => out.push(part),
+        }
+    }
+    out
 }
 
 fn validate_identity(email: &str, username: &str) -> Result<(), AppError> {
@@ -151,4 +186,28 @@ fn validate_identity(email: &str, username: &str) -> Result<(), AppError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::prepare_sqlite_path;
+
+    #[test]
+    fn sqlite_paths_must_stay_inside_data_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path();
+        let inside = data_dir.join("sonde.sqlite");
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            inside.to_string_lossy().replace('\\', "/")
+        );
+        assert!(prepare_sqlite_path(data_dir, &url).is_ok());
+        assert!(prepare_sqlite_path(data_dir, "sqlite://nested/db.sqlite").is_ok());
+
+        let escaped = data_dir.join("..").join("outside.sqlite");
+        let escaped_url = format!("sqlite://{}", escaped.to_string_lossy().replace('\\', "/"));
+        assert!(prepare_sqlite_path(data_dir, &escaped_url).is_err());
+        assert!(prepare_sqlite_path(data_dir, "sqlite://../escape.sqlite").is_err());
+    }
 }

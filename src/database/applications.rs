@@ -139,20 +139,18 @@ pub async fn list_applications(
         .from(Alias::new("applications"))
         .to_owned();
 
-    if !is_admin {
-        if let Some(uid) = user_id {
-            let granted_apps = Query::select()
-                .column(Alias::new("application_id"))
-                .from(Alias::new("role_bindings"))
-                .and_where(Expr::col(Alias::new("user_id")).eq(uid))
-                .and_where(Expr::col(Alias::new("application_id")).is_not_null())
-                .to_owned();
-            query.and_where(
-                Expr::col(Alias::new("owner_user_id"))
-                    .eq(uid)
-                    .or(Expr::col(Alias::new("id")).in_subquery(granted_apps)),
-            );
-        }
+    if !is_admin && let Some(uid) = user_id {
+        let granted_apps = Query::select()
+            .column(Alias::new("application_id"))
+            .from(Alias::new("role_bindings"))
+            .and_where(Expr::col(Alias::new("user_id")).eq(uid))
+            .and_where(Expr::col(Alias::new("application_id")).is_not_null())
+            .to_owned();
+        query.and_where(
+            Expr::col(Alias::new("owner_user_id"))
+                .eq(uid)
+                .or(Expr::col(Alias::new("id")).in_subquery(granted_apps)),
+        );
     }
 
     query.order_by(Alias::new("created_at"), sea_orm::sea_query::Order::Desc);
@@ -375,17 +373,15 @@ pub async fn list_audit_logs(
 ) -> Result<AuditLogPage, DbErr> {
     let mut query = Query::select();
     query
-        .columns(
-            [
-                (Alias::new("al"), Alias::new("id")),
-                (Alias::new("al"), Alias::new("actor_user_id")),
-                (Alias::new("al"), Alias::new("action")),
-                (Alias::new("al"), Alias::new("resource_type")),
-                (Alias::new("al"), Alias::new("resource_id")),
-                (Alias::new("al"), Alias::new("metadata")),
-                (Alias::new("al"), Alias::new("created_at")),
-            ],
-        )
+        .columns([
+            (Alias::new("al"), Alias::new("id")),
+            (Alias::new("al"), Alias::new("actor_user_id")),
+            (Alias::new("al"), Alias::new("action")),
+            (Alias::new("al"), Alias::new("resource_type")),
+            (Alias::new("al"), Alias::new("resource_id")),
+            (Alias::new("al"), Alias::new("metadata")),
+            (Alias::new("al"), Alias::new("created_at")),
+        ])
         .expr_as(
             Expr::col((Alias::new("u"), Alias::new("username"))),
             Alias::new("actor_username"),
@@ -396,19 +392,22 @@ pub async fn list_audit_logs(
             Expr::col((Alias::new("al"), Alias::new("actor_user_id")))
                 .equals((Alias::new("u"), Alias::new("id"))),
         )
-        .order_by((Alias::new("al"), Alias::new("created_at")), sea_orm::Order::Desc)
+        .order_by(
+            (Alias::new("al"), Alias::new("created_at")),
+            sea_orm::Order::Desc,
+        )
         .limit(page_size + 1)
         .offset(page.saturating_sub(1) * page_size);
 
-    if let Some(act) = action {
-        if !act.trim().is_empty() {
-            query.and_where(Expr::col((Alias::new("al"), Alias::new("action"))).eq(act));
-        }
+    if let Some(act) = action
+        && !act.trim().is_empty()
+    {
+        query.and_where(Expr::col((Alias::new("al"), Alias::new("action"))).eq(act));
     }
-    if let Some(rt) = resource_type {
-        if !rt.trim().is_empty() {
-            query.and_where(Expr::col((Alias::new("al"), Alias::new("resource_type"))).eq(rt));
-        }
+    if let Some(rt) = resource_type
+        && !rt.trim().is_empty()
+    {
+        query.and_where(Expr::col((Alias::new("al"), Alias::new("resource_type"))).eq(rt));
     }
 
     let rows = database.query_all(&query).await?;
@@ -417,7 +416,8 @@ pub async fn list_audit_logs(
 
     for row in rows.into_iter().take(page_size as usize) {
         let meta_str: String = row.try_get("", "metadata").unwrap_or_else(|_| "{}".into());
-        let metadata: serde_json::Value = serde_json::from_str(&meta_str).unwrap_or(serde_json::Value::Null);
+        let metadata: serde_json::Value =
+            serde_json::from_str(&meta_str).unwrap_or(serde_json::Value::Null);
         items.push(AuditLogRecord {
             id: row.try_get("", "id")?,
             actor_user_id: row.try_get("", "actor_user_id").ok(),

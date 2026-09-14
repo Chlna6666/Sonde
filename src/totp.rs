@@ -94,10 +94,10 @@ pub fn verify_totp_step(secret: &str, user_code: &str) -> Option<u64> {
     // Check step -2, step -1, step, step + 1, step + 2 (+/- 60s tolerance for clock drift)
     for step_offset in [-2i64, -1i64, 0i64, 1i64, 2i64] {
         let step = (current_step as i64 + step_offset) as u64;
-        if let Some(valid_code) = compute_totp(secret, step) {
-            if subtle_eq(&valid_code, user_code) {
-                return Some(step);
-            }
+        if let Some(valid_code) = compute_totp(secret, step)
+            && subtle_eq(&valid_code, user_code)
+        {
+            return Some(step);
         }
     }
     None
@@ -156,30 +156,12 @@ mod tests {
         assert_eq!(base32_encode(b"fooba"), "MZXW6YTB");
         assert_eq!(base32_encode(b"foobar"), "MZXW6YTBOI");
 
-        assert_eq!(
-            base32_decode("MY").expect("decode"),
-            b"f"
-        );
-        assert_eq!(
-            base32_decode("MZXQ").expect("decode"),
-            b"fo"
-        );
-        assert_eq!(
-            base32_decode("MZXW6").expect("decode"),
-            b"foo"
-        );
-        assert_eq!(
-            base32_decode("MZXW6YQ").expect("decode"),
-            b"foob"
-        );
-        assert_eq!(
-            base32_decode("MZXW6YTB").expect("decode"),
-            b"fooba"
-        );
-        assert_eq!(
-            base32_decode("MZXW6YTBOI").expect("decode"),
-            b"foobar"
-        );
+        assert_eq!(base32_decode("MY").expect("decode"), b"f");
+        assert_eq!(base32_decode("MZXQ").expect("decode"), b"fo");
+        assert_eq!(base32_decode("MZXW6").expect("decode"), b"foo");
+        assert_eq!(base32_decode("MZXW6YQ").expect("decode"), b"foob");
+        assert_eq!(base32_decode("MZXW6YTB").expect("decode"), b"fooba");
+        assert_eq!(base32_decode("MZXW6YTBOI").expect("decode"), b"foobar");
     }
 
     #[test]

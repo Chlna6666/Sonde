@@ -30,7 +30,6 @@ struct LoginRequest {
     identifier: Option<String>,
     password: String,
     challenge_id: Option<String>,
-    challenge_response: Option<String>,
     website: Option<String>,
 }
 
@@ -45,9 +44,7 @@ impl LoginRequest {
             .filter(|val| !val.trim().is_empty())
             .ok_or_else(|| AppError::Validation("username or email is required".into()))?;
         if identifier.len() > 254 {
-            return Err(AppError::Validation(
-                "username or email is too long".into(),
-            ));
+            return Err(AppError::Validation("username or email is too long".into()));
         }
         Ok(identifier)
     }
@@ -100,7 +97,6 @@ struct LoginErrorResponse {
     code: &'static str,
     message: &'static str,
     challenge_id: Option<String>,
-    challenge_prompt: Option<String>,
     retry_after_seconds: Option<u64>,
 }
 
@@ -124,7 +120,7 @@ async fn login(
     body: web::Json<LoginRequest>,
 ) -> Result<HttpResponse, AppError> {
     let installed = state.installed().await?;
-    let source = login_source(&request);
+    let source = login_source(&request, &state.runtime.trusted_proxies);
     let identifier = body.identifier()?;
     let result = authentication::login(
         &installed,
@@ -133,7 +129,6 @@ async fn login(
             password: &body.password,
             source: &source,
             challenge_id: body.challenge_id.as_deref(),
-            challenge_response: body.challenge_response.as_deref(),
             website: body.website.as_deref(),
         },
         state.runtime.password_pepper.as_bytes(),
@@ -141,10 +136,9 @@ async fn login(
     .await;
     let result = match result {
         Ok(res) => res,
-        Err(LoginFailure::ChallengeRequired {
-            challenge_id,
-            prompt,
-        }) => return Ok(challenge_response(challenge_id, prompt)),
+        Err(LoginFailure::ChallengeRequired { challenge_id }) => {
+            return Ok(challenge_response(challenge_id));
+        }
         Err(LoginFailure::Delayed {
             retry_after_seconds,
         }) => return Ok(delayed_response(retry_after_seconds)),
@@ -155,7 +149,6 @@ async fn login(
                     code: "invalid_credentials",
                     message: "Invalid username or password.",
                     challenge_id: None,
-                    challenge_prompt: None,
                     retry_after_seconds: None,
                 }));
         }
@@ -163,16 +156,15 @@ async fn login(
     };
 
     match result {
-        authentication::LoginResult::RequiresTwoFactor { temp_token } => {
-            Ok(HttpResponse::Ok()
-                .insert_header((header::CACHE_CONTROL, "no-store"))
-                .json(TwoFactorRequiredResponse {
-                    requires2fa: true,
-                    temp_token,
-                }))
-        }
+        authentication::LoginResult::RequiresTwoFactor { temp_token } => Ok(HttpResponse::Ok()
+            .insert_header((header::CACHE_CONTROL, "no-store"))
+            .json(TwoFactorRequiredResponse {
+                requires2fa: true,
+                temp_token,
+            })),
         authentication::LoginResult::Success(outcome) => {
-            let cookie = session_cookie(&installed.config, outcome.session_token, Duration::hours(8));
+            let cookie =
+                session_cookie(&installed.config, outcome.session_token, Duration::hours(8));
             Ok(HttpResponse::Ok()
                 .insert_header((header::CACHE_CONTROL, "no-store"))
                 .cookie(cookie)
@@ -186,10 +178,13 @@ async fn verify_2fa(
     body: web::Json<TwoFactorVerifyRequest>,
 ) -> Result<HttpResponse, AppError> {
     if body.temp_token.len() > 256 || body.code.len() > 16 {
-        return Err(AppError::Validation("invalid 2FA verification request".into()));
+        return Err(AppError::Validation(
+            "invalid 2FA verification request".into(),
+        ));
     }
     let installed = state.installed().await?;
-    let outcome = authentication::verify_2fa_login(&installed, &body.temp_token, &body.code).await?;
+    let outcome =
+        authentication::verify_2fa_login(&installed, &body.temp_token, &body.code).await?;
     let cookie = session_cookie(&installed.config, outcome.session_token, Duration::hours(8));
     Ok(HttpResponse::Ok()
         .insert_header((header::CACHE_CONTROL, "no-store"))
@@ -316,14 +311,13 @@ fn expired_cookie(name: &'static str, secure: bool) -> Cookie<'static> {
         .finish()
 }
 
-fn challenge_response(challenge_id: String, prompt: String) -> HttpResponse {
+fn challenge_response(challenge_id: String) -> HttpResponse {
     HttpResponse::build(StatusCode::UNAUTHORIZED)
         .insert_header((header::CACHE_CONTROL, "no-store"))
         .json(LoginErrorResponse {
             code: "challenge_required",
             message: "Invalid username or password. Complete verification to continue.",
             challenge_id: Some(challenge_id),
-            challenge_prompt: Some(prompt),
             retry_after_seconds: None,
         })
 }
@@ -336,15 +330,12 @@ fn delayed_response(retry_after_seconds: u64) -> HttpResponse {
             code: "rate_limited",
             message: "Sign-in is temporarily delayed. Try again shortly.",
             challenge_id: None,
-            challenge_prompt: None,
             retry_after_seconds: Some(retry_after_seconds),
         })
 }
 
-fn login_source(request: &HttpRequest) -> String {
-    let peer = request
-        .peer_addr()
-        .map_or_else(|| "unknown".to_owned(), |address| address.ip().to_string());
+fn login_source(request: &HttpRequest, trusted_proxies: &[std::net::IpAddr]) -> String {
+    let peer = super::request_auth::client_ip(request, trusted_proxies);
     let user_agent = request
         .headers()
         .get(header::USER_AGENT)

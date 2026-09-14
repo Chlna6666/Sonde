@@ -1,5 +1,6 @@
 use std::{
     env, fs, io,
+    net::IpAddr,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -11,6 +12,10 @@ use serde::{Deserialize, Serialize};
 pub struct PasswordPepper(Arc<[u8; 32]>);
 
 impl PasswordPepper {
+    pub fn new(value: [u8; 32]) -> Self {
+        Self(Arc::new(value))
+    }
+
     pub fn as_bytes(&self) -> &[u8] {
         self.0.as_slice()
     }
@@ -23,6 +28,7 @@ pub struct RuntimeConfig {
     pub config_path: PathBuf,
     pub database_url_override: Option<String>,
     pub password_pepper: PasswordPepper,
+    pub trusted_proxies: Vec<IpAddr>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -61,7 +67,17 @@ impl RuntimeConfig {
             data_dir,
             database_url_override: env::var("SONDE_DATABASE_URL").ok(),
             password_pepper,
+            trusted_proxies: parse_trusted_proxies(
+                env::var("SONDE_TRUSTED_PROXIES").ok().as_deref(),
+            )?,
         })
+    }
+
+    #[must_use]
+    pub fn bind_is_loopback(&self) -> bool {
+        self.bind.starts_with("127.0.0.1:")
+            || self.bind.starts_with("[::1]:")
+            || self.bind.starts_with("localhost:")
     }
 }
 
@@ -99,15 +115,64 @@ fn read_pepper(path: &Path) -> io::Result<PasswordPepper> {
     Ok(PasswordPepper(Arc::new(value)))
 }
 
+fn parse_trusted_proxies(raw: Option<&str>) -> io::Result<Vec<IpAddr>> {
+    let Some(raw) = raw.filter(|value| !value.trim().is_empty()) else {
+        return Ok(Vec::new());
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value.parse::<IpAddr>().map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid SONDE_TRUSTED_PROXIES entry '{value}': {error}"),
+                )
+            })
+        })
+        .collect()
+}
+
 #[cfg(unix)]
 fn restrict_secret_permissions(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn restrict_secret_permissions(path: &Path) -> io::Result<()> {
+    restrict_windows_secret(path)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn restrict_secret_permissions(_path: &Path) -> io::Result<()> {
     Ok(())
+}
+
+#[cfg(windows)]
+fn restrict_windows_secret(path: &Path) -> io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let user = env::var("USERNAME").map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "USERNAME is required to restrict password pepper ACL",
+        )
+    })?;
+    let status = Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r", &format!("{user}:(F)")])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            "failed to restrict password pepper ACL to the current user",
+        ))
+    }
 }
 
 impl InstallationConfig {

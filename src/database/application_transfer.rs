@@ -5,6 +5,7 @@ use sea_orm::{
     sea_query::{Alias, Expr, ExprTrait, Order, Query, Value},
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::query::insert;
@@ -184,8 +185,9 @@ pub(crate) async fn export_application(
                 name: row.try_get("", "name")?,
                 key_hash: row.try_get("", "key_hash")?,
                 key_prefix: row.try_get("", "key_prefix")?,
-                scopes: serde_json::from_str(&scopes)
-                    .map_err(|error| DbErr::Custom(format!("invalid API key scopes JSON: {error}")))?,
+                scopes: serde_json::from_str(&scopes).map_err(|error| {
+                    DbErr::Custom(format!("invalid API key scopes JSON: {error}"))
+                })?,
                 expires_at: row.try_get("", "expires_at").ok(),
                 last_used_at: row.try_get("", "last_used_at").ok(),
                 revoked_at: row.try_get("", "revoked_at").ok(),
@@ -234,8 +236,9 @@ pub(crate) async fn export_application(
                 app_version: row.try_get("", "app_version").ok(),
                 launcher_version: row.try_get("", "launcher_version").ok(),
                 os: row.try_get("", "os").ok(),
-                attributes: serde_json::from_str(&attributes)
-                    .map_err(|error| DbErr::Custom(format!("invalid event attributes JSON: {error}")))?,
+                attributes: serde_json::from_str(&attributes).map_err(|error| {
+                    DbErr::Custom(format!("invalid event attributes JSON: {error}"))
+                })?,
                 dedupe_key: row.try_get("", "dedupe_key").ok(),
                 received_at: row.try_get("", "received_at")?,
             })
@@ -277,8 +280,9 @@ pub(crate) async fn export_application(
                 trace_id: row.try_get("", "trace_id").ok(),
                 span_id: row.try_get("", "span_id").ok(),
                 timestamp: row.try_get("", "timestamp")?,
-                attributes: serde_json::from_str(&attributes)
-                    .map_err(|error| DbErr::Custom(format!("invalid log attributes JSON: {error}")))?,
+                attributes: serde_json::from_str(&attributes).map_err(|error| {
+                    DbErr::Custom(format!("invalid log attributes JSON: {error}"))
+                })?,
                 received_at: row.try_get("", "received_at")?,
             })
         })
@@ -388,8 +392,21 @@ pub(crate) async fn import_application(
         let environment_id = environment_ids
             .get(&key.environment_id)
             .unwrap_or(&fallback_environment_id);
-        let scopes = serde_json::to_string(&key.scopes)
-            .map_err(|error| DbErr::Custom(format!("API key scopes serialization failed: {error}")))?;
+        let scopes = serde_json::to_string(&key.scopes).map_err(|error| {
+            DbErr::Custom(format!("API key scopes serialization failed: {error}"))
+        })?;
+        let mut key_hash = key.key_hash;
+        let key_exists = Query::select()
+            .column(Alias::new("id"))
+            .from(Alias::new("api_keys"))
+            .and_where(Expr::col(Alias::new("key_hash")).eq(&key_hash))
+            .limit(1)
+            .to_owned();
+        if database.query_one(&key_exists).await?.is_some() {
+            key_hash = hex::encode(Sha256::digest(
+                format!("{key_hash}:{application_id}").as_bytes(),
+            ));
+        }
         insert(
             database,
             "api_keys",
@@ -411,7 +428,7 @@ pub(crate) async fn import_application(
                 application_id.clone().into(),
                 environment_id.to_owned().into(),
                 key.name.into(),
-                key.key_hash.into(),
+                key_hash.into(),
                 key.key_prefix.into(),
                 scopes.into(),
                 Value::from(key.expires_at),
@@ -427,8 +444,9 @@ pub(crate) async fn import_application(
         let environment_id = environment_ids
             .get(&event.environment_id)
             .unwrap_or(&fallback_environment_id);
-        let attributes = serde_json::to_string(&event.attributes)
-            .map_err(|error| DbErr::Custom(format!("event attributes serialization failed: {error}")))?;
+        let attributes = serde_json::to_string(&event.attributes).map_err(|error| {
+            DbErr::Custom(format!("event attributes serialization failed: {error}"))
+        })?;
         insert(
             database,
             "events",
@@ -472,8 +490,9 @@ pub(crate) async fn import_application(
         let environment_id = environment_ids
             .get(&log.environment_id)
             .unwrap_or(&fallback_environment_id);
-        let attributes = serde_json::to_string(&log.attributes)
-            .map_err(|error| DbErr::Custom(format!("log attributes serialization failed: {error}")))?;
+        let attributes = serde_json::to_string(&log.attributes).map_err(|error| {
+            DbErr::Custom(format!("log attributes serialization failed: {error}"))
+        })?;
         insert(
             database,
             "logs",

@@ -1,7 +1,5 @@
 use crate::{
-    database::explorer,
-    error::AppError,
-    services::authentication::AuthenticatedUser,
+    database::explorer, error::AppError, services::authentication::AuthenticatedUser,
     state::InstalledState,
 };
 
