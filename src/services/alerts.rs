@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use reqwest::redirect::Policy;
@@ -738,7 +738,6 @@ async fn dispatch_to_channel(
     channel: &NotificationChannelRecord,
     payload: &serde_json::Value,
 ) -> Result<(), String> {
-    let client = alert_http_client()?;
     let message = payload
         .get("message")
         .and_then(|value| value.as_str())
@@ -751,7 +750,7 @@ async fn dispatch_to_channel(
     match channel.kind.as_str() {
         "webhook" => {
             let url = channel_url(&channel.config)?;
-            ensure_public_destination(url).await?;
+            let client = validated_http_client(url).await?;
             let mut request = client.post(url).header("content-type", "application/json");
             if let Some(headers) = channel
                 .config
@@ -768,7 +767,7 @@ async fn dispatch_to_channel(
                 .json(payload)
                 .send()
                 .await
-                .map_err(|err| format!("HTTP request failed: {err}"))?;
+                .map_err(|err| format!("HTTP request failed: {}", err.without_url()))?;
             if response.status().is_success() {
                 Ok(())
             } else {
@@ -785,14 +784,14 @@ async fn dispatch_to_channel(
             let body = serde_json::json!({
                 "text": format!("🚨 *[Sonde Telemetry]* ({})\n{}", status.to_uppercase(), message)
             });
-            send_json(&client, url, &body, "Slack").await
+            send_json(url, &body, "Slack").await
         }
         "discord" => {
             let url = channel_url(&channel.config)?;
             let body = serde_json::json!({
                 "content": format!("🚨 **[Sonde Telemetry]** ({})\n{}", status.to_uppercase(), message)
             });
-            send_json(&client, url, &body, "Discord").await
+            send_json(url, &body, "Discord").await
         }
         "feishu" => {
             let url = channel_url(&channel.config)?;
@@ -802,7 +801,7 @@ async fn dispatch_to_channel(
                     "text": format!("🚨 [Sonde 遥测告警通知]\n状态: {}\n信息: {}\n时间: {}", status.to_uppercase(), message, chrono::Utc::now().to_rfc3339())
                 }
             });
-            send_json(&client, url, &body, "Feishu").await
+            send_json(url, &body, "Feishu").await
         }
         "dingtalk" => {
             let url = channel_url(&channel.config)?;
@@ -812,7 +811,7 @@ async fn dispatch_to_channel(
                     "content": format!("🚨 [Sonde 遥测告警]\n状态: {}\n{}\n时间: {}", status.to_uppercase(), message, chrono::Utc::now().to_rfc3339())
                 }
             });
-            send_json(&client, url, &body, "DingTalk").await
+            send_json(url, &body, "DingTalk").await
         }
         "wecom" => {
             let url = channel_url(&channel.config)?;
@@ -822,7 +821,7 @@ async fn dispatch_to_channel(
                     "content": format!("🚨 [Sonde 告警事件]\n状态: {}\n{}\n时间: {}", status.to_uppercase(), message, chrono::Utc::now().to_rfc3339())
                 }
             });
-            send_json(&client, url, &body, "WeCom").await
+            send_json(url, &body, "WeCom").await
         }
         "telegram" => {
             let bot_token = channel
@@ -843,11 +842,11 @@ async fn dispatch_to_channel(
                 "text": format!("🚨 *[Sonde Telemetry]* ({})\n{}", status.to_uppercase(), message),
                 "parse_mode": "Markdown"
             });
-            send_json(&client, &url, &body, "Telegram").await
+            send_json(&url, &body, "Telegram").await
         }
         "email" => {
             let url = channel_url(&channel.config)?;
-            send_json(&client, url, payload, "Email webhook").await
+            send_json(url, payload, "Email webhook").await
         }
         _ => Err(format!(
             "Unsupported notification channel kind '{}'",
@@ -856,39 +855,43 @@ async fn dispatch_to_channel(
     }
 }
 
+/// Resolves and validates the destination, then builds a client that pins those addresses.
+///
+/// Validating one lookup and letting the client resolve again would reopen a DNS-rebinding
+/// window (first answer public, second answer private); pinning the validated socket
+/// addresses closes it while the URL hostname stays the TLS/SNI identity.
+async fn validated_http_client(raw: &str) -> Result<reqwest::Client, String> {
+    let (host, addresses) = validated_destination(raw).await?;
+    let mut builder = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .redirect(Policy::none());
+    for address in addresses {
+        builder = builder.resolve(&host, address);
+    }
+    builder
+        .build()
+        .map_err(|err| format!("Failed to build HTTP client: {err}"))
+}
+
 async fn send_json(
-    client: &reqwest::Client,
     url: &str,
     payload: &serde_json::Value,
     channel_name: &str,
 ) -> Result<(), String> {
-    ensure_public_destination(url).await?;
+    let client = validated_http_client(url).await?;
     let response = client
         .post(url)
         .json(payload)
         .send()
         .await
-        .map_err(|err| format!("{channel_name} request failed: {err}"))?;
+        // reqwest error display can embed the full request URL; webhook URLs and Telegram bot
+        // tokens are secrets, so strip it before the message is stored or surfaced.
+        .map_err(|err| format!("{channel_name} request failed: {}", err.without_url()))?;
     if response.status().is_success() {
         Ok(())
     } else {
         Err(format!("{channel_name} HTTP {}", response.status()))
     }
-}
-
-fn alert_http_client() -> Result<reqwest::Client, String> {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    if let Some(client) = CLIENT.get() {
-        return Ok(client.clone());
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .redirect(Policy::none())
-        .build()
-        .map_err(|err| format!("Failed to build HTTP client: {err}"))?;
-    let _ = CLIENT.set(client.clone());
-    Ok(CLIENT.get().cloned().unwrap_or(client))
 }
 
 fn validate_channel_config(kind: &str, config: &serde_json::Value) -> Result<(), String> {
@@ -948,7 +951,7 @@ fn channel_url(config: &serde_json::Value) -> Result<&str, String> {
     Ok(url)
 }
 
-async fn ensure_public_destination(raw: &str) -> Result<(), String> {
+async fn validated_destination(raw: &str) -> Result<(String, Vec<SocketAddr>), String> {
     outbound::validate_outbound_url(raw)?;
     let parsed = Url::parse(raw).map_err(|_| "notification URL is invalid".to_string())?;
     let host = parsed
@@ -960,17 +963,17 @@ async fn ensure_public_destination(raw: &str) -> Result<(), String> {
     let resolved = tokio::net::lookup_host((host, port))
         .await
         .map_err(|error| format!("notification URL could not be resolved: {error}"))?;
-    let mut saw_address = false;
+    let mut addresses = Vec::new();
     for address in resolved {
-        saw_address = true;
         if !outbound::is_public_ip(address.ip()) {
             return Err("notification URL resolved to a non-public address".into());
         }
+        addresses.push(address);
     }
-    if !saw_address {
+    if addresses.is_empty() {
         return Err("notification URL did not resolve to an address".into());
     }
-    Ok(())
+    Ok((host.to_owned(), addresses))
 }
 
 fn redact_channel_config(config: &mut serde_json::Value) {

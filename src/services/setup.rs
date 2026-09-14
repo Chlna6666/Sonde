@@ -1,4 +1,8 @@
-use std::{fs, path::Path, sync::Arc};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use tracing::warn;
 
@@ -81,7 +85,12 @@ fn resolve_database_url(
     match database_type {
         "sqlite" => {
             if let Some(url) = supplied_url.filter(|value| !value.trim().is_empty()) {
-                validate_remote_url(Some(url), &["sqlite:"])
+                // Validate first, then rebuild the URL from the validated path: the string the
+                // confinement check inspected and the string the connector opens must be the
+                // same path, otherwise `sqlite:///abs/path` could be checked as a relative
+                // name while the connector opens the absolute one.
+                let confined = prepare_sqlite_path(&state.runtime.data_dir, url)?;
+                Ok(rebuild_sqlite_url(&confined, url))
             } else {
                 let path = state
                     .runtime
@@ -98,6 +107,90 @@ fn resolve_database_url(
     }
 }
 
+/// Rebuilds a SQLite URL around the validated file path, preserving connector options.
+fn rebuild_sqlite_url(confined: &Path, original: &str) -> String {
+    let query = original.split_once('?').map_or("", |(_, query)| query);
+    let mut text = confined.to_string_lossy().replace('\\', "/");
+    if query.is_empty() {
+        text.push_str("?mode=rwc");
+    } else {
+        text.push('?');
+        text.push_str(query);
+    }
+    format!("sqlite://{text}")
+}
+
+/// Extracts the filesystem path a SQLite connector will open for `database_url`.
+///
+/// The connector treats everything after `sqlite://` (query removed) as the file name, so
+/// `sqlite:///tmp/x.db` opens the absolute `/tmp/x.db` while `sqlite://x.db` opens a relative
+/// `x.db`. Parsing must happen exactly once, here, and the result is what gets validated.
+fn sqlite_filename(database_url: &str) -> Result<PathBuf, AppError> {
+    if database_url.contains('%') {
+        // A connector may or may not decode percent escapes; an encoded traversal is never
+        // what a local-file setup intends, so refuse rather than guess.
+        return Err(AppError::Validation(
+            "SQLite database URL must not contain percent escapes".into(),
+        ));
+    }
+    let without_query = database_url.split('?').next().unwrap_or_default();
+    let filename = without_query
+        .strip_prefix("sqlite://")
+        .or_else(|| without_query.strip_prefix("sqlite:"))
+        .ok_or_else(|| {
+            AppError::Validation("database URL does not match the selected database type".into())
+        })?;
+    if filename.is_empty() {
+        return Err(AppError::Validation(
+            "SQLite database path cannot be empty".into(),
+        ));
+    }
+    if filename.contains('\0') {
+        return Err(AppError::Validation(
+            "SQLite database path cannot contain null bytes".into(),
+        ));
+    }
+    if filename.starts_with("//") {
+        return Err(AppError::Validation(
+            "SQLite database path must not be a UNC or protocol-relative path".into(),
+        ));
+    }
+    Ok(PathBuf::from(filename))
+}
+
+/// Confines the SQLite file name inside the Sonde data directory and returns the exact path
+/// the connector will open.
+fn prepare_sqlite_path(data_dir: &Path, database_url: &str) -> Result<PathBuf, AppError> {
+    let filename = sqlite_filename(database_url)?;
+    let data_dir = normalize_path(&if data_dir.is_absolute() {
+        data_dir.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| AppError::internal("resolve working directory", error))?
+            .join(data_dir)
+    });
+    let candidate = normalize_path(&if filename.is_absolute() {
+        filename
+    } else {
+        data_dir.join(filename)
+    });
+    if !candidate.starts_with(&data_dir) {
+        return Err(AppError::Validation(
+            "SQLite database path must stay inside the Sonde data directory".into(),
+        ));
+    }
+    fs::create_dir_all(&data_dir)
+        .map_err(|error| AppError::internal("create Sonde data directory", error))?;
+    if let Some(parent) = candidate
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .map_err(|error| AppError::internal("create SQLite database directory", error))?;
+    }
+    Ok(candidate)
+}
+
 fn validate_remote_url(url: Option<&str>, accepted: &[&str]) -> Result<String, AppError> {
     let url = url
         .filter(|value| !value.trim().is_empty())
@@ -110,55 +203,6 @@ fn validate_remote_url(url: Option<&str>, accepted: &[&str]) -> Result<String, A
         ));
     }
     Ok(url.to_owned())
-}
-
-fn prepare_sqlite_path(data_dir: &Path, database_url: &str) -> Result<(), AppError> {
-    let raw_path = if let Some(stripped) = database_url.strip_prefix("sqlite:///") {
-        stripped
-    } else if let Some(stripped) = database_url.strip_prefix("sqlite://") {
-        stripped
-    } else if let Some(stripped) = database_url.strip_prefix("sqlite:") {
-        stripped
-    } else {
-        return Ok(());
-    };
-    if raw_path.starts_with(":memory:") || raw_path.is_empty() {
-        return Ok(());
-    }
-    let path_text = raw_path.split('?').next().unwrap_or_default();
-    if path_text.contains('\0') {
-        return Err(AppError::Validation(
-            "SQLite database path cannot contain null bytes".into(),
-        ));
-    }
-    let path = Path::new(path_text);
-    fs::create_dir_all(data_dir)
-        .map_err(|error| AppError::internal("create Sonde data directory", error))?;
-    let data_dir = normalize_path(&if data_dir.is_absolute() {
-        data_dir.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(|error| AppError::internal("resolve working directory", error))?
-            .join(data_dir)
-    });
-    let candidate = normalize_path(&if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        data_dir.join(path)
-    });
-    if !candidate.starts_with(&data_dir) {
-        return Err(AppError::Validation(
-            "SQLite database path must stay inside the Sonde data directory".into(),
-        ));
-    }
-    if let Some(parent) = candidate
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent)
-            .map_err(|error| AppError::internal("create SQLite database directory", error))?;
-    }
-    Ok(())
 }
 
 fn normalize_path(path: &Path) -> std::path::PathBuf {
@@ -226,9 +270,16 @@ mod tests {
         assert!(prepare_sqlite_path(data_dir, &url).is_ok());
         assert!(prepare_sqlite_path(data_dir, "sqlite://nested/db.sqlite").is_ok());
 
+        // Absolute three-slash URLs are the regression case: the connector opens them as
+        // absolute paths, so they must be confined by the same parse.
         let escaped = data_dir.join("..").join("outside.sqlite");
         let escaped_url = format!("sqlite://{}", escaped.to_string_lossy().replace('\\', "/"));
         assert!(prepare_sqlite_path(data_dir, &escaped_url).is_err());
         assert!(prepare_sqlite_path(data_dir, "sqlite://../escape.sqlite").is_err());
+        assert!(prepare_sqlite_path(data_dir, "sqlite:///etc/sonde-escape.sqlite").is_err());
+        assert!(prepare_sqlite_path(data_dir, "sqlite:////etc/passwd").is_err());
+        assert!(prepare_sqlite_path(data_dir, "sqlite://a%2F..%2Fescape.sqlite").is_err());
+        assert!(prepare_sqlite_path(data_dir, "sqlite://nested\u{0}db.sqlite").is_err());
+        assert!(prepare_sqlite_path(data_dir, "sqlite://").is_err());
     }
 }

@@ -9,6 +9,7 @@ use crate::{
     security::{AuthSecurity, PreInstallThrottle},
     services::ingest_writer::IngestWriter,
 };
+use tracing::warn;
 
 const MAX_IN_FLIGHT_INGEST_REQUESTS: usize = 64;
 const MAX_IN_FLIGHT_ANALYTICS_QUERIES: usize = 8;
@@ -52,6 +53,7 @@ pub struct AppState {
     pub runtime: RuntimeConfig,
     installed: RwLock<Option<Arc<InstalledState>>>,
     pub setup_lock: Mutex<()>,
+    setup_token: RwLock<Option<String>>,
     pub live_updates: broadcast::Sender<LiveUpdate>,
     ingest_gate: Arc<Semaphore>,
     analytics_gate: Arc<Semaphore>,
@@ -65,16 +67,53 @@ impl AppState {
             crate::bootstrap::spawn_background_workers(installed);
         }
 
+        let (setup_token, setup_token_generated) = match runtime.setup_token.clone() {
+            Some(token) => (Some(token), false),
+            None => (Some(crate::auth::random_token(32)), true),
+        };
+        if setup_token_generated {
+            warn!(
+                "no SONDE_SETUP_TOKEN configured; a one-time setup token was generated and is \
+                 required by /api/v1/setup/*: {}",
+                setup_token.as_deref().unwrap_or_default()
+            );
+        }
+
         let (live_updates, _) = broadcast::channel(256);
         Ok(Self {
             runtime,
             installed: RwLock::new(installed),
             setup_lock: Mutex::new(()),
+            setup_token: RwLock::new(setup_token),
             live_updates,
             ingest_gate: Arc::new(Semaphore::new(MAX_IN_FLIGHT_INGEST_REQUESTS)),
             analytics_gate: Arc::new(Semaphore::new(MAX_IN_FLIGHT_ANALYTICS_QUERIES)),
             setup_throttle: PreInstallThrottle::new(SETUP_REQUESTS_PER_MINUTE, 60_000),
         })
+    }
+
+    /// Verifies the one-time setup token presented on a pre-installation endpoint.
+    ///
+    /// `/api/v1/setup/*` runs before any account exists, so this token is the only identity
+    /// available; without it an attacker who reaches the port first could complete the setup
+    /// wizard and take over the instance.
+    pub async fn verify_setup_token(&self, presented: Option<&str>) -> Result<(), AppError> {
+        let Some(expected) = self.setup_token.read().await.clone() else {
+            return Err(AppError::Forbidden);
+        };
+        let Some(presented) = presented else {
+            return Err(AppError::Unauthorized);
+        };
+        if crate::auth::constant_time_eq(presented, &expected) {
+            Ok(())
+        } else {
+            Err(AppError::Unauthorized)
+        }
+    }
+
+    /// Retires the setup token once the wizard completed, so it cannot be replayed.
+    pub async fn consume_setup_token(&self) {
+        *self.setup_token.write().await = None;
     }
 
     /// Throttles the unauthenticated setup wizard endpoints, which are reachable before any

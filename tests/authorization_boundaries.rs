@@ -52,6 +52,7 @@ async fn fixture() -> Fixture {
         password_pepper: PasswordPepper::new(pepper),
         trusted_proxies: Vec::new(),
         allow_insecure_cookies: true,
+        setup_token: None,
     };
 
     let database = database::connect(&db_url).await.unwrap();

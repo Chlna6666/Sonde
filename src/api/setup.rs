@@ -67,6 +67,7 @@ async fn test(
     body: web::Json<TestRequest>,
 ) -> Result<HttpResponse, AppError> {
     require_same_origin(&request)?;
+    state.verify_setup_token(setup_token(&request)).await?;
     require_setup_budget(&state, &request).await?;
     if state.is_installed().await {
         return Err(AppError::NotFound);
@@ -81,6 +82,7 @@ async fn complete(
     body: web::Json<CompleteRequest>,
 ) -> Result<HttpResponse, AppError> {
     require_same_origin(&request)?;
+    state.verify_setup_token(setup_token(&request)).await?;
     require_setup_budget(&state, &request).await?;
     let _guard = state.setup_lock.lock().await;
     if state.is_installed().await {
@@ -100,7 +102,19 @@ async fn complete(
         },
     )
     .await?;
+    // The wizard is done: the token must not be replayable even if the state flip races.
+    state.consume_setup_token().await;
     Ok(HttpResponse::Created().json(serde_json::json!({ "installed": true })))
+}
+
+/// Reads the one-time setup token from the dedicated header.
+fn setup_token(request: &HttpRequest) -> Option<&str> {
+    request
+        .headers()
+        .get("x-sonde-setup-token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 /// Setup runs before any account exists, so the per-source budget is the only throttle

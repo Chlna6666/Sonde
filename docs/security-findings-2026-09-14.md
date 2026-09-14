@@ -3,7 +3,7 @@
 范围：`src/`（Rust / actix-web 后端，134 个文件）、`web/src`（React 19 + TypeScript）、`Dockerfile`、`docker-compose.yml`、`.github/workflows/ci.yml`、依赖清单（`Cargo.lock`、`web/pnpm-lock.yaml`）。
 方法：静态代码审计（人工走查 + 模式检索）+ 依赖组件审计（工具扫描）+ 配置合规核对。动态运行时审计（DAST）未在本轮执行，见文末"未覆盖项"。
 
-**总体结论：自研代码未发现可直接导致未授权访问或数据泄露的严重/高危缺陷**，认证、会话、CSRF、授权、SQL 注入、SSRF、签名与重放防护等关键面实现质量高于同类项目平均水平。但**依赖组件审计直接命中 1 个需优先修复的漏洞（actix-http 请求走私，SEC-19）**，另有 6 项中危、12 项低危问题，主要集中在**第二因子在线爆破面、前端产物泄露、部署配置一致性**三处。累计 20 项发现。
+> **⚠️ 第二轮复核更正（同日）**：本报告首轮"自研代码无高危缺陷"的结论**不成立**——外部复核发现了 **1 个 High 级首次安装接管问题**（pre-install API 无身份认证）与 **1 个中高危 SQLite 路径校验/实际使用不一致**（`sqlite:///abs` 三斜杠解析错位，Linux CI 的逃逸测试因此失败）。两项连同 Webhook DNS rebinding、reqwest 错误泄密、`sonde.json` 权限、CI 拆分均已在**第十节（第二轮复核修复）**修复。首轮审计的主要盲区：安装向导（pre-install）攻击面在首轮仅按"同源校验存在"评估，未按"无身份认证的写端点"评估；且审计在 Windows 上进行，Linux 形态的路径解析差异未被发现。本报告在第十节修复完成前**不得作为上线安全背书引用**。
 
 **处理进度：14 项已修复，3 项已部分处理/缓解（SEC-13 供应链固定、SEC-16 安装向导限速、SEC-20 依赖确认无补丁并给出部署缓解），3 项为功能级改动待排期（SEC-15 备份加密、SEC-17 限速持久化、SEC-18 TOTP 密钥加密）。** 详见第八节（修复记录）与第九节（依赖更新与供应链治理）。
 
@@ -323,4 +323,68 @@ cargo update -p actix-http        # 修复 SEC-19（实测升至 3.13.5）
 2. **前端大版本迁移**：单独开一轮 Vite 8 / Vitest 5 / TypeScript 7 / i18next 26 的升级，配 Dependabot 的 major PR 一起做。
 3. **备份加密（SEC-15）与 TOTP 密钥加密（SEC-18）**：建议合并为一次"静态机密保护"设计（pepper 派生密钥 + 格式版本升级 + 迁移）。
 4. **限速状态持久化（SEC-17）**：随多副本部署方案一起落地（可复用数据库中已有的 `auth_shared_state` 表）。
+
+---
+
+## 十、第二轮复核修复（外部复核确认的问题）
+
+外部第二轮复核（覆盖安装流程、认证/会话、ingest、SSRF、Webhook、密钥落盘、Docker、CI/SCA）确认了以下问题，本轮全部修复。
+
+### SEC-21（High）　首次安装可被远程抢占 → 已修复：一次性 Setup Token
+
+- **问题**：`/api/v1/setup/test` 与 `/api/v1/setup/complete` 在未安装状态下无任何身份认证（仅同源校验 + 限速），而 `Origin`/`Host` 头可由任意 HTTP 客户端伪造。公网暴露的新实例会被攻击者抢先完成初始化并创建其自己的 Super Admin——一次请求即可接管。首轮审计将其误评为"同源校验已覆盖"。
+- **修复**（`src/config.rs`、`src/state.rs`、`src/api/setup.rs`、`src/services/setup.rs`、`web/src/pages/SetupPage.tsx`）：
+  1. 新增 `SONDE_SETUP_TOKEN`（≥16 字符，配置过短则拒绝启动）；
+  2. 未配置时**启动自动生成 32 字节随机 token 并打印到启动日志**（类似 Grafana 初始口令的交付方式），保护永远开启、零配置；
+  3. `/setup/test` 与 `/setup/complete` 必须携带 `X-Sonde-Setup-Token` 头，服务端恒定时间比较（`auth::constant_time_eq`）；
+  4. 初始化完成后 token 立即作废（`consume_setup_token`），不可重放；
+  5. SetupPage 新增"初始化令牌"输入项（en/zh 文案随附），随请求头发送；缺失/错误返回 401 并给出明确提示。
+- **保留决策**：compose 默认端口映射保持 `8080:8080` 不强制改为 loopback——在 token 强制生效后，公网暴露的未安装实例已无法被初始化或探测；loopback 绑定与 TLS 反代仍是推荐部署形态（compose 注释已说明）。
+
+### SEC-22（Medium/High）　`sqlite:///abs/path` 路径校验与实际打开路径不一致 → 已修复
+
+- **问题**：`prepare_sqlite_path` 的 `strip_prefix("sqlite:///")` 分支会把三斜杠 URL 的**多出的斜杠一并剥掉**，使 `sqlite:///tmp/outside.db` 被当作相对路径 `tmp/outside.db` 拼进 `data_dir` 通过限制检查，而连接器按原始 URL 打开**绝对路径** `/tmp/outside.db` —— 典型 validate-one-use-another。Linux CI（tempdir 为 `/tmp/...`，天然产生三斜杠）的逃逸断言因此失败；Windows（`D:/...` 盘符路径）不走该分支，本地测试绿，故首轮未发现。
+- **修复**（`src/services/setup.rs`）：
+  1. 新增 `sqlite_filename()`：**唯一**负责"URL → 连接器实际打开的文件系统路径"的映射（剥 `sqlite://` 前缀、去除 query，保留其余部分原样），并拒绝 percent 编码、NUL、UNC/协议相对路径（`//` 开头）与空路径；
+  2. `prepare_sqlite_path` 改为 **解析 → 词法限定（`..` 收敛后必须 `starts_with(data_dir)`）→ 返回该路径**，并在其中完成目录创建；
+  3. `resolve_database_url` 的 sqlite 分支**用校验后的路径重建连接 URL**（保留原 query，默认 `?mode=rwc`），写入 `sonde.json` 的也是重建后的 URL——从结构上保证"校验的路径 == 打开的路径"。
+- **回归测试**：`sqlite_paths_must_stay_inside_data_dir` 扩展 7 个用例：三斜杠绝对路径逃逸、`..` 相对逃逸、`/etc/...`、`////`、percent 编码、NUL、空路径，全部必须被拒绝。
+
+### SEC-23（Medium）　Webhook DNS rebinding / TOCTOU → 已修复
+
+- **问题**：先 `lookup_host` 校验 IP 为公网，再交给 reqwest 重新解析建连——两次解析结果可以不同，攻击者域名可先返回公网 IP 通过校验、建连时返回内网 IP。
+- **修复**（`src/services/alerts.rs`）：`validated_destination` 解析并校验**所有**地址后，用 `reqwest::ClientBuilder::resolve(host, addr)` 把校验过的 socket 地址**固定**给实际连接；URL 主机名仍作为 TLS SNI/证书校验身份。每个发送使用独立 client（webhook 低频，开销可忽略）。
+
+### SEC-24（Medium）　reqwest 错误可能泄露 webhook URL / Telegram bot token → 已修复
+
+- **问题**：`map_err(|err| format!("... {err}"))` 会持久化 reqwest 的 Display 输出，其中可能包含完整请求 URL——Discord/Slack/飞书/钉钉/企微 webhook URL 以及 `https://api.telegram.org/bot{token}/...` 中的 bot token 都在 URL 里，而这些错误信息会写入 `alert_deliveries.last_error` 并可回显给管理员。
+- **修复**：所有 reqwest 错误统一 `err.without_url()` 后再格式化（`send_json` 与自定义 webhook 分支）；状态码错误路径本就不含 URL。
+
+### SEC-25（Medium）　`sonde.json` 以普通权限保存数据库凭据 → 已修复
+
+- **问题**：`InstallationConfig::write_atomic` 用普通 `fs::write` 落盘，`database_url` 常含 `postgres://user:password@...` 凭据，umask 022 下为 0644；而口令 pepper 文件有 0600/ACL 收紧，二者不一致。
+- **修复**（`src/config.rs`）：写入时对临时文件调用与 pepper 相同的 `restrict_secret_permissions`（Unix 0600 / Windows 当前用户独占 ACL）后再原子 rename；`read()` 时每次启动重新收紧一次旧文件的权限（失败仅告警不阻断启动）。
+
+### SEC-26（流程）　CI 安全门禁误伤与串联 → 已修复
+
+- **问题**：`cargo audit` 与 `pnpm audit` 在同一 job 串联，前者失败（h2 已知无补丁通告）会跳过后者；且无豁免机制会让团队习惯性忽视整个安全 job。
+- **修复**：拆分为 `security-rust` 与 `security-frontend` 两个独立 job；`cargo audit --ignore RUSTSEC-2026-0258` 带注释说明：该通告仅在 h2 0.4.16 修复而 actix-http 3.x 锁定 h2 0.3.x，**补偿控制为反向代理终止 HTTP/2、对 Sonde 仅 HTTP/1.1**，待上游迁移后移除豁免。
+- **说明**：复核中提到的"main CI run 失败"实际来自 Dependabot 的 crypto 大版本升级 PR（sha2 0.11 / hmac 0.13 / rand 0.10 / criterion 0.8 等，为不兼容 major 升级，需代码迁移）；当前 Cargo.toml 声明的 `sha2 = "0.10"` / `hmac = "0.12"` / `rand = "0.9"` 等并未被 `cargo update` 越过。
+
+### 第二轮修复验证
+
+| 检查 | 结果 |
+|---|---|
+| `cargo fmt --all --check` | 通过 |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | 通过（零告警） |
+| `cargo test --lib --locked` | **109 项通过**（含扩展后的 SQLite 路径逃逸 7 用例、`constant_time_eq`） |
+| 集成测试（7 个测试文件） | 共 **20 项全部通过** |
+| 前端 `typecheck` + `vitest`（13 项）+ `vite build` | 通过，产物无 `.map` |
+| `sonde.json` 权限收紧 | 集成测试输出中可见 icacls 对每个临时 `sonde.json` 实际执行（Windows） |
+
+### 仍待排期（同前）
+
+- SEC-15 备份应用层加密、SEC-18 TOTP secret AEAD 加密：需要主密钥管理设计（`SONDE_MASTER_KEY` 或 data_dir 内 0600 密钥文件 + HKDF 派生 + 版本化密文 + 兼容迁移），建议单独立项。
+- SEC-17 限速状态持久化、SEC-20 h2（部署缓解已固化进 CI 注释与 compose 文档）。
+- 上线前仍需：TLS 反代 + HTTP/2 终止、DAST（setup 竞态、SSRF/DNS rebinding、限速压测、HTTP parser fuzz）。
 

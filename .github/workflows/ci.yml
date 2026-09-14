@@ -83,8 +83,8 @@ jobs:
       - name: Build
         run: pnpm build
 
-  security:
-    name: Dependency audit
+  security-rust:
+    name: Dependency audit (Rust)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -99,11 +99,21 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
 
-      # Fails on any RustSec advisory that affects Cargo.lock. A vulnerability whose only fix
-      # falls outside the MSRV window must be recorded as an explicit, documented exception
-      # rather than silently ignored.
+      # RUSTSEC-2026-0258 (h2 unbounded empty DATA frames) is a documented, temporary
+      # exception: the advisory is only fixed in h2 0.4.16 while actix-http 3.x still pulls
+      # h2 0.3.x. Compensating control: reverse proxies terminate HTTP/2 and speak HTTP/1.1
+      # to Sonde, so the vulnerable code path is not reachable from the internet. Revisit
+      # when actix-http/awc migrate to h2 0.4 (tracked by Dependabot).
       - name: Audit Rust dependencies
-        run: cargo audit
+        run: cargo audit --ignore RUSTSEC-2026-0258
+
+  security-frontend:
+    name: Dependency audit (web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4

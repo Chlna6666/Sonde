@@ -30,6 +30,9 @@ pub struct RuntimeConfig {
     pub password_pepper: PasswordPepper,
     pub trusted_proxies: Vec<IpAddr>,
     pub allow_insecure_cookies: bool,
+    /// Operator-supplied one-time setup token. When absent, a random token is generated at
+    /// startup and logged once, so the pre-installation API is never anonymously usable.
+    pub setup_token: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -62,6 +65,20 @@ impl RuntimeConfig {
         }
         let password_pepper = load_or_create_pepper(&pepper_path)?;
 
+        let setup_token = match env::var("SONDE_SETUP_TOKEN") {
+            Ok(value) => {
+                let token = value.trim().to_owned();
+                if token.chars().count() < 16 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "SONDE_SETUP_TOKEN must be at least 16 characters",
+                    ));
+                }
+                Some(token)
+            }
+            Err(_) => None,
+        };
+
         Ok(Self {
             bind: env::var("SONDE_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into()),
             config_path,
@@ -72,6 +89,7 @@ impl RuntimeConfig {
                 env::var("SONDE_TRUSTED_PROXIES").ok().as_deref(),
             )?,
             allow_insecure_cookies: env_flag("SONDE_ALLOW_INSECURE_COOKIES"),
+            setup_token,
         })
     }
 
@@ -198,7 +216,16 @@ fn restrict_windows_secret(path: &Path) -> io::Result<()> {
 
 impl InstallationConfig {
     pub fn read(path: &Path) -> io::Result<Self> {
-        serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)
+        let config: Self = serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)?;
+        // The config carries the database URL (often including credentials), so re-tighten the
+        // file mode on every start: older installations may still hold a world-readable file.
+        if let Err(error) = restrict_secret_permissions(path) {
+            tracing::warn!(
+                error = %error,
+                "could not restrict installation config permissions; the file carries database credentials"
+            );
+        }
+        Ok(config)
     }
 
     pub fn write_atomic(&self, path: &Path) -> io::Result<()> {
@@ -207,6 +234,7 @@ impl InstallationConfig {
             &temporary,
             serde_json::to_vec_pretty(self).map_err(io::Error::other)?,
         )?;
+        restrict_secret_permissions(&temporary)?;
         fs::rename(temporary, path)
     }
 }

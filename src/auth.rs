@@ -85,9 +85,40 @@ pub fn token_hash(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
 
+/// Constant-time equality for short secrets (setup token, CSRF token).
+///
+/// The length check short-circuits, which only reveals whether two secrets have the same
+/// length; byte comparison always runs over the full overlap.
+#[must_use]
+pub fn constant_time_eq(left: &str, right: &str) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.bytes()
+        .zip(right.bytes())
+        .fold(0_u8, |accumulator, (left, right)| {
+            accumulator | (left ^ right)
+        })
+        == 0
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{hash_password, validate_password, verify_password};
+    use super::{constant_time_eq, hash_password, validate_password, verify_password};
+
+    #[test]
+    fn constant_time_eq_requires_exact_match() {
+        assert!(constant_time_eq(
+            "sonde-setup-token-value",
+            "sonde-setup-token-value"
+        ));
+        assert!(!constant_time_eq(
+            "sonde-setup-token-value",
+            "sonde-setup-token-valux"
+        ));
+        assert!(!constant_time_eq("short", "sonde-setup-token-value"));
+        assert!(constant_time_eq("", ""));
+    }
 
     #[test]
     fn password_hash_requires_the_installation_pepper() -> Result<(), crate::error::AppError> {
