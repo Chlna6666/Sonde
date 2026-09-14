@@ -78,7 +78,8 @@ fn build_installed(
         database,
         config,
         auth_security,
-    )))
+        &runtime.master_key,
+    )?))
 }
 
 pub(crate) fn spawn_background_workers(state: &InstalledState) {

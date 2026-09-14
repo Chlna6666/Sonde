@@ -4,8 +4,9 @@ use sea_orm::DatabaseConnection;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore, TryAcquireError, broadcast};
 
 use crate::{
-    config::{InstallationConfig, RuntimeConfig},
+    config::{InstallationConfig, MasterKey, RuntimeConfig},
     error::AppError,
+    secret_cipher::SecretCipher,
     security::{AuthSecurity, PreInstallThrottle},
     services::ingest_writer::IngestWriter,
 };
@@ -30,6 +31,8 @@ pub struct InstalledState {
     pub database: DatabaseConnection,
     pub config: InstallationConfig,
     pub auth_security: Arc<AuthSecurity>,
+    /// AEAD cipher for secrets that must stay recoverable (TOTP shared secrets).
+    pub secret_cipher: SecretCipher,
     pub ingest_writer: IngestWriter,
 }
 
@@ -38,14 +41,17 @@ impl InstalledState {
         database: DatabaseConnection,
         config: InstallationConfig,
         auth_security: Arc<AuthSecurity>,
-    ) -> Self {
+        master_key: &MasterKey,
+    ) -> Result<Self, AppError> {
+        let secret_cipher = SecretCipher::new(master_key.as_bytes())?;
         let ingest_writer = IngestWriter::new(database.clone());
-        Self {
+        Ok(Self {
             database,
             config,
             auth_security,
+            secret_cipher,
             ingest_writer,
-        }
+        })
     }
 }
 
@@ -168,6 +174,7 @@ impl AppState {
                 database: installed_ref.database.clone(),
                 config: new_config.clone(),
                 auth_security: installed_ref.auth_security.clone(),
+                secret_cipher: installed_ref.secret_cipher.clone(),
                 ingest_writer: installed_ref.ingest_writer.clone(),
             }));
             Ok(new_config)

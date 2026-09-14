@@ -10,7 +10,7 @@ use sea_orm::DatabaseConnection;
 use sha2::{Digest, Sha256};
 use sonde::{
     auth,
-    config::{InstallationConfig, PasswordPepper, RuntimeConfig},
+    config::{InstallationConfig, MasterKey, PasswordPepper, RuntimeConfig},
     database::{self, applications as application_store, auth as auth_store, auth_state},
     state::AppState,
 };
@@ -73,6 +73,7 @@ pub async fn installed_http() -> HttpFixture {
         trusted_proxies: Vec::new(),
         allow_insecure_cookies: true,
         setup_token: None,
+        master_key: MasterKey::from_bytes([9_u8; 32]),
     };
 
     let database = database::connect(&db_url).await.unwrap();

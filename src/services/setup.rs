@@ -72,9 +72,9 @@ pub async fn complete(state: &AppState, input: SetupInput<'_>) -> Result<(), App
         .write_atomic(&state.runtime.config_path)
         .map_err(|error| AppError::internal("write installation config after setup", error))?;
     let auth_security = Arc::new(AuthSecurity::new(state.runtime.password_pepper.as_bytes())?);
-    state
-        .finish_setup(InstalledState::new(database, config, auth_security))
-        .await
+    let installed =
+        InstalledState::new(database, config, auth_security, &state.runtime.master_key)?;
+    state.finish_setup(installed).await
 }
 
 fn resolve_database_url(

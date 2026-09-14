@@ -5,7 +5,7 @@
 
 > **⚠️ 第二轮复核更正（同日）**：本报告首轮"自研代码无高危缺陷"的结论**不成立**——外部复核发现了 **1 个 High 级首次安装接管问题**（pre-install API 无身份认证）与 **1 个中高危 SQLite 路径校验/实际使用不一致**（`sqlite:///abs` 三斜杠解析错位，Linux CI 的逃逸测试因此失败）。两项连同 Webhook DNS rebinding、reqwest 错误泄密、`sonde.json` 权限、CI 拆分均已在**第十节（第二轮复核修复）**修复。首轮审计的主要盲区：安装向导（pre-install）攻击面在首轮仅按"同源校验存在"评估，未按"无身份认证的写端点"评估；且审计在 Windows 上进行，Linux 形态的路径解析差异未被发现。本报告在第十节修复完成前**不得作为上线安全背书引用**。
 
-**处理进度：14 项已修复，3 项已部分处理/缓解（SEC-13 供应链固定、SEC-16 安装向导限速、SEC-20 依赖确认无补丁并给出部署缓解），3 项为功能级改动待排期（SEC-15 备份加密、SEC-17 限速持久化、SEC-18 TOTP 密钥加密）。** 详见第八节（修复记录）与第九节（依赖更新与供应链治理）。
+**处理进度：15 项已修复，3 项已部分处理/缓解（SEC-13 供应链固定、SEC-16 安装向导限速、SEC-20 依赖确认无补丁并给出部署缓解），2 项待排期（SEC-15 备份加密——设计草案见第十一节、SEC-17 限速持久化）。** 详见第八节（修复记录）、第九节（依赖更新与供应链治理）、第十节（第二轮复核修复）、第十一节（TOTP 密钥加密）。
 
 ---
 
@@ -384,7 +384,32 @@ cargo update -p actix-http        # 修复 SEC-19（实测升至 3.13.5）
 
 ### 仍待排期（同前）
 
-- SEC-15 备份应用层加密、SEC-18 TOTP secret AEAD 加密：需要主密钥管理设计（`SONDE_MASTER_KEY` 或 data_dir 内 0600 密钥文件 + HKDF 派生 + 版本化密文 + 兼容迁移），建议单独立项。
-- SEC-17 限速状态持久化、SEC-20 h2（部署缓解已固化进 CI 注释与 compose 文档）。
+- SEC-15 备份应用层加密（设计见第十一节末尾）、SEC-17 限速状态持久化、SEC-20 h2（部署缓解已固化进 CI 注释与 compose 文档）。
 - 上线前仍需：TLS 反代 + HTTP/2 终止、DAST（setup 竞态、SSRF/DNS rebinding、限速压测、HTTP parser fuzz）。
+
+---
+
+## 十一、第三轮：TOTP 共享密钥静态加密（SEC-18 已修复）
+
+### 设计
+
+- **主密钥**（`src/config.rs::MasterKey`）：优先取环境变量 `SONDE_MASTER_KEY`（64 位 hex）；否则在数据目录自动生成 `sonde.master-key`（32 字节 CSPRNG，0600 / Windows 当前用户独占 ACL，与 pepper 文件同级别）。
+- **密钥派生**（`src/secret_cipher.rs`）：`HMAC-SHA256(master_key, "sonde/secret-encryption/v1")` 作为 XChaCha20-Poly1305 的 AEAD 密钥。主密钥恒为均匀随机 32 字节，等价于 HKDF（extract 步骤天然满足）。
+- **信封格式**：`v1:<base64url 24 字节随机 nonce>:<base64url 密文>`，写入 `users.totp_secret` 列。版本前缀支持后续轮换与算法升级。
+- **兼容迁移**：读取时无 `v1:` 前缀的旧明文密钥**原样可用**（用户重新启用 2FA 时改写为密文）；信封解密失败（行损坏 / 主密钥被更换）视为"未启用 2FA"并告警——fail closed，用户可重新注册而非登录被 500。
+- **备份边界**：备份格式本就排除 TOTP 字段（`totp_secrets_included: false`），因此密文不会进入备份；主密钥文件与数据库分离存放。
+- **密钥丢失的影响**：主密钥丢失 = 已注册 TOTP 不可恢复（用户需重新启用 2FA）；与 pepper 丢失导致口令不可验证是同一信任域。多副本部署应统一注入 `SONDE_MASTER_KEY`。
+
+### 新增依赖
+
+`chacha20poly1305 = "0.11"`（RustCrypto AEAD；XChaCha20 的 24 字节随机 nonce 无碰撞顾虑）。KDF 复用既有 `hmac`/`sha2`。
+
+### 验证
+
+- `secret_cipher` 单元测试 4 项：加解密往返 + nonce 随机性、错误主密钥拒绝、篡改/畸形信封拒绝、旧明文不误判。
+- `cargo fmt --check`、`clippy -D warnings`（零告警）、**113 项单元测试**、**20 项集成测试**全部通过。
+
+### SEC-15 备份加密设计草案（下一步）
+
+在 NDJSON 归档外再包一层信封：首行 `{"sondeEncryptedBackup":"v1", kdf, wrappedDek, ...}`，随机 DEK 以 XChaCha20-Poly1305 分块（4 MiB/块，块序号派生 nonce）加密记录流；DEK 用主密钥（或 Argon2id(passphrase)）包裹。恢复时先解信封再走既有 2.1 解析与 SHA-256 校验。实现时需同步升级 `FORMAT_VERSION` 与导入端拒绝未加密备份的策略开关。
 

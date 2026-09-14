@@ -5,7 +5,7 @@ use std::sync::Arc;
 use actix_web::{App, test, web::Data};
 use sonde::{
     api, auth,
-    config::{InstallationConfig, PasswordPepper, RuntimeConfig},
+    config::{InstallationConfig, MasterKey, PasswordPepper, RuntimeConfig},
     database::{self, applications as application_store, auth as auth_store, auth_state},
     state::AppState,
 };
@@ -53,6 +53,7 @@ async fn fixture() -> Fixture {
         trusted_proxies: Vec::new(),
         allow_insecure_cookies: true,
         setup_token: None,
+        master_key: MasterKey::from_bytes([9_u8; 32]),
     };
 
     let database = database::connect(&db_url).await.unwrap();

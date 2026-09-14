@@ -3,7 +3,7 @@ use std::sync::Arc;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use sonde::{
-    config::InstallationConfig,
+    config::{InstallationConfig, MasterKey},
     database::{self, ingest_nonce},
     error::AppError,
     security::AuthSecurity,
@@ -65,12 +65,19 @@ async fn signed_ingest_replay_is_rejected_across_independent_installed_states()
         secure_cookie: false,
     };
     let pepper = b"test-secret-pepper-32-bytes-long!";
+    let master_key = MasterKey::from_bytes([9_u8; 32]);
     let state_a = InstalledState::new(
         replica_a,
         config.clone(),
         Arc::new(AuthSecurity::new(pepper)?),
-    );
-    let state_b = InstalledState::new(replica_b, config, Arc::new(AuthSecurity::new(pepper)?));
+        &master_key,
+    )?;
+    let state_b = InstalledState::new(
+        replica_b,
+        config,
+        Arc::new(AuthSecurity::new(pepper)?),
+        &master_key,
+    )?;
 
     let user_agent = "SondeReplayTest/1.0";
     let client_binding = state_a

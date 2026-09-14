@@ -33,6 +33,8 @@ pub struct RuntimeConfig {
     /// Operator-supplied one-time setup token. When absent, a random token is generated at
     /// startup and logged once, so the pre-installation API is never anonymously usable.
     pub setup_token: Option<String>,
+    /// Master key for AEAD encryption of stored secrets (see `secret_cipher`).
+    pub master_key: MasterKey,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -78,6 +80,7 @@ impl RuntimeConfig {
             }
             Err(_) => None,
         };
+        let master_key = load_master_key(&data_dir)?;
 
         Ok(Self {
             bind: env::var("SONDE_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into()),
@@ -90,6 +93,7 @@ impl RuntimeConfig {
             )?,
             allow_insecure_cookies: env_flag("SONDE_ALLOW_INSECURE_COOKIES"),
             setup_token,
+            master_key,
         })
     }
 
@@ -126,6 +130,29 @@ fn load_or_create_pepper(path: &Path) -> io::Result<PasswordPepper> {
     }
     let mut value = [0_u8; 32];
     rand::rng().fill_bytes(&mut value);
+    write_new_secret_file(path, &value)?;
+    Ok(PasswordPepper(Arc::new(value)))
+}
+
+/// Reads the 32-byte secret at `path`, creating it from the OS CSPRNG on first start.
+fn load_or_create_master_key_file(path: &Path) -> io::Result<MasterKey> {
+    if path.exists() {
+        let bytes = fs::read(path)?;
+        let value: [u8; 32] = bytes.try_into().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "master key must contain exactly 32 bytes",
+            )
+        })?;
+        return Ok(MasterKey(Arc::new(value)));
+    }
+    let mut value = [0_u8; 32];
+    rand::rng().fill_bytes(&mut value);
+    write_new_secret_file(path, &value)?;
+    Ok(MasterKey(Arc::new(value)))
+}
+
+fn write_new_secret_file(path: &Path, value: &[u8; 32]) -> io::Result<()> {
     match fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -133,12 +160,15 @@ fn load_or_create_pepper(path: &Path) -> io::Result<PasswordPepper> {
     {
         Ok(mut file) => {
             use io::Write;
-            file.write_all(&value)?;
+            file.write_all(value)?;
             file.sync_all()?;
             restrict_secret_permissions(path)?;
-            Ok(PasswordPepper(Arc::new(value)))
+            Ok(())
         }
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => read_pepper(path),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            // A concurrent start created the file first; load that one.
+            Ok(())
+        }
         Err(error) => Err(error),
     }
 }
@@ -152,6 +182,46 @@ fn read_pepper(path: &Path) -> io::Result<PasswordPepper> {
         )
     })?;
     Ok(PasswordPepper(Arc::new(value)))
+}
+
+/// 32-byte installation master key backing the AEAD encryption of stored secrets
+/// (currently TOTP shared secrets). Losing it makes existing TOTP enrollments unusable,
+/// so it lives next to the password pepper with the same restricted permissions.
+#[derive(Clone)]
+pub struct MasterKey(Arc<[u8; 32]>);
+
+impl MasterKey {
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Builds a key from explicit bytes (used by tests and tooling).
+    #[must_use]
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(Arc::new(bytes))
+    }
+}
+
+fn load_master_key(data_dir: &Path) -> io::Result<MasterKey> {
+    if let Some(raw) = env::var("SONDE_MASTER_KEY").ok().as_deref() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "SONDE_MASTER_KEY is set but empty",
+            ));
+        }
+        let mut value = [0_u8; 32];
+        hex::decode_to_slice(trimmed, &mut value).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("SONDE_MASTER_KEY must be 64 hex characters: {error}"),
+            )
+        })?;
+        return Ok(MasterKey(Arc::new(value)));
+    }
+    load_or_create_master_key_file(&data_dir.join("sonde.master-key"))
 }
 
 fn parse_trusted_proxies(raw: Option<&str>) -> io::Result<Vec<IpAddr>> {

@@ -3,6 +3,7 @@ use crate::{
     database::{applications, auth as auth_store, auth_state},
     domain::permission::PermissionGrant,
     error::AppError,
+    secret_cipher::SecretCipher,
     security::LoginGate,
     state::InstalledState,
 };
@@ -205,8 +206,9 @@ pub async fn verify_2fa_login(
     let account_key = format!("2fa-account:{user_id}");
     require_second_factor_allowed(installed, &[&account_key]).await?;
 
-    let (enabled, secret_opt) = auth_store::get_totp_info(&installed.database, &user_id).await?;
-    let Some(secret) = secret_opt else {
+    let (enabled, stored_secret) = auth_store::get_totp_info(&installed.database, &user_id).await?;
+    let secret = decrypt_totp_secret(installed, stored_secret);
+    let Some(secret) = secret else {
         return Err(AppError::Unauthorized);
     };
     if !enabled || !verify_totp_once(installed, &user_id, &secret, code).await? {
@@ -294,7 +296,12 @@ pub async fn enable_2fa(
         return Err(AppError::Validation("Invalid 2FA verification code".into()));
     }
 
-    auth_store::enable_totp(&installed.database, &user.id, secret).await?;
+    auth_store::enable_totp(
+        &installed.database,
+        &user.id,
+        &installed.secret_cipher.seal(secret)?,
+    )
+    .await?;
     applications::audit(
         &installed.database,
         Some(&user.id),
@@ -322,8 +329,9 @@ pub async fn disable_2fa(
         return Err(AppError::Validation("Invalid account password".into()));
     }
 
-    let (enabled, secret_opt) = auth_store::get_totp_info(&installed.database, &user.id).await?;
-    let Some(secret) = secret_opt else {
+    let (enabled, stored_secret) = auth_store::get_totp_info(&installed.database, &user.id).await?;
+    let secret = decrypt_totp_secret(installed, stored_secret);
+    let Some(secret) = secret else {
         return Err(AppError::Validation("2FA is not enabled".into()));
     };
     if !enabled {
@@ -477,6 +485,29 @@ async fn verify_account_password(
     tokio::task::spawn_blocking(move || auth::verify_password(&password, &password_hash, &pepper))
         .await
         .map_err(|error| AppError::internal("verify account password", error))
+}
+
+/// Decrypts a stored TOTP secret, transparently accepting legacy plaintext values.
+///
+/// Secrets written before AEAD encryption existed have no envelope prefix and are returned
+/// as-is; they become encrypted the next time the user re-enrolls. If an envelope exists but
+/// cannot be opened (corrupted row, or the master key was replaced), the secret is treated as
+/// absent and the user can re-enable 2FA — failing closed rather than failing login.
+fn decrypt_totp_secret(installed: &InstalledState, stored: Option<String>) -> Option<String> {
+    let stored = stored?;
+    if !SecretCipher::is_envelope(&stored) {
+        return Some(stored);
+    }
+    match installed.secret_cipher.open(&stored) {
+        Ok(plaintext) => Some(plaintext),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "stored TOTP secret could not be decrypted; treat 2FA as disabled until re-enrolled"
+            );
+            None
+        }
+    }
 }
 
 async fn verify_totp_once(
