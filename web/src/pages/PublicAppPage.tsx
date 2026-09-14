@@ -371,8 +371,8 @@ export function PublicAppPage() {
                   secondaryValue: pt.users,
                 }))}
                 height="100%"
-                strokeColor="#c8eca4"
-                fillColor="#c8eca4"
+                strokeColor="var(--signal)"
+                fillColor="var(--signal)"
                 valueLabel={t("public.launches")}
                 secondaryLabel={t("public.devices")}
               />
@@ -495,7 +495,7 @@ export function PublicAppPage() {
                     <span className="text-[var(--muted)] font-mono text-[10px] w-14 text-right flex-shrink-0">
                       {os.count.toLocaleString()}
                     </span>
-                    <span className="font-mono text-[10px] font-bold w-12 text-right flex-shrink-0" style={{ color }}>
+                    <span className="font-mono text-[10px] font-bold w-12 text-right flex-shrink-0 text-[var(--text)]">
                       {os.percentage}%
                     </span>
                   </div>

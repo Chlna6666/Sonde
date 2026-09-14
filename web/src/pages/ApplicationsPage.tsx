@@ -865,7 +865,7 @@ function AppStatsModal({ application, onClose }: { application: Application; onC
                   <StatValue label={t("stats.dau")} value={stats.overview.dau ?? stats.overview.activeUsers} signal />
                   <StatValue label={t("stats.mau")} value={stats.overview.mau ?? stats.overview.activeUsers} />
                 </div>
-                <SplineAreaChart data={stats.trend.map((point) => ({ label: point.day, value: point.events, secondaryValue: point.users }))} height={170} strokeColor="#c8eca4" fillColor="#c8eca4" valueLabel={t("explorer.events")} secondaryLabel={t("public.devices")} />
+                <SplineAreaChart data={stats.trend.map((point) => ({ label: point.day, value: point.events, secondaryValue: point.users }))} height={170} strokeColor="var(--signal)" fillColor="var(--signal)" valueLabel={t("explorer.events")} secondaryLabel={t("public.devices")} />
               </div>
               <div className="distribution-card">
                 <DonutChart items={stats.appVersions} title={t("stats.versionDonut")} badge={t("stats.appVersion")} centerLabel={t("apps.statsTotalEvents")} height={220} />
@@ -876,7 +876,7 @@ function AppStatsModal({ application, onClose }: { application: Application; onC
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               <div className="distribution-card"><h3>{t("stats.systemBuilds")}</h3><BuildBarChart items={stats.buildDistribution ?? []} height={180} /></div>
-              <div className="distribution-card"><h3>{t("stats.trendAnalysis")}</h3><SplineAreaChart data={stats.trend.map((point) => ({ label: point.day, value: point.events, secondaryValue: point.users }))} height={160} strokeColor="#7ec8c4" fillColor="#7ec8c4" valueLabel={t("explorer.events")} secondaryLabel={t("public.devices")} /></div>
+              <div className="distribution-card"><h3>{t("stats.trendAnalysis")}</h3><SplineAreaChart data={stats.trend.map((point) => ({ label: point.day, value: point.events, secondaryValue: point.users }))} height={160} strokeColor="var(--blue)" fillColor="var(--blue)" valueLabel={t("explorer.events")} secondaryLabel={t("public.devices")} /></div>
               <div className="distribution-card"><h3>{t("stats.versionCurves")}</h3><MultiLineChart series={stats.versionSeries ?? []} height={160} /></div>
             </div>
 

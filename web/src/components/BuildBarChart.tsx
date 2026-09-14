@@ -16,6 +16,7 @@ import {
   getPlatformColor,
   type PlatformFamily,
 } from "./PlatformIcon";
+import { compactNumber } from "./chartTheme";
 
 export type BuildItem = {
   name: string;
@@ -184,7 +185,7 @@ export function BuildBarChart({
             type="button"
             className={`px-3 py-1 rounded-[var(--radius-sm)] text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
               activeFamily === "mobile"
-                ? "bg-[var(--danger)] text-white font-bold"
+                ? "bg-[var(--danger)] text-[var(--signal-ink)] font-bold"
                 : "bg-[var(--input-bg)] text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border-soft)]"
             }`}
             onClick={() => setActiveFamily(activeFamily === "mobile" ? "all" : "mobile")}
@@ -219,14 +220,14 @@ export function BuildBarChart({
               dy={6}
             />
             <YAxis
-              stroke="var(--muted)"
+              stroke="var(--faint)"
               fontSize={10}
               tickLine={false}
               axisLine={false}
               fontFamily="var(--font-mono)"
               width={38}
               allowDecimals={false}
-              tickFormatter={(v: number) => (v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v))}
+              tickFormatter={(v: number) => compactNumber(v)}
             />
             <Tooltip
               content={({ active, payload }) => {
@@ -240,7 +241,7 @@ export function BuildBarChart({
                       </div>
                       <div className="flex items-center justify-between gap-3 font-mono">
                         <span className="text-[var(--muted)]">{t("overview.count")}:</span>
-                        <strong style={{ color: item.fill }}>{item.count?.toLocaleString()}</strong>
+                        <strong className="text-[var(--text)]">{item.count?.toLocaleString()}</strong>
                       </div>
                       <div className="flex items-center justify-between gap-3 font-mono text-[10px] text-[var(--muted)]">
                         <span>{t("builds.share")}</span>

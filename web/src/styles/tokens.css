@@ -170,24 +170,28 @@ body {
   overflow-x: hidden;
 }
 
-button, input, select, textarea {
-  font: inherit;
-  color: inherit;
-}
+/* Element-level resets live in @layer base so Tailwind utilities
+   (e.g. text-[var(--signal-ink)] on buttons) keep winning the cascade. */
+@layer base {
+  button, input, select, textarea {
+    font: inherit;
+    color: inherit;
+  }
 
-button, a {
-  -webkit-tap-highlight-color: transparent;
-  user-select: none;
-}
+  button, a {
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
 
-button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
 
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
+  button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
 }
 
 code, .eyebrow, .metric-card strong, .live-indicator, .time-window, dt, dd, .font-mono {

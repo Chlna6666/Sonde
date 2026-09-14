@@ -230,8 +230,8 @@ export function DashboardPage() {
                     secondaryValue: pt.users,
                   }))}
                   height="100%"
-                  strokeColor="#c8eca4"
-                  fillColor="#c8eca4"
+                  strokeColor="var(--signal)"
+                  fillColor="var(--signal)"
                   valueLabel={t("explorer.events")}
                   secondaryLabel={t("public.devices")}
                 />

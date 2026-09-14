@@ -8,6 +8,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { shortDayLabel, compactNumber, ACTIVE_DOT_HALO } from "./chartTheme";
 
 export type SplinePoint = {
   label: string;
@@ -18,8 +19,8 @@ export type SplinePoint = {
 export function SplineAreaChart({
   data,
   height = 180,
-  strokeColor = "#c8eca4",
-  fillColor = "#c8eca4",
+  strokeColor = "var(--signal)",
+  fillColor = "var(--signal)",
   valueLabel = "Events",
   secondaryLabel = "Users",
 }: {
@@ -44,7 +45,7 @@ export function SplineAreaChart({
   }
 
   const chartData = data.map((d) => ({
-    name: d.label.length > 10 ? d.label.slice(11) : d.label.length > 5 ? d.label.slice(5) : d.label,
+    name: shortDayLabel(d.label),
     fullName: d.label,
     value: d.value,
     secondaryValue: d.secondaryValue,
@@ -55,12 +56,12 @@ export function SplineAreaChart({
   return (
     <div className="w-full h-full min-h-[160px] relative" style={{ height: typeof height === "number" ? `${height}px` : height }}>
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+        <AreaChart data={chartData} margin={{ top: 10, right: 12, left: -16, bottom: 0 }}>
           <defs>
             <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor={fillColor} stopOpacity={0.4} />
-              <stop offset="65%" stopColor={fillColor} stopOpacity={0.08} />
-              <stop offset="95%" stopColor={fillColor} stopOpacity={0} />
+              <stop offset="0%" stopColor={fillColor} stopOpacity={0.35} />
+              <stop offset="60%" stopColor={fillColor} stopOpacity={0.08} />
+              <stop offset="100%" stopColor={fillColor} stopOpacity={0} />
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
@@ -71,6 +72,7 @@ export function SplineAreaChart({
             tickLine={false}
             axisLine={false}
             fontFamily="var(--font-mono)"
+            minTickGap={24}
           />
           <YAxis
             stroke="var(--faint)"
@@ -78,9 +80,12 @@ export function SplineAreaChart({
             tickLine={false}
             axisLine={false}
             fontFamily="var(--font-mono)"
-            width={34}
+            width={38}
+            tickFormatter={(v: number) => compactNumber(v)}
+            allowDecimals={false}
           />
           <Tooltip
+            cursor={{ stroke: "var(--border)", strokeWidth: 1 }}
             content={({ active, payload }) => {
               if (active && payload && payload.length) {
                 const item = payload[0].payload;
@@ -105,9 +110,10 @@ export function SplineAreaChart({
             type="monotone"
             dataKey="value"
             stroke={strokeColor}
-            strokeWidth={2.5}
+            strokeWidth={2}
             fillOpacity={1}
             fill={`url(#${gradientId})`}
+            activeDot={{ r: 4, strokeWidth: 2, stroke: ACTIVE_DOT_HALO, fill: strokeColor }}
           />
         </AreaChart>
       </ResponsiveContainer>

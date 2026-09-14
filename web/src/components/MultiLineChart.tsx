@@ -8,23 +8,13 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { chartColor, shortDayLabel, compactNumber, ACTIVE_DOT_HALO } from "./chartTheme";
 
 export type VersionSeriesData = {
   version: string;
   totalCount: number;
   data: Array<{ day: string; count: number }>;
 };
-
-const PALETTE = [
-  "#c8eca4",
-  "#7ec8c4",
-  "#e0b46a",
-  "#d98b7a",
-  "#c4b08a",
-  "#8fb4c8",
-  "#9fd47a",
-  "#4aa8a4",
-];
 
 export function MultiLineChart({
   series,
@@ -52,7 +42,7 @@ export function MultiLineChart({
 
   const chartData = days.map((day) => {
     const entry: Record<string, any> = {
-      day: day.length > 10 ? day.slice(11) : day.length > 5 ? day.slice(5) : day,
+      day: shortDayLabel(day),
       fullDay: day,
     };
     series.forEach((s) => {
@@ -66,7 +56,7 @@ export function MultiLineChart({
     <div className="w-full h-full min-h-[150px] flex flex-col justify-between" style={{ height: typeof height === "number" ? `${height}px` : height }}>
       <div className="flex-1 w-full relative min-h-[120px]">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+          <LineChart data={chartData} margin={{ top: 10, right: 12, left: -16, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
             <XAxis
               dataKey="day"
@@ -75,6 +65,7 @@ export function MultiLineChart({
               tickLine={false}
               axisLine={false}
               fontFamily="var(--font-mono)"
+              minTickGap={24}
             />
             <YAxis
               stroke="var(--faint)"
@@ -82,9 +73,12 @@ export function MultiLineChart({
               tickLine={false}
               axisLine={false}
               fontFamily="var(--font-mono)"
-              width={34}
+              width={38}
+              tickFormatter={(v: number) => compactNumber(v)}
+              allowDecimals={false}
             />
             <Tooltip
+              cursor={{ stroke: "var(--border)", strokeWidth: 1 }}
               content={({ active, payload, label }) => {
                 if (active && payload && payload.length) {
                   const activeVersions = payload.filter((p) => Number(p.value) > 0);
@@ -116,10 +110,10 @@ export function MultiLineChart({
                 key={s.version}
                 type="monotone"
                 dataKey={s.version}
-                stroke={PALETTE[idx % PALETTE.length]}
+                stroke={chartColor(idx)}
                 strokeWidth={2}
                 dot={false}
-                activeDot={{ r: 4, strokeWidth: 2, fill: "#ffffff" }}
+                activeDot={{ r: 4, strokeWidth: 2, stroke: ACTIVE_DOT_HALO, fill: chartColor(idx) }}
               />
             ))}
           </LineChart>
@@ -135,7 +129,7 @@ export function MultiLineChart({
           >
             <span
               className="h-2 w-2 rounded-full flex-shrink-0"
-              style={{ backgroundColor: PALETTE[idx % PALETTE.length] }}
+              style={{ backgroundColor: chartColor(idx) }}
             />
             <strong className="text-[var(--text)] max-w-[100px] truncate" title={s.version}>
               {s.version}

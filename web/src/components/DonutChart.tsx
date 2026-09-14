@@ -9,17 +9,7 @@ export type VersionDistributionItem = {
   percentage: number;
 };
 
-const PALETTE = [
-  "#c8eca4",
-  "#7ec8c4",
-  "#e0b46a",
-  "#d98b7a",
-  "#c4b08a",
-  "#8fb4c8",
-  "#9fd47a",
-  "#4aa8a4",
-  "#e07a6a",
-];
+import { chartColor } from "./chartTheme";
 
 export function DonutChart({
   items,
@@ -52,7 +42,7 @@ export function DonutChart({
       name: item.name,
       count: item.count,
       percentage: item.percentage > 0 ? item.percentage : computedPercentage,
-      color: PALETTE[idx % PALETTE.length],
+      color: chartColor(idx),
     };
   });
 
@@ -161,7 +151,7 @@ export function DonutChart({
       ) : (
         <div className="space-y-2 max-h-48 overflow-y-auto pr-1 flex-1">
           {items.map((item, idx) => {
-            const color = PALETTE[idx % PALETTE.length];
+            const color = chartColor(idx);
             const pct = item.percentage > 0 ? item.percentage : (total > 0 ? Math.round((item.count / total) * 1000) / 10 : 0);
             return (
               <div key={item.name} className="flex items-center gap-3 text-xs">
