@@ -16,7 +16,7 @@ actix-web = "4.11"
 argon2 = "0.5"
 async-stream = "0.3"
 awc = { version = "3", features = ["rustls-0_23"] }
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 hex = "0.4"
