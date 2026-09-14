@@ -135,6 +135,7 @@ pub struct Overview {
     pub os_families: Vec<DistributionItem>,
     pub operating_systems: Vec<DistributionItem>,
     pub build_distribution: Vec<DistributionItem>,
+    pub system_languages: Vec<DistributionItem>,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,4 +153,5 @@ pub struct AppTelemetryStats {
     pub os_families: Vec<DistributionItem>,
     pub operating_systems: Vec<DistributionItem>,
     pub build_distribution: Vec<DistributionItem>,
+    pub system_languages: Vec<DistributionItem>,
 }

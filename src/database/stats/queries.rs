@@ -128,6 +128,7 @@ pub struct Overview {
     pub os_families: Vec<DistributionItem>,
     pub operating_systems: Vec<DistributionItem>,
     pub build_distribution: Vec<DistributionItem>,
+    pub system_languages: Vec<DistributionItem>,
 }
 
 #[derive(Debug, Serialize)]
@@ -144,6 +145,7 @@ pub struct AppTelemetryStats {
     pub os_families: Vec<DistributionItem>,
     pub operating_systems: Vec<DistributionItem>,
     pub build_distribution: Vec<DistributionItem>,
+    pub system_languages: Vec<DistributionItem>,
 }
 
 pub async fn overview(database: &DatabaseConnection, days: Option<u32>) -> Result<Overview, DbErr> {
@@ -153,10 +155,42 @@ pub async fn overview(database: &DatabaseConnection, days: Option<u32>) -> Resul
     let since_30d = now - 30 * 86_400_000;
 
     let applications = count(database, "applications", None).await?;
-    let events_24h = telemetry_count(database, crate::database::telemetry_count::RollupCountKind::Events, None, None, Some(since_24h), None).await?;
-    let metrics_24h = telemetry_count(database, crate::database::telemetry_count::RollupCountKind::Metrics, None, None, Some(since_24h), None).await?;
-    let logs_24h = telemetry_count(database, crate::database::telemetry_count::RollupCountKind::Logs, None, None, Some(since_24h), None).await?;
-    let errors_24h = telemetry_count(database, crate::database::telemetry_count::RollupCountKind::ErrorLogs, None, None, Some(since_24h), None).await?;
+    let events_24h = telemetry_count(
+        database,
+        crate::database::telemetry_count::RollupCountKind::Events,
+        None,
+        None,
+        Some(since_24h),
+        None,
+    )
+    .await?;
+    let metrics_24h = telemetry_count(
+        database,
+        crate::database::telemetry_count::RollupCountKind::Metrics,
+        None,
+        None,
+        Some(since_24h),
+        None,
+    )
+    .await?;
+    let logs_24h = telemetry_count(
+        database,
+        crate::database::telemetry_count::RollupCountKind::Logs,
+        None,
+        None,
+        Some(since_24h),
+        None,
+    )
+    .await?;
+    let errors_24h = telemetry_count(
+        database,
+        crate::database::telemetry_count::RollupCountKind::ErrorLogs,
+        None,
+        None,
+        Some(since_24h),
+        None,
+    )
+    .await?;
 
     let active_users_24h = distinct_users(database, since_24h, None, None).await?;
     let total_users = count_distinct_users(database, None, None, None).await?;
@@ -166,7 +200,8 @@ pub async fn overview(database: &DatabaseConnection, days: Option<u32>) -> Resul
 
     let bucket_expr = time_bucket_expr(database.get_database_backend(), days);
     let (since_ts, prev_since_ts, prev_until_ts) = statistics_window(now, days);
-    let growth = compute_growth(database, None, None, since_ts, prev_since_ts, prev_until_ts).await?;
+    let growth =
+        compute_growth(database, None, None, since_ts, prev_since_ts, prev_until_ts).await?;
     let user_growth = compute_user_growth(database, None, None, since_ts, days).await?;
     let event_trend = event_trend(database, None, None, days, since_ts, &bucket_expr).await?;
     let trend = merge_activity_trend(event_trend, &user_growth);
@@ -180,8 +215,10 @@ pub async fn overview(database: &DatabaseConnection, days: Option<u32>) -> Resul
         None,
     )
     .await?;
-    let version_timeline = compute_version_timeline(database, None, None, since_ts, &bucket_expr).await?;
-    let version_series = compute_version_series(database, None, None, since_ts, &bucket_expr).await?;
+    let version_timeline =
+        compute_version_timeline(database, None, None, since_ts, &bucket_expr).await?;
+    let version_series =
+        compute_version_series(database, None, None, since_ts, &bucket_expr).await?;
 
     let os_dimension = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
         database,
@@ -193,9 +230,18 @@ pub async fn overview(database: &DatabaseConnection, days: Option<u32>) -> Resul
     .await?;
     let (os_families, operating_systems, build_distribution) = if let Some(points) = os_dimension {
         (
-            distribution_items(crate::database::dimension_rollup::aggregate_os_families(&points), usize::MAX),
-            distribution_items(crate::database::dimension_rollup::aggregate_dimension(&points), 50),
-            distribution_items(crate::database::dimension_rollup::aggregate_os_builds(&points), 100),
+            distribution_items(
+                crate::database::dimension_rollup::aggregate_os_families(&points),
+                usize::MAX,
+            ),
+            distribution_items(
+                crate::database::dimension_rollup::aggregate_dimension(&points),
+                50,
+            ),
+            distribution_items(
+                crate::database::dimension_rollup::aggregate_os_builds(&points),
+                100,
+            ),
         )
     } else {
         (
@@ -204,6 +250,7 @@ pub async fn overview(database: &DatabaseConnection, days: Option<u32>) -> Resul
             build_distribution(database, None, None, since_ts, total_events).await?,
         )
     };
+    let system_languages = system_language_distribution(database, None, None, since_ts).await?;
 
     Ok(Overview {
         applications,
@@ -224,6 +271,7 @@ pub async fn overview(database: &DatabaseConnection, days: Option<u32>) -> Resul
         os_families,
         operating_systems,
         build_distribution,
+        system_languages,
     })
 }
 
@@ -249,8 +297,10 @@ pub async fn application_stats(
         None,
     )
     .await?;
-    let active_users = count_distinct_users(database, Some(application_id), environment_id, since_ts).await?;
-    let total_users = count_distinct_users(database, Some(application_id), environment_id, None).await?;
+    let active_users =
+        count_distinct_users(database, Some(application_id), environment_id, since_ts).await?;
+    let total_users =
+        count_distinct_users(database, Some(application_id), environment_id, None).await?;
     let dau = distinct_users(database, since_24h, Some(application_id), environment_id).await?;
     let wau = distinct_users(database, since_7d, Some(application_id), environment_id).await?;
     let mau = distinct_users(database, since_30d, Some(application_id), environment_id).await?;
@@ -320,23 +370,46 @@ pub async fn application_stats(
     )
     .await?;
     let app_versions = if let Some(points) = app_version_dimension {
-        distribution_items(crate::database::dimension_rollup::aggregate_dimension(&points), 50)
+        distribution_items(
+            crate::database::dimension_rollup::aggregate_dimension(&points),
+            50,
+        )
     } else {
-        distribution(database, application_id, environment_id, since_ts, "app_version", total_events).await?
+        distribution(
+            database,
+            application_id,
+            environment_id,
+            since_ts,
+            "app_version",
+            total_events,
+        )
+        .await?
     };
 
-    let launcher_version_dimension = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
-        database,
-        Some(application_id),
-        environment_id,
-        since_ts,
-        crate::database::dimension_rollup::DIMENSION_LAUNCHER_VERSION,
-    )
-    .await?;
+    let launcher_version_dimension =
+        crate::database::dimension_rollup::event_dimension_timeline_hybrid(
+            database,
+            Some(application_id),
+            environment_id,
+            since_ts,
+            crate::database::dimension_rollup::DIMENSION_LAUNCHER_VERSION,
+        )
+        .await?;
     let launcher_versions = if let Some(points) = launcher_version_dimension {
-        distribution_items(crate::database::dimension_rollup::aggregate_dimension(&points), 50)
+        distribution_items(
+            crate::database::dimension_rollup::aggregate_dimension(&points),
+            50,
+        )
     } else {
-        distribution(database, application_id, environment_id, since_ts, "launcher_version", total_events).await?
+        distribution(
+            database,
+            application_id,
+            environment_id,
+            since_ts,
+            "launcher_version",
+            total_events,
+        )
+        .await?
     };
 
     let os_dimension = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
@@ -349,17 +422,51 @@ pub async fn application_stats(
     .await?;
     let (os_families, operating_systems, build_distribution) = if let Some(points) = os_dimension {
         (
-            distribution_items(crate::database::dimension_rollup::aggregate_os_families(&points), usize::MAX),
-            distribution_items(crate::database::dimension_rollup::aggregate_dimension(&points), 50),
-            distribution_items(crate::database::dimension_rollup::aggregate_os_builds(&points), 100),
+            distribution_items(
+                crate::database::dimension_rollup::aggregate_os_families(&points),
+                usize::MAX,
+            ),
+            distribution_items(
+                crate::database::dimension_rollup::aggregate_dimension(&points),
+                50,
+            ),
+            distribution_items(
+                crate::database::dimension_rollup::aggregate_os_builds(&points),
+                100,
+            ),
         )
     } else {
         (
-            os_family_distribution(database, Some(application_id), environment_id, since_ts, total_events).await?,
-            distribution_all(database, Some(application_id), environment_id, since_ts, "os", total_events).await?,
-            build_distribution(database, Some(application_id), environment_id, since_ts, total_events).await?,
+            os_family_distribution(
+                database,
+                Some(application_id),
+                environment_id,
+                since_ts,
+                total_events,
+            )
+            .await?,
+            distribution_all(
+                database,
+                Some(application_id),
+                environment_id,
+                since_ts,
+                "os",
+                total_events,
+            )
+            .await?,
+            build_distribution(
+                database,
+                Some(application_id),
+                environment_id,
+                since_ts,
+                total_events,
+            )
+            .await?,
         )
     };
+    let system_languages =
+        system_language_distribution(database, Some(application_id), environment_id, since_ts)
+            .await?;
 
     Ok(AppTelemetryStats {
         overview: AppStatsOverview {
@@ -382,15 +489,32 @@ pub async fn application_stats(
         os_families,
         operating_systems,
         build_distribution,
+        system_languages,
     })
 }
 
 fn statistics_window(now: i64, days: Option<u32>) -> (Option<i64>, Option<i64>, Option<i64>) {
     match days {
-        Some(1) => (Some(now - 86_400_000), Some(now - 2 * 86_400_000), Some(now - 86_400_000)),
-        Some(7) => (Some(now - 7 * 86_400_000), Some(now - 14 * 86_400_000), Some(now - 7 * 86_400_000)),
-        Some(30) => (Some(now - 30 * 86_400_000), Some(now - 60 * 86_400_000), Some(now - 30 * 86_400_000)),
-        Some(365) => (Some(now - 365 * 86_400_000), Some(now - 2 * 365 * 86_400_000), Some(now - 365 * 86_400_000)),
+        Some(1) => (
+            Some(now - 86_400_000),
+            Some(now - 2 * 86_400_000),
+            Some(now - 86_400_000),
+        ),
+        Some(7) => (
+            Some(now - 7 * 86_400_000),
+            Some(now - 14 * 86_400_000),
+            Some(now - 7 * 86_400_000),
+        ),
+        Some(30) => (
+            Some(now - 30 * 86_400_000),
+            Some(now - 60 * 86_400_000),
+            Some(now - 30 * 86_400_000),
+        ),
+        Some(365) => (
+            Some(now - 365 * 86_400_000),
+            Some(now - 2 * 365 * 86_400_000),
+            Some(now - 365 * 86_400_000),
+        ),
         Some(days) => {
             let span = days as i64 * 86_400_000;
             (Some(now - span), Some(now - 2 * span), Some(now - span))
@@ -425,7 +549,10 @@ async fn count(
 ) -> Result<u64, DbErr> {
     let mut query = Query::select();
     query
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("total"))
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("total"),
+        )
         .from(Alias::new(table));
     if let Some((column, value)) = since {
         query.and_where(Expr::col(Alias::new(column)).gte(value));
@@ -461,20 +588,24 @@ async fn count_distinct_users(
     since: Option<i64>,
 ) -> Result<u64, DbErr> {
     match since {
-        Some(since) => crate::database::device_activity::unique_devices(
-            database,
-            application_id,
-            environment_id,
-            Some(since),
-            None,
-        )
-        .await,
-        None => crate::database::device_activity::total_devices(
-            database,
-            application_id,
-            environment_id,
-        )
-        .await,
+        Some(since) => {
+            crate::database::device_activity::unique_devices(
+                database,
+                application_id,
+                environment_id,
+                Some(since),
+                None,
+            )
+            .await
+        }
+        None => {
+            crate::database::device_activity::total_devices(
+                database,
+                application_id,
+                environment_id,
+            )
+            .await
+        }
     }
 }
 
@@ -486,7 +617,9 @@ async fn compute_growth(
     prev_since_ts: Option<i64>,
     prev_until_ts: Option<i64>,
 ) -> Result<GrowthMetrics, DbErr> {
-    if let (Some(since), Some(prev_since), Some(prev_until)) = (since_ts, prev_since_ts, prev_until_ts) {
+    if let (Some(since), Some(prev_since), Some(prev_until)) =
+        (since_ts, prev_since_ts, prev_until_ts)
+    {
         let curr_events = telemetry_count(
             database,
             crate::database::telemetry_count::RollupCountKind::Events,
@@ -597,14 +730,16 @@ async fn event_trend(
     bucket_expr: &str,
 ) -> Result<Vec<DailyTrendPoint>, DbErr> {
     let cached = match application_id {
-        Some(application_id) => crate::database::trends::application_daily_hybrid(
-            database,
-            application_id,
-            environment_id,
-            days,
-            since_ts,
-        )
-        .await?,
+        Some(application_id) => {
+            crate::database::trends::application_daily_hybrid(
+                database,
+                application_id,
+                environment_id,
+                days,
+                since_ts,
+            )
+            .await?
+        }
         None => crate::database::trends::global_daily_hybrid(database, days, since_ts).await?,
     };
     if let Some(points) = cached {
@@ -620,8 +755,14 @@ async fn event_trend(
 
     let mut query = Query::select();
     query
-        .expr_as(Expr::cust(bucket_expr.to_owned()), Alias::new("bucket_time"))
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("events"))
+        .expr_as(
+            Expr::cust(bucket_expr.to_owned()),
+            Alias::new("bucket_time"),
+        )
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("events"),
+        )
         .from(Alias::new("events"));
     if let Some(application_id) = application_id {
         query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
@@ -678,8 +819,8 @@ async fn compute_version_timeline(
     since_ts: Option<i64>,
     bucket_expr: &str,
 ) -> Result<Vec<VersionTimelinePoint>, DbErr> {
-    if crate::database::version_dimension::supports_daily_projection(bucket_expr) {
-        if let Some(points) = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
+    if crate::database::version_dimension::supports_daily_projection(bucket_expr)
+        && let Some(points) = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
             database,
             application_id,
             environment_id,
@@ -687,8 +828,9 @@ async fn compute_version_timeline(
             crate::database::dimension_rollup::DIMENSION_APP_VERSION,
         )
         .await?
-        {
-            return Ok(crate::database::version_dimension::timeline(&points, bucket_expr)
+    {
+        return Ok(
+            crate::database::version_dimension::timeline(&points, bucket_expr)
                 .into_iter()
                 .map(|bucket| {
                     let versions = bucket
@@ -706,15 +848,24 @@ async fn compute_version_timeline(
                         versions,
                     }
                 })
-                .collect());
-        }
+                .collect(),
+        );
     }
 
     let mut query = Query::select();
     query
-        .expr_as(Expr::cust(bucket_expr.to_owned()), Alias::new("bucket_time"))
-        .expr_as(Expr::cust("COALESCE(app_version, 'unknown')"), Alias::new("ver_name"))
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("ver_count"))
+        .expr_as(
+            Expr::cust(bucket_expr.to_owned()),
+            Alias::new("bucket_time"),
+        )
+        .expr_as(
+            Expr::cust("COALESCE(app_version, 'unknown')"),
+            Alias::new("ver_name"),
+        )
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("ver_count"),
+        )
         .from(Alias::new("events"));
     if let Some(application_id) = application_id {
         query.and_where(Expr::col(Alias::new("application_id")).eq(application_id));
@@ -741,7 +892,9 @@ async fn compute_version_timeline(
     Ok(buckets
         .into_iter()
         .map(|(bucket, versions)| {
-            let total_events = versions.iter().fold(0_u64, |total, (_, count)| total.saturating_add(*count));
+            let total_events = versions
+                .iter()
+                .fold(0_u64, |total, (_, count)| total.saturating_add(*count));
             VersionTimelinePoint {
                 bucket,
                 total_events,
@@ -765,8 +918,8 @@ async fn compute_version_series(
     since_ts: Option<i64>,
     bucket_expr: &str,
 ) -> Result<Vec<VersionSeries>, DbErr> {
-    if crate::database::version_dimension::supports_daily_projection(bucket_expr) {
-        if let Some(points) = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
+    if crate::database::version_dimension::supports_daily_projection(bucket_expr)
+        && let Some(points) = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
             database,
             application_id,
             environment_id,
@@ -774,8 +927,9 @@ async fn compute_version_series(
             crate::database::dimension_rollup::DIMENSION_APP_VERSION,
         )
         .await?
-        {
-            return Ok(crate::database::version_dimension::top_series(&points, bucket_expr)
+    {
+        return Ok(
+            crate::database::version_dimension::top_series(&points, bucket_expr)
                 .into_iter()
                 .map(|series| VersionSeries {
                     version: series.version,
@@ -786,14 +940,20 @@ async fn compute_version_series(
                         .map(|(day, count)| VersionSeriesPoint { day, count })
                         .collect(),
                 })
-                .collect());
-        }
+                .collect(),
+        );
     }
 
     let mut top_query = Query::select();
     top_query
-        .expr_as(Expr::cust("COALESCE(app_version, 'unknown')"), Alias::new("ver"))
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("total"))
+        .expr_as(
+            Expr::cust("COALESCE(app_version, 'unknown')"),
+            Alias::new("ver"),
+        )
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("total"),
+        )
         .from(Alias::new("events"));
     apply_event_scope(&mut top_query, application_id, environment_id, since_ts);
     top_query
@@ -820,11 +980,19 @@ async fn compute_version_series(
         .join(",");
     let mut query = Query::select();
     query
-        .expr_as(Expr::cust(bucket_expr.to_owned()), Alias::new("bucket_time"))
-        .expr_as(Expr::cust("COALESCE(app_version, 'unknown')"), Alias::new("ver"))
+        .expr_as(
+            Expr::cust(bucket_expr.to_owned()),
+            Alias::new("bucket_time"),
+        )
+        .expr_as(
+            Expr::cust("COALESCE(app_version, 'unknown')"),
+            Alias::new("ver"),
+        )
         .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("cnt"))
         .from(Alias::new("events"))
-        .and_where(Expr::cust(format!("COALESCE(app_version, 'unknown') IN ({escaped_versions})")));
+        .and_where(Expr::cust(format!(
+            "COALESCE(app_version, 'unknown') IN ({escaped_versions})"
+        )));
     apply_event_scope(&mut query, application_id, environment_id, since_ts);
     query
         .group_by_col(Alias::new("bucket_time"))
@@ -886,7 +1054,17 @@ async fn os_family_distribution(
     total_events: u64,
 ) -> Result<Vec<DistributionItem>, DbErr> {
     let family_expr = "CASE WHEN os LIKE 'Windows%' THEN 'Windows' WHEN os LIKE 'Linux%' OR os LIKE '%Linux%' OR os LIKE '%Fedora%' OR os LIKE '%Ubuntu%' OR os LIKE '%Debian%' OR os LIKE '%Arch%' THEN 'Linux' WHEN os LIKE 'Mac%' OR os LIKE 'Darwin%' OR os LIKE 'macOS%' THEN 'macOS' WHEN os LIKE 'Android%' THEN 'Android' WHEN os LIKE 'iOS%' THEN 'iOS' ELSE COALESCE(os, 'Unknown') END";
-    grouped_distribution(database, application_id, environment_id, since_ts, family_expr, "family_name", total_events, None).await
+    grouped_distribution(
+        database,
+        application_id,
+        environment_id,
+        since_ts,
+        family_expr,
+        "family_name",
+        total_events,
+        None,
+    )
+    .await
 }
 
 async fn build_distribution(
@@ -897,7 +1075,17 @@ async fn build_distribution(
     total_events: u64,
 ) -> Result<Vec<DistributionItem>, DbErr> {
     let build_expr = "CASE WHEN os LIKE 'Windows % Build %' THEN 'Win ' || SUBSTR(os, 9, INSTR(SUBSTR(os, 9), ' Build ') - 1) || ' (' || SUBSTR(os, INSTR(os, 'Build ') + 6) || ')' WHEN os LIKE 'Windows %' THEN os WHEN os LIKE 'Linux (% Linux %)' THEN REPLACE(SUBSTR(os, 8, LENGTH(os) - 8), ' Linux', '') WHEN os LIKE 'Linux (%)' THEN SUBSTR(os, 8, LENGTH(os) - 8) WHEN os LIKE 'Mac OS X %' THEN REPLACE(os, 'Mac OS X ', 'macOS ') WHEN os LIKE 'Darwin %' THEN REPLACE(os, 'Darwin ', 'macOS ') WHEN os LIKE 'Android%' THEN os WHEN os LIKE 'iOS%' THEN os ELSE COALESCE(os, 'Unknown') END";
-    grouped_distribution(database, application_id, environment_id, since_ts, build_expr, "build_name", total_events, Some(100)).await
+    grouped_distribution(
+        database,
+        application_id,
+        environment_id,
+        since_ts,
+        build_expr,
+        "build_name",
+        total_events,
+        Some(100),
+    )
+    .await
 }
 
 async fn distribution_all(
@@ -921,6 +1109,7 @@ async fn distribution_all(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn grouped_distribution(
     database: &DatabaseConnection,
     application_id: Option<&str>,
@@ -934,7 +1123,10 @@ async fn grouped_distribution(
     let mut query = Query::select();
     query
         .expr_as(Expr::cust(expression.to_owned()), Alias::new(alias))
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("item_count"))
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("item_count"),
+        )
         .from(Alias::new("events"));
     apply_event_scope(&mut query, application_id, environment_id, since_ts);
     query
@@ -949,7 +1141,8 @@ async fn grouped_distribution(
         .await?
         .into_iter()
         .map(|row| {
-            let count = u64::try_from(row.try_get::<i64>("", "item_count").unwrap_or(0)).unwrap_or(0);
+            let count =
+                u64::try_from(row.try_get::<i64>("", "item_count").unwrap_or(0)).unwrap_or(0);
             Ok(DistributionItem {
                 name: row.try_get("", alias)?,
                 count,
@@ -982,7 +1175,9 @@ fn distribution_items(
     counts: Vec<crate::database::dimension_rollup::DimensionCount>,
     limit: usize,
 ) -> Vec<DistributionItem> {
-    let total = counts.iter().fold(0_u64, |sum, item| sum.saturating_add(item.count));
+    let total = counts
+        .iter()
+        .fold(0_u64, |sum, item| sum.saturating_add(item.count));
     counts
         .into_iter()
         .take(limit)
@@ -999,4 +1194,56 @@ fn percentage(count: u64, total: u64) -> f64 {
         return 0.0;
     }
     (((count as f64 / total as f64) * 100.0) * 10.0).round() / 10.0
+}
+
+pub async fn system_language_distribution(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since_ts: Option<i64>,
+) -> Result<Vec<DistributionItem>, DbErr> {
+    let mut query = Query::select();
+    query
+        .expr_as(
+            Expr::cust("COALESCE(NULLIF(TRIM(last_system_language), ''), 'unknown')"),
+            Alias::new("lang"),
+        )
+        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("cnt"))
+        .from(Alias::new("telemetry_devices"));
+
+    let mut condition = sea_orm::sea_query::Condition::all();
+    if let Some(app_id) = application_id {
+        condition = condition.add(Expr::col(Alias::new("application_id")).eq(app_id));
+    }
+    if let Some(env_id) = environment_id {
+        condition = condition.add(Expr::col(Alias::new("environment_id")).eq(env_id));
+    }
+    if let Some(since) = since_ts {
+        condition = condition.add(Expr::col(Alias::new("last_seen_at")).gte(since));
+    }
+
+    query
+        .cond_where(condition)
+        .group_by_col(Alias::new("lang"))
+        .order_by(Alias::new("cnt"), sea_orm::sea_query::Order::Desc)
+        .limit(50);
+
+    let rows = database.query_all(&query).await?;
+    let mut items = Vec::with_capacity(rows.len());
+    let mut total = 0_u64;
+    for row in rows {
+        let name: String = row.try_get("", "lang")?;
+        let count = u64::try_from(row.try_get::<i64>("", "cnt").unwrap_or(0)).unwrap_or(0);
+        total = total.saturating_add(count);
+        items.push((name, count));
+    }
+
+    Ok(items
+        .into_iter()
+        .map(|(name, count)| DistributionItem {
+            name,
+            count,
+            percentage: percentage(count, total),
+        })
+        .collect())
 }

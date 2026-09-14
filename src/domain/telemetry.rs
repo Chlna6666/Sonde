@@ -1,22 +1,15 @@
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+
+pub use super::attributes::{AttributeMap, Attributes};
 
 pub const MAX_BATCH_ITEMS: usize = 1_000;
 const MAX_FUTURE_SKEW_MILLIS: i64 = 5 * 60 * 1_000;
 const MAX_PAST_AGE_MILLIS: i64 = 7 * 24 * 60 * 60 * 1_000;
 const MAX_ABS_METRIC_VALUE: f64 = 1.0e18;
 const MAX_HISTOGRAM_COUNT: u64 = 10_000_000;
-const MAX_ATTRIBUTE_DEPTH: usize = 6;
-const MAX_ATTRIBUTE_STRING_BYTES: usize = 16_384;
-const MAX_ATTRIBUTE_ARRAY_ITEMS: usize = 128;
-const MAX_ATTRIBUTE_OBJECT_ITEMS: usize = 64;
 const MAX_HISTOGRAM_BOUNDS: usize = 256;
 
-pub type Attributes = BTreeMap<String, Value>;
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventInput {
     pub name: String,
@@ -26,6 +19,10 @@ pub struct EventInput {
     pub app_version: Option<String>,
     pub launcher_version: Option<String>,
     pub os: Option<String>,
+    #[serde(default)]
+    pub system_language: Option<String>,
+    #[serde(default)]
+    pub architecture: Option<String>,
     /// Stable client-generated key used to make event retries idempotent within one app/environment.
     pub idempotency_key: Option<String>,
     #[serde(default)]
@@ -68,6 +65,16 @@ pub enum MetricType {
     Counter,
     Gauge,
     Histogram,
+}
+
+impl MetricType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Counter => "counter",
+            Self::Gauge => "gauge",
+            Self::Histogram => "histogram",
+        }
+    }
 }
 
 impl MetricInput {
@@ -125,7 +132,7 @@ pub struct LogInput {
     pub attributes: Attributes,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Trace,
@@ -134,6 +141,19 @@ pub enum LogLevel {
     Warn,
     Error,
     Fatal,
+}
+
+impl LogLevel {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Trace => "trace",
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
+            Self::Fatal => "fatal",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -151,10 +171,10 @@ pub struct BatchReceipt {
 #[derive(Clone, Debug, Serialize)]
 pub struct RejectedItem {
     pub index: usize,
-    pub reason: String,
+    pub reason: &'static str,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ErrorSeverity {
     Fatal,
@@ -162,7 +182,17 @@ pub enum ErrorSeverity {
     Warning,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+impl ErrorSeverity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fatal => "fatal",
+            Self::Error => "error",
+            Self::Warning => "warning",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorInput {
     pub name: String,
@@ -176,6 +206,10 @@ pub struct ErrorInput {
     pub app_version: Option<String>,
     pub launcher_version: Option<String>,
     pub os: Option<String>,
+    #[serde(default)]
+    pub system_language: Option<String>,
+    #[serde(default)]
+    pub architecture: Option<String>,
     #[serde(default)]
     pub attributes: Attributes,
 }
@@ -194,6 +228,8 @@ impl ValidateTelemetry for ErrorInput {
             self.app_version.as_deref(),
             self.launcher_version.as_deref(),
             self.os.as_deref(),
+            self.system_language.as_deref(),
+            self.architecture.as_deref(),
         )?;
         if self.message.is_empty() || self.message.len() > 16_384 {
             return Err("error message must be 1..16384 bytes");
@@ -203,7 +239,7 @@ impl ValidateTelemetry for ErrorInput {
         {
             return Err("stack_trace must be at most 65536 bytes");
         }
-        validate_attributes(&self.attributes)
+        self.attributes.validate()
     }
 }
 
@@ -217,6 +253,8 @@ impl ValidateTelemetry for EventInput {
             self.app_version.as_deref(),
             self.launcher_version.as_deref(),
             self.os.as_deref(),
+            self.system_language.as_deref(),
+            self.architecture.as_deref(),
         )?;
         if self
             .idempotency_key
@@ -225,7 +263,7 @@ impl ValidateTelemetry for EventInput {
         {
             return Err("idempotency_key must be 1..128 bytes when provided");
         }
-        validate_attributes(&self.attributes)
+        self.attributes.validate()
     }
 }
 
@@ -261,7 +299,7 @@ impl ValidateTelemetry for MetricInput {
                 (Some(_), None) => {}
             },
         }
-        validate_attributes(&self.attributes)
+        self.attributes.validate()
     }
 }
 
@@ -271,7 +309,11 @@ impl ValidateTelemetry for LogInput {
         if self.message.is_empty() || self.message.len() > 16_384 {
             return Err("message must be 1..16384 bytes");
         }
-        if self.logger.as_ref().is_some_and(|logger| logger.len() > 256) {
+        if self
+            .logger
+            .as_ref()
+            .is_some_and(|logger| logger.len() > 256)
+        {
             return Err("logger must be at most 256 bytes");
         }
         if self.trace_id.as_ref().is_some_and(|value| value.len() > 64)
@@ -279,7 +321,7 @@ impl ValidateTelemetry for LogInput {
         {
             return Err("trace_id and span_id must be at most 64 bytes");
         }
-        validate_attributes(&self.attributes)
+        self.attributes.validate()
     }
 }
 
@@ -366,6 +408,8 @@ fn validate_common_dimensions(
     app_version: Option<&str>,
     launcher_version: Option<&str>,
     os: Option<&str>,
+    system_language: Option<&str>,
+    architecture: Option<&str>,
 ) -> Result<(), &'static str> {
     if anonymous_id.is_some_and(|value| value.is_empty() || value.len() > 512) {
         return Err("anonymous_id must be 1..512 bytes when provided");
@@ -381,56 +425,25 @@ fn validate_common_dimensions(
     if os.is_some_and(|value| value.len() > 256) {
         return Err("os must be at most 256 bytes");
     }
-    Ok(())
-}
-
-fn validate_attributes(attributes: &Attributes) -> Result<(), &'static str> {
-    if attributes.len() > 64 {
-        return Err("at most 64 attributes are allowed");
+    if system_language.is_some_and(|value| {
+        value.is_empty() || value.len() > 64 || value.chars().any(|c| c.is_control())
+    }) {
+        return Err("systemLanguage must be at most 64 bytes");
     }
-    if attributes
-        .keys()
-        .any(|key| key.is_empty() || key.len() > 64)
-    {
-        return Err("attribute keys must be 1..64 bytes");
-    }
-    if attributes
-        .values()
-        .any(|value| !valid_attribute_value(value, 0))
-    {
-        return Err("attribute values exceed the allowed size or nesting limits");
+    if architecture.is_some_and(|value| {
+        value.is_empty() || value.len() > 64 || value.chars().any(|c| c.is_control())
+    }) {
+        return Err("architecture must be at most 64 bytes");
     }
     Ok(())
-}
-
-fn valid_attribute_value(value: &Value, depth: usize) -> bool {
-    if depth > MAX_ATTRIBUTE_DEPTH {
-        return false;
-    }
-    match value {
-        Value::Null | Value::Bool(_) | Value::Number(_) => true,
-        Value::String(value) => value.len() <= MAX_ATTRIBUTE_STRING_BYTES,
-        Value::Array(values) => {
-            values.len() <= MAX_ATTRIBUTE_ARRAY_ITEMS
-                && values
-                    .iter()
-                    .all(|value| valid_attribute_value(value, depth + 1))
-        }
-        Value::Object(values) => {
-            values.len() <= MAX_ATTRIBUTE_OBJECT_ITEMS
-                && values.iter().all(|(key, value)| {
-                    !key.is_empty()
-                        && key.len() <= 64
-                        && valid_attribute_value(value, depth + 1)
-                })
-        }
-    }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::{
-        Attributes, EventInput, HistogramInput, MetricInput, MetricType, ValidateTelemetry,
+        Attributes, ErrorSeverity, EventInput, HistogramInput, LogLevel, MetricInput, MetricType,
+        ValidateTelemetry,
     };
 
     fn event(name: &str) -> EventInput {
@@ -442,6 +455,8 @@ mod tests {
             app_version: None,
             launcher_version: None,
             os: None,
+            system_language: None,
+            architecture: None,
             idempotency_key: None,
             attributes: Attributes::new(),
         }
@@ -545,6 +560,14 @@ mod tests {
             attributes: Attributes::new(),
         };
         assert!(metric.validate().is_err());
+    }
+
+    #[test]
+    fn metric_and_log_labels_are_stable_lowercase() {
+        assert_eq!(MetricType::Counter.as_str(), "counter");
+        assert_eq!(MetricType::Histogram.as_str(), "histogram");
+        assert_eq!(LogLevel::Error.as_str(), "error");
+        assert_eq!(ErrorSeverity::Warning.as_str(), "warning");
     }
 
     #[test]

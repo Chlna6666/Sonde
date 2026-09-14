@@ -3,7 +3,7 @@ use tracing::warn;
 
 use crate::{
     database::{
-        device_risk,
+        device_identity, device_risk,
         device_state::{self, DeviceObservation, DeviceTelemetryKind, TimedDimension},
         ingest_auth, ingest_nonce,
         telemetry::TelemetryScope,
@@ -11,8 +11,8 @@ use crate::{
     domain::{
         device_facts::DeviceFactsInput,
         telemetry::{
-            BatchReceipt, ErrorInput, EventInput, LogInput, MAX_BATCH_ITEMS, MetricInput,
-            RejectedItem, ValidateTelemetry,
+            Attributes, BatchReceipt, ErrorInput, EventInput, LogInput, MAX_BATCH_ITEMS,
+            MetricInput, RejectedItem, ValidateTelemetry,
         },
     },
     error::AppError,
@@ -96,8 +96,7 @@ pub fn has_permission(scopes: &[String], required_perm: &str) -> bool {
                 && (scope == "events" || scope == "ingest.events"))
             || (required_perm == "telemetry.metrics"
                 && (scope == "metrics" || scope == "ingest.metrics"))
-            || (required_perm == "telemetry.logs"
-                && (scope == "logs" || scope == "ingest.logs"))
+            || (required_perm == "telemetry.logs" && (scope == "logs" || scope == "ingest.logs"))
             || (required_perm == "telemetry.errors"
                 && (scope == "errors" || scope == "ingest.errors"))
             || (required_perm == "telemetry.heartbeat"
@@ -165,8 +164,11 @@ pub async fn issue_token(
         return Err(AppError::TooManyRequests);
     }
 
-    let salt = format!("{}:{}", context.application_id, context.environment_id);
-    let device_hash = anonymous_hash(&device_id, &salt);
+    let device_hash = device_identity::scoped_hash_parts(
+        &context.application_id,
+        &context.environment_id,
+        &device_id,
+    );
     let risk_score = device_risk::risk_score_for_device(
         &installed.database,
         &context.application_id,
@@ -190,7 +192,7 @@ pub async fn issue_token(
     let client_binding = installed
         .auth_security
         .ingest
-        .client_binding(user_agent, pepper);
+        .client_binding(user_agent, pepper)?;
     let claim_scopes = ingest_abuse::claims_scopes(&context.scopes, policy.tier);
     let (token, signing_key, expires_at) = installed.auth_security.ingest.issue_ingest_token(
         &context.application_id,
@@ -239,7 +241,15 @@ pub async fn scope_from_context_with_permission(
     if !auth_header.starts_with("sndt_") {
         return Err(AppError::IngestTokenRequired);
     }
-    signed_scope(installed, request, required_perm, raw_body, auth_header, user_agent).await
+    signed_scope(
+        installed,
+        request,
+        required_perm,
+        raw_body,
+        auth_header,
+        user_agent,
+    )
+    .await
 }
 
 async fn signed_scope(
@@ -260,7 +270,7 @@ async fn signed_scope(
     let expected_binding = installed
         .auth_security
         .ingest
-        .client_binding(user_agent, installed.auth_security.pepper());
+        .client_binding(user_agent, installed.auth_security.pepper())?;
     if claims.client_binding != expected_binding || !has_permission(&claims.scopes, required_perm) {
         return Err(AppError::Forbidden);
     }
@@ -286,16 +296,16 @@ async fn signed_scope(
     let signing_key = installed
         .auth_security
         .ingest
-        .signing_key_for_claims(&claims, installed.auth_security.pepper());
-    ingest_signature::verify(
-        &signing_key,
-        timestamp,
+        .signing_key_for_claims(&claims, installed.auth_security.pepper())?;
+    ingest_signature::verify(ingest_signature::VerifyRequest {
+        signing_key: &signing_key,
+        timestamp_ms: timestamp,
         nonce,
-        request.method,
-        request.path,
-        raw_body,
-        signature,
-    )?;
+        method: request.method,
+        path: request.path,
+        body: raw_body,
+        signature_hex: signature,
+    })?;
 
     if !ingest_nonce::record_once(
         &installed.database,
@@ -305,9 +315,10 @@ async fn signed_scope(
     )
     .await?
     {
-        let device_hash = anonymous_hash(
+        let device_hash = device_identity::scoped_hash_parts(
+            &claims.application_id,
+            &claims.environment_id,
             &claims.device_id,
-            &format!("{}:{}", claims.application_id, claims.environment_id),
         );
         let now = chrono::Utc::now().timestamp_millis();
         if let Err(error) = device_risk::record_replay_detected(
@@ -408,12 +419,10 @@ pub async fn events(
     let (accepted, rejected) = validate_with(&mut items, |item| normalize_live_event(scope, item));
     let mut valid = select_valid(items, &rejected);
     let observation = event_observation(&valid);
-    let key_salt = format!("{}:{}", scope.application_id, scope.environment_id);
     for item in &mut valid {
-        item.anonymous_id = item
-            .anonymous_id
-            .take()
-            .map(|id| anonymous_hash(&id, &key_salt));
+        item.anonymous_id = item.anonymous_id.take().map(|id| {
+            device_identity::scoped_hash_parts(&scope.application_id, &scope.environment_id, &id)
+        });
     }
     let storage_scope = scope.storage_scope();
     installed
@@ -508,6 +517,22 @@ async fn observe_signed_device(
     }
 }
 
+fn extract_attribute_string(attributes: &Attributes, keys: &[&str]) -> Option<String> {
+    let map = attributes.decoded().ok()?;
+    for key in keys {
+        if let Some(val) = map.get(*key).and_then(|value| value.as_str()) {
+            let trimmed = val.trim();
+            if !trimmed.is_empty()
+                && trimmed.len() <= 64
+                && !trimmed.chars().any(|c| c.is_control())
+            {
+                return Some(trimmed.to_owned());
+            }
+        }
+    }
+    None
+}
+
 fn event_observation(items: &[EventInput]) -> Option<DeviceObservation> {
     if items.is_empty() {
         return None;
@@ -516,6 +541,8 @@ fn event_observation(items: &[EventInput]) -> Option<DeviceObservation> {
     let mut app_version = None;
     let mut launcher_version = None;
     let mut os = None;
+    let mut system_language = None;
+    let mut architecture = None;
     for item in items {
         update_current_dimension(&mut app_version, item.app_version.as_deref(), received_at);
         update_current_dimension(
@@ -524,6 +551,26 @@ fn event_observation(items: &[EventInput]) -> Option<DeviceObservation> {
             received_at,
         );
         update_current_dimension(&mut os, item.os.as_deref(), received_at);
+        let extracted_lang = if item.system_language.is_none() {
+            extract_attribute_string(
+                &item.attributes,
+                &["systemLanguage", "system_language", "locale", "language"],
+            )
+        } else {
+            None
+        };
+        let lang = item
+            .system_language
+            .as_deref()
+            .or(extracted_lang.as_deref());
+        update_current_dimension(&mut system_language, lang, received_at);
+        let extracted_arch = if item.architecture.is_none() {
+            extract_attribute_string(&item.attributes, &["architecture", "arch"])
+        } else {
+            None
+        };
+        let arch = item.architecture.as_deref().or(extracted_arch.as_deref());
+        update_current_dimension(&mut architecture, arch, received_at);
     }
     Some(DeviceObservation {
         kind: DeviceTelemetryKind::Event,
@@ -534,8 +581,8 @@ fn event_observation(items: &[EventInput]) -> Option<DeviceObservation> {
         app_version,
         launcher_version,
         os,
-        system_language: None,
-        architecture: None,
+        system_language,
+        architecture,
     })
 }
 
@@ -547,6 +594,8 @@ fn error_observation(items: &[ErrorInput]) -> Option<DeviceObservation> {
     let mut app_version = None;
     let mut launcher_version = None;
     let mut os = None;
+    let mut system_language = None;
+    let mut architecture = None;
     for item in items {
         update_current_dimension(&mut app_version, item.app_version.as_deref(), received_at);
         update_current_dimension(
@@ -555,6 +604,26 @@ fn error_observation(items: &[ErrorInput]) -> Option<DeviceObservation> {
             received_at,
         );
         update_current_dimension(&mut os, item.os.as_deref(), received_at);
+        let extracted_lang = if item.system_language.is_none() {
+            extract_attribute_string(
+                &item.attributes,
+                &["systemLanguage", "system_language", "locale", "language"],
+            )
+        } else {
+            None
+        };
+        let lang = item
+            .system_language
+            .as_deref()
+            .or(extracted_lang.as_deref());
+        update_current_dimension(&mut system_language, lang, received_at);
+        let extracted_arch = if item.architecture.is_none() {
+            extract_attribute_string(&item.attributes, &["architecture", "arch"])
+        } else {
+            None
+        };
+        let arch = item.architecture.as_deref().or(extracted_arch.as_deref());
+        update_current_dimension(&mut architecture, arch, received_at);
     }
     Some(DeviceObservation {
         kind: DeviceTelemetryKind::Error,
@@ -565,8 +634,8 @@ fn error_observation(items: &[ErrorInput]) -> Option<DeviceObservation> {
         app_version,
         launcher_version,
         os,
-        system_language: None,
-        architecture: None,
+        system_language,
+        architecture,
     })
 }
 
@@ -611,8 +680,11 @@ fn update_current_dimension(
 }
 
 fn device_hash_for_scope(scope: &IngestScope) -> String {
-    let salt = format!("{}:{}", scope.application_id, scope.environment_id);
-    anonymous_hash(scope.signed_device_id(), &salt)
+    device_identity::scoped_hash_parts(
+        &scope.application_id,
+        &scope.environment_id,
+        scope.signed_device_id(),
+    )
 }
 
 async fn charge_item_budget(
@@ -697,10 +769,7 @@ fn validate_with<T: ValidateTelemetry>(
     for (index, item) in items.iter_mut().enumerate() {
         let result = normalize(item).and_then(|()| item.validate());
         if let Err(reason) = result {
-            rejected.push(RejectedItem {
-                index,
-                reason: reason.to_string(),
-            });
+            rejected.push(RejectedItem { index, reason });
         } else {
             accepted += 1;
         }
@@ -708,20 +777,22 @@ fn validate_with<T: ValidateTelemetry>(
     (accepted, rejected)
 }
 
-fn normalize_live_event(
-    scope: &IngestScope,
-    item: &mut EventInput,
-) -> Result<(), &'static str> {
-    reject_server_owned_live_fields(item.timestamp, item.session_id.as_deref(), item.anonymous_id.as_deref())?;
+fn normalize_live_event(scope: &IngestScope, item: &mut EventInput) -> Result<(), &'static str> {
+    reject_server_owned_live_fields(
+        item.timestamp,
+        item.session_id.as_deref(),
+        item.anonymous_id.as_deref(),
+    )?;
     item.anonymous_id = Some(scope.device_id.clone());
     Ok(())
 }
 
-fn normalize_live_error(
-    scope: &IngestScope,
-    item: &mut ErrorInput,
-) -> Result<(), &'static str> {
-    reject_server_owned_live_fields(item.timestamp, item.session_id.as_deref(), item.anonymous_id.as_deref())?;
+fn normalize_live_error(scope: &IngestScope, item: &mut ErrorInput) -> Result<(), &'static str> {
+    reject_server_owned_live_fields(
+        item.timestamp,
+        item.session_id.as_deref(),
+        item.anonymous_id.as_deref(),
+    )?;
     item.anonymous_id = Some(scope.device_id.clone());
     Ok(())
 }
@@ -813,19 +884,12 @@ fn validate_device_id(value: &str) -> Result<&str, AppError> {
     Ok(value)
 }
 
-pub(crate) fn anonymous_hash(value: &str, salt: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(value.as_bytes());
-    hasher.update(salt.as_bytes());
-    hex::encode(hasher.finalize())
-}
-
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::{IngestScope, event_observation, normalize_live_event, simple_observation};
     use crate::{
-        database::device_state::DeviceTelemetryKind,
-        domain::telemetry::EventInput,
+        database::device_state::DeviceTelemetryKind, domain::telemetry::EventInput,
         services::ingest_abuse::RiskTier,
     };
 
@@ -848,6 +912,8 @@ mod tests {
             app_version: Some("2.0.0".into()),
             launcher_version: Some("1.5.0".into()),
             os: Some("windows".into()),
+            system_language: None,
+            architecture: None,
             idempotency_key: None,
             attributes: Default::default(),
         }
@@ -892,7 +958,10 @@ mod tests {
         second.os = Some("linux".into());
         let observation = event_observation(&[first, second]).unwrap();
         assert_eq!(
-            observation.app_version.as_ref().map(|value| value.value.as_str()),
+            observation
+                .app_version
+                .as_ref()
+                .map(|value| value.value.as_str()),
             Some("2.0.0")
         );
         assert_eq!(

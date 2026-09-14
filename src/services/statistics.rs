@@ -72,13 +72,8 @@ async fn query_application_stats(
     let days = validate_days(days)?;
     let mut record =
         stats::application_stats(&installed.database, application_id, environment_id, days).await?;
-    let calendar_days = statistics_calendar_days(
-        installed,
-        application_id,
-        environment_id,
-        days,
-    )
-    .await?;
+    let calendar_days =
+        statistics_calendar_days(installed, application_id, environment_id, days).await?;
     record.overview.avg_daily_events = record.overview.total_events / calendar_days;
     let activity = activity_stats::query(
         &installed.database,
@@ -126,7 +121,10 @@ async fn statistics_calendar_days(
         .map_err(|error| AppError::internal("parse first device activity day", error))?;
     let last = chrono::NaiveDate::parse_from_str(&last.day, "%Y-%m-%d")
         .map_err(|error| AppError::internal("parse last device activity day", error))?;
-    let span = last.signed_duration_since(first).num_days().saturating_add(1);
+    let span = last
+        .signed_duration_since(first)
+        .num_days()
+        .saturating_add(1);
     u64::try_from(std::cmp::max(span, 1))
         .map_err(|error| AppError::internal("convert statistics calendar day span", error))
 }
@@ -173,6 +171,11 @@ fn map_overview(record: stats::Overview, activity: activity_stats::ActivityStats
             .collect(),
         build_distribution: record
             .build_distribution
+            .into_iter()
+            .map(map_distribution)
+            .collect(),
+        system_languages: record
+            .system_languages
             .into_iter()
             .map(map_distribution)
             .collect(),
@@ -225,6 +228,11 @@ fn map_application_stats(
             .collect(),
         build_distribution: record
             .build_distribution
+            .into_iter()
+            .map(map_distribution)
+            .collect(),
+        system_languages: record
+            .system_languages
             .into_iter()
             .map(map_distribution)
             .collect(),

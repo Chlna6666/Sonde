@@ -20,7 +20,7 @@ struct ErrorGroupBatch {
     fingerprint: String,
     name: String,
     message_sample: String,
-    severity: String,
+    severity: &'static str,
     first_seen: i64,
     last_seen: i64,
     occurrences: i64,
@@ -46,33 +46,37 @@ pub async fn insert_error_index(
         let timestamp = error.timestamp.unwrap_or(received_at);
         let fingerprint = error_fingerprint(error);
         let group_id = error_group_id(scope, &fingerprint);
-        let severity = severity_name(error.severity.as_ref()).to_owned();
+        let severity = severity_name(error.severity);
         let anonymous_id = error
             .anonymous_id
             .as_deref()
             .map(|value| anonymous_hash(scope, value));
         let handled = error.handled.map(|value| if value { 1_i64 } else { 0_i64 });
 
-        let group = groups.entry(group_id.clone()).or_insert_with(|| ErrorGroupBatch {
-            id: group_id.clone(),
-            fingerprint: fingerprint.clone(),
-            name: error.name.clone(),
-            message_sample: error.message.clone(),
-            severity: severity.clone(),
-            first_seen: timestamp,
-            last_seen: timestamp,
-            occurrences: 0,
-            last_app_version: error.app_version.clone(),
-            last_launcher_version: error.launcher_version.clone(),
-            last_os: error.os.clone(),
-        });
+        let group = groups
+            .entry(group_id.clone())
+            .or_insert_with(|| ErrorGroupBatch {
+                id: group_id.clone(),
+                fingerprint: fingerprint.clone(),
+                name: error.name.clone(),
+                message_sample: error.message.clone(),
+                severity,
+                first_seen: timestamp,
+                last_seen: timestamp,
+                occurrences: 0,
+                last_app_version: error.app_version.clone(),
+                last_launcher_version: error.launcher_version.clone(),
+                last_os: error.os.clone(),
+            });
         group.first_seen = std::cmp::min(group.first_seen, timestamp);
         if timestamp >= group.last_seen {
             group.last_seen = timestamp;
             group.message_sample.clone_from(&error.message);
-            group.severity.clone_from(&severity);
+            group.severity = severity;
             group.last_app_version.clone_from(&error.app_version);
-            group.last_launcher_version.clone_from(&error.launcher_version);
+            group
+                .last_launcher_version
+                .clone_from(&error.launcher_version);
             group.last_os.clone_from(&error.os);
         }
         group.occurrences = group.occurrences.saturating_add(1);
@@ -90,7 +94,7 @@ pub async fn insert_error_index(
             Value::from(error.os.clone()),
             Value::from(error.stack_trace.clone()),
             Value::from(handled),
-            Value::from(serde_json::to_string(&error.attributes).map_err(json_error)?),
+            Value::from(error.attributes.as_str().to_owned()),
             Value::from(received_at),
         ]);
     }
@@ -121,7 +125,7 @@ pub async fn insert_error_index(
                 Value::from(group.fingerprint.clone()),
                 Value::from(group.name.clone()),
                 Value::from(group.message_sample.clone()),
-                Value::from(group.severity.clone()),
+                Value::from(group.severity),
                 Value::from(group.first_seen),
                 Value::from(group.last_seen),
                 Value::from(0_i64),
@@ -164,7 +168,7 @@ pub async fn insert_error_index(
                 ),
             )
             .value(Alias::new("message_sample"), group.message_sample.clone())
-            .value(Alias::new("severity"), group.severity.clone())
+            .value(Alias::new("severity"), group.severity)
             .value(
                 Alias::new("last_app_version"),
                 group.last_app_version.clone(),
@@ -207,7 +211,7 @@ pub async fn insert_error_index(
     Ok(())
 }
 
-fn severity_name(severity: Option<&ErrorSeverity>) -> &'static str {
+fn severity_name(severity: Option<ErrorSeverity>) -> &'static str {
     match severity {
         Some(ErrorSeverity::Fatal) => "fatal",
         Some(ErrorSeverity::Warning) => "warning",
@@ -240,11 +244,7 @@ fn error_group_id(scope: &TelemetryScope, fingerprint: &str) -> String {
 }
 
 fn anonymous_hash(scope: &TelemetryScope, value: &str) -> String {
-    let salt = format!("{}:{}", scope.application_id, scope.environment_id);
-    let mut hasher = Sha256::new();
-    hasher.update(value.as_bytes());
-    hasher.update(salt.as_bytes());
-    hex::encode(hasher.finalize())
+    super::device_identity::scoped_hash(scope, value)
 }
 
 fn stable_prefix(value: &str, max_bytes: usize) -> &str {
@@ -258,15 +258,9 @@ fn stable_prefix(value: &str, max_bytes: usize) -> &str {
     &value[..end]
 }
 
-fn json_error(error: serde_json::Error) -> DbErr {
-    DbErr::Custom(error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
-    use crate::domain::telemetry::ErrorInput;
+    use crate::domain::telemetry::{Attributes, ErrorInput};
 
     use super::error_fingerprint;
 
@@ -284,7 +278,9 @@ mod tests {
             app_version: None,
             launcher_version: None,
             os: None,
-            attributes: BTreeMap::new(),
+            system_language: None,
+            architecture: None,
+            attributes: Attributes::new(),
         };
         let first = error_fingerprint(&error);
         error.message = "dynamic message 2".into();

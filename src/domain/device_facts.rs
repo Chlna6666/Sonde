@@ -12,7 +12,11 @@ pub struct DeviceFactsInput {
 
 impl DeviceFactsInput {
     pub fn validate(&self) -> Result<(), &'static str> {
-        validate_optional(&self.app_version, 128, "appVersion must be at most 128 bytes")?;
+        validate_optional(
+            &self.app_version,
+            128,
+            "appVersion must be at most 128 bytes",
+        )?;
         validate_optional(
             &self.launcher_version,
             128,
@@ -46,13 +50,12 @@ fn validate_optional(
     max_bytes: usize,
     message: &'static str,
 ) -> Result<(), &'static str> {
-    if let Some(value) = value {
-        if value.is_empty()
+    if let Some(value) = value
+        && (value.is_empty()
             || value.len() > max_bytes
-            || value.chars().any(|character| character.is_control())
-        {
-            return Err(message);
-        }
+            || value.chars().any(|character| character.is_control()))
+    {
+        return Err(message);
     }
     Ok(())
 }
@@ -64,11 +67,13 @@ mod tests {
     #[test]
     fn device_facts_require_at_least_one_current_value() {
         assert!(DeviceFactsInput::default().validate().is_err());
-        assert!(DeviceFactsInput {
-            system_language: Some("zh-CN".into()),
-            ..Default::default()
-        }
-        .validate()
-        .is_ok());
+        assert!(
+            DeviceFactsInput {
+                system_language: Some("zh-CN".into()),
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
     }
 }

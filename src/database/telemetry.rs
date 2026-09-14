@@ -1,8 +1,11 @@
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, TransactionTrait};
+use sea_orm::{DatabaseConnection, DbErr, TransactionTrait};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::domain::telemetry::{ErrorSeverity, EventInput, LogInput, LogLevel, MetricInput};
+use crate::domain::telemetry::{
+    Attributes, ErrorInput, ErrorSeverity, EventInput, HistogramInput, LogInput, LogLevel,
+    MetricInput, MetricType,
+};
 
 use super::{
     log_error_rollup,
@@ -48,14 +51,8 @@ pub async fn insert_events(
         let mut rows = Vec::with_capacity(chunk.len());
         for event in chunk {
             let timestamp = event.timestamp.unwrap_or(received_at);
-            let day = chrono::DateTime::from_timestamp_millis(timestamp)
-                .map(|value| value.format("%Y-%m-%d").to_string())
-                .unwrap_or_else(|| "1970-01-01".into());
-            let attributes_json = if event.attributes.is_empty() {
-                "{}".to_string()
-            } else {
-                serde_json::to_string(&event.attributes).map_err(json_error)?
-            };
+            let day = utc_day(timestamp);
+            let attributes_json = encode_attributes(&event.attributes)?;
             let dedupe_key = event
                 .idempotency_key
                 .as_deref()
@@ -134,19 +131,21 @@ pub async fn insert_metrics(
     for chunk in metrics.chunks(100) {
         let mut rows = Vec::with_capacity(chunk.len());
         for metric in chunk {
-            let attributes_json = if metric.attributes.is_empty() {
-                "{}".to_string()
-            } else {
-                serde_json::to_string(&metric.attributes).map_err(json_error)?
-            };
-            let (histogram_count, histogram_sum, histogram_min, histogram_max, histogram_bounds, histogram_bucket_counts) =
-                encode_histogram(metric)?;
+            let attributes_json = encode_attributes(&metric.attributes)?;
+            let (
+                histogram_count,
+                histogram_sum,
+                histogram_min,
+                histogram_max,
+                histogram_bounds,
+                histogram_bucket_counts,
+            ) = encode_histogram(metric)?;
             rows.push(vec![
                 Uuid::now_v7().to_string().into(),
                 scope.application_id.clone().into(),
                 scope.environment_id.clone().into(),
                 metric.name.clone().into(),
-                format!("{:?}", metric.metric_type).to_lowercase().into(),
+                metric.metric_type.as_str().into(),
                 metric.compatibility_value().into(),
                 metric.unit.clone().into(),
                 metric.timestamp.unwrap_or(received_at).into(),
@@ -175,26 +174,41 @@ pub async fn insert_metrics(
     Ok(metrics.len())
 }
 
-fn encode_histogram(
-    metric: &MetricInput,
-) -> Result<
-    (
-        Option<i64>,
-        Option<f64>,
-        Option<f64>,
-        Option<f64>,
-        Option<String>,
-        Option<String>,
-    ),
-    DbErr,
-> {
-    let Some(histogram) = metric.normalized_histogram() else {
+type EncodedHistogram = (
+    Option<i64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<String>,
+    Option<String>,
+);
+
+fn encode_histogram(metric: &MetricInput) -> Result<EncodedHistogram, DbErr> {
+    if metric.metric_type != MetricType::Histogram {
+        return Ok((None, None, None, None, None, None));
+    }
+    if let Some(histogram) = metric.histogram.as_ref() {
+        return encode_histogram_parts(histogram);
+    }
+    let Some(value) = metric.value else {
         return Ok((None, None, None, None, None, None));
     };
+    Ok((
+        Some(1),
+        Some(value),
+        Some(value),
+        Some(value),
+        Some(String::from("[]")),
+        Some(String::from("[1]")),
+    ))
+}
+
+fn encode_histogram_parts(histogram: &HistogramInput) -> Result<EncodedHistogram, DbErr> {
     let count = i64::try_from(histogram.count)
         .map_err(|_| DbErr::Custom("histogram count exceeds supported range".into()))?;
-    let bounds = serde_json::to_string(&histogram.explicit_bounds).map_err(json_error)?;
-    let bucket_counts = serde_json::to_string(&histogram.bucket_counts).map_err(json_error)?;
+    let bounds = crate::json::encode_f64_array(&histogram.explicit_bounds).map_err(json_error)?;
+    let bucket_counts =
+        crate::json::encode_u64_array(&histogram.bucket_counts).map_err(json_error)?;
     Ok((
         Some(count),
         histogram.sum,
@@ -232,16 +246,12 @@ pub async fn insert_logs(
     for chunk in logs.chunks(100) {
         let mut rows = Vec::with_capacity(chunk.len());
         for log in chunk {
-            let attributes_json = if log.attributes.is_empty() {
-                "{}".to_string()
-            } else {
-                serde_json::to_string(&log.attributes).map_err(json_error)?
-            };
+            let attributes_json = encode_attributes(&log.attributes)?;
             rows.push(vec![
                 Uuid::now_v7().to_string().into(),
                 scope.application_id.clone().into(),
                 scope.environment_id.clone().into(),
-                format!("{:?}", log.level).to_lowercase().into(),
+                log.level.as_str().into(),
                 log.message.clone().into(),
                 log.logger.clone().into(),
                 log.trace_id.clone().into(),
@@ -282,9 +292,7 @@ pub async fn insert_migrated_event(
     let transaction = database.begin().await?;
     let received_at = chrono::Utc::now().timestamp_millis();
     let timestamp = event.timestamp.unwrap_or(received_at);
-    let day = chrono::DateTime::from_timestamp_millis(timestamp)
-        .map(|value| value.format("%Y-%m-%d").to_string())
-        .unwrap_or_else(|| "1970-01-01".into());
+    let day = utc_day(timestamp);
     let columns = [
         "id",
         "application_id",
@@ -313,22 +321,14 @@ pub async fn insert_migrated_event(
         event.app_version.clone().into(),
         event.launcher_version.clone().into(),
         event.os.clone().into(),
-        serde_json::to_string(&event.attributes)
-            .map_err(json_error)?
-            .into(),
+        encode_attributes(&event.attributes)?.into(),
         dedupe_key.into(),
         received_at.into(),
     ]];
-    let inserted = insert_batch_ignore_conflicts(
-        &transaction,
-        "events",
-        &columns,
-        rows,
-        "dedupe_key",
-        "id",
-    )
-    .await?
-        > 0;
+    let inserted =
+        insert_batch_ignore_conflicts(&transaction, "events", &columns, rows, "dedupe_key", "id")
+            .await?
+            > 0;
     if inserted {
         rollups::mark_dirty_timestamps_for_source(
             &transaction,
@@ -340,6 +340,16 @@ pub async fn insert_migrated_event(
     }
     transaction.commit().await?;
     Ok(inserted)
+}
+
+fn encode_attributes(attributes: &Attributes) -> Result<String, DbErr> {
+    Ok(attributes.as_str().to_owned())
+}
+
+fn utc_day(timestamp: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(timestamp)
+        .map(|value| value.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| String::from("1970-01-01"))
 }
 
 fn scoped_event_dedupe_key(scope: &TelemetryScope, idempotency_key: &str) -> String {
@@ -354,11 +364,7 @@ fn scoped_event_dedupe_key(scope: &TelemetryScope, idempotency_key: &str) -> Str
 }
 
 fn anonymous_hash(scope: &TelemetryScope, value: &str) -> String {
-    let salt = format!("{}:{}", scope.application_id, scope.environment_id);
-    let mut hasher = Sha256::new();
-    hasher.update(value.as_bytes());
-    hasher.update(salt.as_bytes());
-    hex::encode(hasher.finalize())
+    super::device_identity::scoped_hash(scope, value)
 }
 
 fn json_error(error: serde_json::Error) -> DbErr {
@@ -368,7 +374,7 @@ fn json_error(error: serde_json::Error) -> DbErr {
 pub async fn insert_errors(
     database: &DatabaseConnection,
     scope: &TelemetryScope,
-    errors: &[crate::domain::telemetry::ErrorInput],
+    errors: &[ErrorInput],
 ) -> Result<usize, DbErr> {
     if errors.is_empty() {
         return Ok(0);
@@ -392,7 +398,7 @@ pub async fn insert_errors(
     for chunk in errors.chunks(100) {
         let mut rows = Vec::with_capacity(chunk.len());
         for err in chunk {
-            let mut attrs = err.attributes.clone();
+            let mut attrs = err.attributes.decoded().map_err(json_error)?;
             attrs.insert(
                 "error_name".into(),
                 serde_json::Value::String(err.name.clone()),
@@ -429,7 +435,7 @@ pub async fn insert_errors(
                 attrs.insert("os".into(), serde_json::Value::String(os.clone()));
             }
             let attributes_json = serde_json::to_string(&attrs).map_err(json_error)?;
-            let level_str = match err.severity.as_ref() {
+            let level_str = match err.severity {
                 Some(ErrorSeverity::Fatal) => "fatal",
                 Some(ErrorSeverity::Warning) => "warn",
                 _ => "error",
