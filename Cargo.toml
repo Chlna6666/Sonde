@@ -43,7 +43,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 
 [dev-dependencies]
 actix-http = "3"
-criterion = "0.5"
+criterion = "0.8"
 
 [[bench]]
 name = "hot_path"
