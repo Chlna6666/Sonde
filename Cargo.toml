@@ -31,7 +31,7 @@ sea-orm-migration = { version = "2.0.0", features = ["runtime-tokio-rustls", "sq
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha1 = "0.10"
-sha2 = "0.10"
+sha2 = "0.11"
 hmac = "0.12"
 tempfile = "3"
 thiserror = "2"
