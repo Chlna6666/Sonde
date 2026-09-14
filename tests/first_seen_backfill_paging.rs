@@ -20,6 +20,7 @@ fn event(timestamp: i64, index: usize) -> EventInput {
         os: Some("test".into()),
         idempotency_key: Some(format!("event-{index}")),
         attributes: Attributes::new(),
+        ..Default::default()
     }
 }
 
@@ -62,15 +63,24 @@ async fn first_seen_seed_is_keyset_paged_instead_of_materializing_all_scope_days
         .await
         .unwrap();
 
-    assert_eq!(first_seen::run_backfill_batch(&database, 32).await.unwrap(), 512);
+    assert_eq!(
+        first_seen::run_backfill_batch(&database, 32).await.unwrap(),
+        512
+    );
     assert_eq!(pending_count(&database).await, 512);
     assert!(!first_seen::backfill_complete(&database).await.unwrap());
 
-    assert_eq!(first_seen::run_backfill_batch(&database, 32).await.unwrap(), 88);
+    assert_eq!(
+        first_seen::run_backfill_batch(&database, 32).await.unwrap(),
+        88
+    );
     assert_eq!(pending_count(&database).await, 600);
 
     // One extra iteration reaches EOF and transitions seeding -> seeded. It deliberately reports a
     // sentinel work item so drain-until-zero callers continue into the processing phase.
-    assert_eq!(first_seen::run_backfill_batch(&database, 32).await.unwrap(), 1);
+    assert_eq!(
+        first_seen::run_backfill_batch(&database, 32).await.unwrap(),
+        1
+    );
     assert!(!first_seen::backfill_complete(&database).await.unwrap());
 }

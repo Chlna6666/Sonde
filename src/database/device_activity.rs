@@ -295,7 +295,9 @@ async fn add_interval_slices(
             .saturating_mul(bucket_millis);
         let slice_end = std::cmp::min(boundary, end);
         if slice_end <= cursor {
-            return Err(DbErr::Custom("invalid device activity bucket boundary".into()));
+            return Err(DbErr::Custom(
+                "invalid device activity bucket boundary".into(),
+            ));
         }
         add_activity_slice(
             database,
@@ -416,13 +418,7 @@ pub async fn unique_devices(
             Alias::new("count"),
         )
         .from(Alias::new("telemetry_device_activity_days"));
-    apply_scope_and_window(
-        &mut query,
-        application_id,
-        environment_id,
-        since,
-        until,
-    );
+    apply_scope_and_window(&mut query, application_id, environment_id, since, until);
     positive_count(database, query).await
 }
 
@@ -435,7 +431,10 @@ pub async fn new_devices(
 ) -> Result<u64, DbErr> {
     let mut query = Query::select();
     query
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("count"))
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("count"),
+        )
         .from(Alias::new("telemetry_devices"))
         .and_where(Expr::col(Alias::new("first_seen_at")).gte(since));
     if let Some(until) = until {
@@ -452,7 +451,10 @@ pub async fn total_devices(
 ) -> Result<u64, DbErr> {
     let mut query = Query::select();
     query
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("count"))
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("count"),
+        )
         .from(Alias::new("telemetry_devices"));
     apply_scope(&mut query, application_id, environment_id);
     positive_count(database, query).await
@@ -489,8 +491,10 @@ pub async fn growth_timeline(
     days: Option<u32>,
 ) -> Result<Vec<DeviceGrowthBucket>, DbErr> {
     let granularity = granularity(days);
-    let active = active_buckets(database, application_id, environment_id, since, granularity).await?;
-    let new = new_device_buckets(database, application_id, environment_id, since, granularity).await?;
+    let active =
+        active_buckets(database, application_id, environment_id, since, granularity).await?;
+    let new =
+        new_device_buckets(database, application_id, environment_id, since, granularity).await?;
     let baseline = match since {
         Some(since) => devices_before(database, application_id, environment_id, since).await?,
         None => 0,
@@ -527,7 +531,8 @@ pub async fn activity_timeline(
     days: Option<u32>,
 ) -> Result<Vec<ActivityBucket>, DbErr> {
     let granularity = granularity(days);
-    let rows = activity_buckets(database, application_id, environment_id, since, granularity).await?;
+    let rows =
+        activity_buckets(database, application_id, environment_id, since, granularity).await?;
     let mut cumulative = 0_u64;
     Ok(rows
         .into_iter()
@@ -588,11 +593,13 @@ async fn active_buckets(
     since: Option<i64>,
     granularity: ActivityGranularity,
 ) -> Result<BTreeMap<String, u64>, DbErr> {
-    Ok(activity_buckets(database, application_id, environment_id, since, granularity)
-        .await?
-        .into_iter()
-        .map(|(bucket, (devices, _))| (bucket, devices))
-        .collect())
+    Ok(
+        activity_buckets(database, application_id, environment_id, since, granularity)
+            .await?
+            .into_iter()
+            .map(|(bucket, (devices, _))| (bucket, devices))
+            .collect(),
+    )
 }
 
 async fn activity_buckets(
@@ -647,7 +654,10 @@ async fn activity_buckets(
         .map(|(bucket, (devices, active_millis))| {
             (
                 bucket,
-                (u64::try_from(devices.len()).unwrap_or(u64::MAX), active_millis),
+                (
+                    u64::try_from(devices.len()).unwrap_or(u64::MAX),
+                    active_millis,
+                ),
             )
         })
         .collect())
@@ -664,7 +674,10 @@ async fn new_device_buckets(
     let mut query = Query::select();
     query
         .expr_as(Expr::cust(bucket_expr), Alias::new("bucket"))
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("devices"))
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("devices"),
+        )
         .from(Alias::new("telemetry_devices"))
         .and_where(Expr::col(Alias::new("first_seen_at")).is_not_null())
         .group_by_col(Alias::new("bucket"))
@@ -692,7 +705,10 @@ async fn devices_before(
 ) -> Result<u64, DbErr> {
     let mut query = Query::select();
     query
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("count"))
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("count"),
+        )
         .from(Alias::new("telemetry_devices"))
         .and_where(Expr::col(Alias::new("first_seen_at")).lt(before));
     apply_scope(&mut query, application_id, environment_id);
@@ -739,7 +755,11 @@ fn first_seen_bucket_expr(
         (DbBackend::Sqlite, ActivityGranularity::Month) => {
             "strftime('%Y-%m', first_seen_at / 1000, 'unixepoch')"
         }
-        _ => return Err(DbErr::Custom("unsupported database backend for device activity".into())),
+        _ => {
+            return Err(DbErr::Custom(
+                "unsupported database backend for device activity".into(),
+            ));
+        }
     };
     Ok(expression.to_owned())
 }
@@ -819,7 +839,7 @@ fn nonnegative(value: i64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{activity_id, DAY_MILLIS, HOUR_MILLIS};
+    use super::{DAY_MILLIS, HOUR_MILLIS, activity_id};
 
     #[test]
     fn activity_ids_are_scope_and_bucket_bound() {

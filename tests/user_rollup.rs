@@ -20,6 +20,7 @@ fn event(timestamp: i64, key: &str, user: &str) -> EventInput {
         os: Some("test".into()),
         idempotency_key: Some(key.into()),
         attributes: Attributes::new(),
+        ..Default::default()
     }
 }
 
@@ -32,18 +33,18 @@ async fn recompute_scope_day(
         .await
         .unwrap()
         .into_iter()
-        .find(|item| {
-            item.application_id == application_id && item.environment_id == environment_id
-        })
+        .find(|item| item.application_id == application_id && item.environment_id == environment_id)
         .unwrap();
     assert!(
         user_rollup::recompute_claimed_day_user_set(database, &dirty)
             .await
             .unwrap()
     );
-    assert!(rollups::recompute_claimed_day(database, dirty)
-        .await
-        .unwrap());
+    assert!(
+        rollups::recompute_claimed_day(database, dirty)
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -278,9 +279,30 @@ async fn user_growth_projection_deduplicates_across_days_and_months() {
     .unwrap()
     .unwrap();
     assert_eq!(daily.len(), 3);
-    assert_eq!((daily[0].new_users, daily[0].cumulative_users, daily[0].active_users), (2, 2, 2));
-    assert_eq!((daily[1].new_users, daily[1].cumulative_users, daily[1].active_users), (1, 3, 2));
-    assert_eq!((daily[2].new_users, daily[2].cumulative_users, daily[2].active_users), (1, 4, 1));
+    assert_eq!(
+        (
+            daily[0].new_users,
+            daily[0].cumulative_users,
+            daily[0].active_users
+        ),
+        (2, 2, 2)
+    );
+    assert_eq!(
+        (
+            daily[1].new_users,
+            daily[1].cumulative_users,
+            daily[1].active_users
+        ),
+        (1, 3, 2)
+    );
+    assert_eq!(
+        (
+            daily[2].new_users,
+            daily[2].cumulative_users,
+            daily[2].active_users
+        ),
+        (1, 4, 1)
+    );
 
     let monthly = user_rollup::user_growth_hybrid(
         &database,
@@ -293,6 +315,20 @@ async fn user_growth_projection_deduplicates_across_days_and_months() {
     .unwrap()
     .unwrap();
     assert_eq!(monthly.len(), 2);
-    assert_eq!((monthly[0].new_users, monthly[0].cumulative_users, monthly[0].active_users), (2, 2, 2));
-    assert_eq!((monthly[1].new_users, monthly[1].cumulative_users, monthly[1].active_users), (2, 4, 3));
+    assert_eq!(
+        (
+            monthly[0].new_users,
+            monthly[0].cumulative_users,
+            monthly[0].active_users
+        ),
+        (2, 2, 2)
+    );
+    assert_eq!(
+        (
+            monthly[1].new_users,
+            monthly[1].cumulative_users,
+            monthly[1].active_users
+        ),
+        (2, 4, 3)
+    );
 }

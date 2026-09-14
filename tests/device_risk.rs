@@ -28,8 +28,8 @@ fn observation(received_at: i64, telemetry_at: i64, os: &str) -> DeviceObservati
 }
 
 #[tokio::test]
-async fn risk_is_read_by_device_scope_and_decays_only_after_quiet_cutoff(
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn risk_is_read_by_device_scope_and_decays_only_after_quiet_cutoff()
+-> Result<(), Box<dyn std::error::Error>> {
     let database = database::connect("sqlite::memory:").await?;
     database::migrate(&database).await?;
     let scope = TelemetryScope {

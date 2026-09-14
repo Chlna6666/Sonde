@@ -253,11 +253,7 @@ async fn merge_device_bounds(
     insert
         .values(values.into_iter().map(Expr::value))
         .map_err(|error| DbErr::Custom(format!("build device backfill insert: {error}")))?;
-    insert.on_conflict(
-        OnConflict::column(Alias::new("id"))
-            .do_nothing()
-            .to_owned(),
-    );
+    insert.on_conflict(OnConflict::column(Alias::new("id")).do_nothing().to_owned());
     database.execute(&insert).await?;
 
     let update = Query::update()
@@ -315,7 +311,9 @@ async fn read_cursor(database: &impl ConnectionTrait) -> Result<Option<(i64, Str
         return Ok(None);
     };
     let Some((timestamp, id)) = value.split_once(':') else {
-        return Err(DbErr::Custom("invalid device activity backfill cursor".into()));
+        return Err(DbErr::Custom(
+            "invalid device activity backfill cursor".into(),
+        ));
     };
     let timestamp = timestamp
         .parse::<i64>()
@@ -323,10 +321,7 @@ async fn read_cursor(database: &impl ConnectionTrait) -> Result<Option<(i64, Str
     Ok(Some((timestamp, id.to_owned())))
 }
 
-async fn read_state(
-    database: &impl ConnectionTrait,
-    key: &str,
-) -> Result<Option<String>, DbErr> {
+async fn read_state(database: &impl ConnectionTrait, key: &str) -> Result<Option<String>, DbErr> {
     let query = Query::select()
         .column(Alias::new("value"))
         .from(Alias::new("system_state"))
@@ -340,11 +335,7 @@ async fn read_state(
         .transpose()
 }
 
-async fn set_state(
-    database: &impl ConnectionTrait,
-    key: &str,
-    value: &str,
-) -> Result<(), DbErr> {
+async fn set_state(database: &impl ConnectionTrait, key: &str, value: &str) -> Result<(), DbErr> {
     let mut query = Query::insert();
     query
         .into_table(Alias::new("system_state"))

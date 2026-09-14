@@ -54,7 +54,10 @@ async fn single_application_backup_preserves_histogram_population() {
         .unwrap();
     assert_eq!(backup.format_version, application_backup::FORMAT_VERSION);
     assert_eq!(backup.telemetry.metric_points.len(), 1);
-    let histogram = backup.telemetry.metric_points[0].histogram.as_ref().unwrap();
+    let histogram = backup.telemetry.metric_points[0]
+        .histogram
+        .as_ref()
+        .unwrap();
     assert_eq!(histogram.count, 6);
     assert_eq!(histogram.explicit_bounds, vec![5.0, 10.0, 20.0]);
     assert_eq!(histogram.bucket_counts, vec![1, 2, 2, 1]);
@@ -115,10 +118,8 @@ async fn assert_histogram_row(database: &sea_orm::DatabaseConnection, applicatio
     assert_eq!(row.try_get::<f64>("", "histogram_min").unwrap(), 1.0);
     assert_eq!(row.try_get::<f64>("", "histogram_max").unwrap(), 25.0);
     assert_eq!(
-        serde_json::from_str::<Vec<f64>>(
-            &row.try_get::<String>("", "histogram_bounds").unwrap()
-        )
-        .unwrap(),
+        serde_json::from_str::<Vec<f64>>(&row.try_get::<String>("", "histogram_bounds").unwrap())
+            .unwrap(),
         vec![5.0, 10.0, 20.0]
     );
     assert_eq!(

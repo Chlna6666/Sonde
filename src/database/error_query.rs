@@ -55,7 +55,7 @@ pub struct ErrorOccurrenceRecord {
     pub os: Option<String>,
     pub stack_trace: Option<String>,
     pub handled: Option<bool>,
-    pub attributes: serde_json::Value,
+    pub attributes: Box<serde_json::value::RawValue>,
     pub received_at: i64,
 }
 
@@ -107,7 +107,10 @@ pub async fn groups(
         query.and_where(Expr::col(Alias::new("last_seen")).lte(to));
     }
 
-    let offset = filter.page.saturating_sub(1).saturating_mul(filter.page_size);
+    let offset = filter
+        .page
+        .saturating_sub(1)
+        .saturating_mul(filter.page_size);
     query
         .order_by(Alias::new("last_seen"), Order::Desc)
         .limit(filter.page_size.saturating_add(1))
@@ -115,10 +118,7 @@ pub async fn groups(
 
     let rows = database.query_all(&query).await?;
     let has_more = rows.len() > filter.page_size as usize;
-    let mut items = Vec::with_capacity(std::cmp::min(
-        rows.len(),
-        filter.page_size as usize,
-    ));
+    let mut items = Vec::with_capacity(std::cmp::min(rows.len(), filter.page_size as usize));
     for row in rows.into_iter().take(filter.page_size as usize) {
         let occurrences = u64::try_from(row.try_get::<i64>("", "occurrences")?).unwrap_or(0);
         items.push(ErrorGroupRecord {
@@ -253,7 +253,7 @@ pub async fn occurrences(
             os: optional_string(&row, "os")?,
             stack_trace: optional_string(&row, "stack_trace")?,
             handled,
-            attributes: serde_json::from_str(&attributes)
+            attributes: serde_json::value::RawValue::from_string(attributes)
                 .map_err(|error| DbErr::Custom(error.to_string()))?,
             received_at: row.try_get("", "received_at")?,
         });
@@ -267,9 +267,6 @@ pub async fn occurrences(
     })
 }
 
-fn optional_string(
-    row: &sea_orm::QueryResult,
-    column: &str,
-) -> Result<Option<String>, DbErr> {
+fn optional_string(row: &sea_orm::QueryResult, column: &str) -> Result<Option<String>, DbErr> {
     row.try_get("", column)
 }

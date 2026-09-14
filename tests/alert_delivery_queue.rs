@@ -6,8 +6,8 @@ use sea_orm::{
 };
 use sonde::{
     database::{
-        self, alert_delivery, alerts as alert_store, application_delete, applications, query::insert,
-        telemetry,
+        self, alert_delivery, alerts as alert_store, application_delete, applications,
+        query::insert, telemetry,
     },
     domain::{
         alert::{AlertExpression, AlertSource, Comparison},
@@ -70,6 +70,7 @@ async fn evaluator_persists_delivery_and_worker_retries_without_process_state() 
             os: None,
             idempotency_key: None,
             attributes: Attributes::new(),
+            ..Default::default()
         }],
     )
     .await
@@ -101,30 +102,43 @@ async fn evaluator_persists_delivery_and_worker_retries_without_process_state() 
 
     // Each invocation is intentionally stateless. A service restart between any of these calls does
     // not lose the retry schedule because attempts and next_attempt_at are authoritative DB state.
-    assert_eq!(alerts::process_due_deliveries(&database, 4).await.unwrap(), 1);
+    assert_eq!(
+        alerts::process_due_deliveries(&database, 4).await.unwrap(),
+        1
+    );
     let delivery = only_delivery(&database).await;
     assert_eq!(delivery.1, "pending");
     assert_eq!(delivery.2, 1);
-    assert!(delivery
-        .3
-        .is_some_and(|next| next > chrono::Utc::now().timestamp_millis()));
+    assert!(
+        delivery
+            .3
+            .is_some_and(|next| next > chrono::Utc::now().timestamp_millis())
+    );
 
     force_due(&database, &delivery.0).await;
-    assert_eq!(alerts::process_due_deliveries(&database, 4).await.unwrap(), 1);
+    assert_eq!(
+        alerts::process_due_deliveries(&database, 4).await.unwrap(),
+        1
+    );
     let delivery = only_delivery(&database).await;
     assert_eq!(delivery.1, "pending");
     assert_eq!(delivery.2, 2);
 
     force_due(&database, &delivery.0).await;
-    assert_eq!(alerts::process_due_deliveries(&database, 4).await.unwrap(), 1);
+    assert_eq!(
+        alerts::process_due_deliveries(&database, 4).await.unwrap(),
+        1
+    );
     let delivery = only_delivery(&database).await;
     assert_eq!(delivery.1, "failed");
     assert_eq!(delivery.2, 3);
     assert!(delivery.3.is_none());
-    assert!(delivery
-        .5
-        .as_deref()
-        .is_some_and(|error| error.contains("Unsupported")));
+    assert!(
+        delivery
+            .5
+            .as_deref()
+            .is_some_and(|error| error.contains("Unsupported"))
+    );
 }
 
 #[tokio::test]
@@ -178,7 +192,10 @@ async fn restored_legacy_pending_delivery_without_schedule_or_payload_is_reclaim
     assert_eq!(due.len(), 1);
     assert!(due[0].payload_json.is_empty());
 
-    assert_eq!(alerts::process_due_deliveries(&database, 4).await.unwrap(), 1);
+    assert_eq!(
+        alerts::process_due_deliveries(&database, 4).await.unwrap(),
+        1
+    );
     let row = database
         .query_one(
             &Query::select()
@@ -193,10 +210,11 @@ async fn restored_legacy_pending_delivery_without_schedule_or_payload_is_reclaim
         .unwrap();
     assert_eq!(row.try_get::<String>("", "status").unwrap(), "failed");
     assert_eq!(read_i32(&row, "attempts"), 0);
-    assert!(row
-        .try_get::<String>("", "last_error")
-        .unwrap()
-        .contains("invalid persisted alert payload"));
+    assert!(
+        row.try_get::<String>("", "last_error")
+            .unwrap()
+            .contains("invalid persisted alert payload")
+    );
 }
 
 #[tokio::test]
@@ -248,14 +266,18 @@ async fn disabling_rule_or_channel_cancels_pending_deliveries() {
     assert_eq!(first.1, "cancelled");
     assert_eq!(first.2, 0);
     assert!(first.3.is_none());
-    assert!(first
-        .5
-        .as_deref()
-        .is_some_and(|error| error.contains("disabled")));
-    assert!(alert_delivery::list_due(&database, i64::MAX, 4)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        first
+            .5
+            .as_deref()
+            .is_some_and(|error| error.contains("disabled"))
+    );
+    assert!(
+        alert_delivery::list_due(&database, i64::MAX, 4)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     // Re-enable the rule and enqueue another row, then disable the channel. Only the new pending row
     // is cancelled; the earlier cancellation remains immutable delivery history.
@@ -296,10 +318,12 @@ async fn disabling_rule_or_channel_cancels_pending_deliveries() {
 
     let statuses = delivery_statuses(&database).await;
     assert_eq!(statuses, vec!["cancelled", "cancelled"]);
-    assert!(alert_delivery::list_due(&database, i64::MAX, 4)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        alert_delivery::list_due(&database, i64::MAX, 4)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]

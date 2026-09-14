@@ -23,6 +23,7 @@ fn event(timestamp: i64, key: &str, user: &str) -> EventInput {
         os: Some("test".into()),
         idempotency_key: Some(key.into()),
         attributes: Attributes::new(),
+        ..Default::default()
     }
 }
 
@@ -188,7 +189,11 @@ async fn deleting_application_removes_raw_and_derived_state_without_touching_oth
         "environments",
         "role_bindings",
     ] {
-        assert_eq!(count_for_app(&database, table, &delete_app).await, 0, "{table}");
+        assert_eq!(
+            count_for_app(&database, table, &delete_app).await,
+            0,
+            "{table}"
+        );
     }
     assert_eq!(count_for_app(&database, "events", &keep_app).await, 1);
 

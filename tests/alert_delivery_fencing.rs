@@ -155,14 +155,17 @@ async fn terminal_delivery_state_drops_retry_payload() {
         .unwrap()
         .unwrap();
     let id: String = row.try_get("", "id").unwrap();
-    assert!(row
-        .try_get::<Option<String>>("", "payload_json")
-        .unwrap()
-        .is_some());
+    assert!(
+        row.try_get::<Option<String>>("", "payload_json")
+            .unwrap()
+            .is_some()
+    );
 
-    assert!(alert_delivery::mark_failed(&database, &id, 0, true, "test")
-        .await
-        .unwrap());
+    assert!(
+        alert_delivery::mark_failed(&database, &id, 0, true, "test")
+            .await
+            .unwrap()
+    );
     let payload = database
         .query_one(
             &Query::select()

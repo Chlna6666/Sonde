@@ -64,14 +64,8 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             delete_in_batches(database, "metric_points", "timestamp", &app_id, cutoff).await?;
         let logs_deleted =
             delete_in_batches(database, "logs", "timestamp", &app_id, cutoff).await?;
-        let error_occurrences_deleted = delete_in_batches(
-            database,
-            "error_occurrences",
-            "timestamp",
-            &app_id,
-            cutoff,
-        )
-        .await?;
+        let error_occurrences_deleted =
+            delete_in_batches(database, "error_occurrences", "timestamp", &app_id, cutoff).await?;
         let device_sessions_deleted = delete_in_batches(
             database,
             "telemetry_device_sessions",
@@ -165,14 +159,8 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             &cutoff_day,
         )
         .await?;
-        let _ = delete_in_batches(
-            database,
-            "daily_aggregates",
-            "updated_at",
-            &app_id,
-            cutoff,
-        )
-        .await?;
+        let _ =
+            delete_in_batches(database, "daily_aggregates", "updated_at", &app_id, cutoff).await?;
 
         // Raw retention is millisecond-precise while rollups are day-scoped. Recompute only the
         // data sources whose rows were actually removed from the cutoff day; this avoids forcing

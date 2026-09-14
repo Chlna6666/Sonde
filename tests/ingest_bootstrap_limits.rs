@@ -1,8 +1,8 @@
 use sonde::database::{self, ingest_bootstrap};
 
 #[tokio::test]
-async fn fixed_window_budget_is_atomic_across_connections(
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn fixed_window_budget_is_atomic_across_connections() -> Result<(), Box<dyn std::error::Error>>
+{
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("bootstrap-rate.sqlite");
     let database_url = format!(
@@ -23,8 +23,8 @@ async fn fixed_window_budget_is_atomic_across_connections(
 }
 
 #[tokio::test]
-async fn repeated_device_enrollment_does_not_consume_distinct_device_budget(
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn repeated_device_enrollment_does_not_consume_distinct_device_budget()
+-> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("bootstrap-enrollment.sqlite");
     let database_url = format!(

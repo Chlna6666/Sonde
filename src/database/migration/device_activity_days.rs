@@ -66,7 +66,10 @@ impl MigrationTrait for DeviceActivityDays {
 }
 
 async fn add_first_seen_if_missing(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-    if !manager.has_column("telemetry_devices", "first_seen_at").await? {
+    if !manager
+        .has_column("telemetry_devices", "first_seen_at")
+        .await?
+    {
         manager
             .alter_table(
                 Table::alter()

@@ -7,8 +7,8 @@ use sea_orm::{
 };
 use sha2::{Digest, Sha256};
 
-use super::{rollups, telemetry::TelemetryScope};
 pub use super::rollups::DIRTY_SOURCE_LOG_ERROR;
+use super::{rollups, telemetry::TelemetryScope};
 
 const GLOBAL_ENVIRONMENT: &str = "*";
 const BACKFILL_KEY: &str = "telemetry_log_error_rollup_backfill";
@@ -237,9 +237,7 @@ fn day_start_timestamp(day: &str) -> Option<i64> {
 
 fn timestamp_day_expr(backend: DbBackend) -> String {
     match backend {
-        DbBackend::Postgres => {
-            "to_char(to_timestamp(timestamp / 1000.0), 'YYYY-MM-DD')".into()
-        }
+        DbBackend::Postgres => "to_char(to_timestamp(timestamp / 1000.0), 'YYYY-MM-DD')".into(),
         DbBackend::MySql => "DATE_FORMAT(FROM_UNIXTIME(timestamp / 1000), '%Y-%m-%d')".into(),
         DbBackend::Sqlite => "strftime('%Y-%m-%d', timestamp / 1000, 'unixepoch')".into(),
         _ => "''".into(),

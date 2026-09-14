@@ -37,13 +37,8 @@ pub async fn application_daily_hybrid(
     let since_day = since_ts
         .and_then(day_for_timestamp)
         .unwrap_or_else(|| "0001-01-01".to_owned());
-    if application_dirty_backlog_exceeds(
-        database,
-        application_id,
-        environment_id,
-        &since_day,
-    )
-    .await?
+    if application_dirty_backlog_exceeds(database, application_id, environment_id, &since_day)
+        .await?
     {
         return Ok(None);
     }
@@ -196,7 +191,8 @@ pub async fn global_daily_hybrid(
     }
 
     let monthly = monthly_buckets(days);
-    let Some(users) = user_rollup::user_growth_hybrid(database, None, None, since_ts, monthly).await?
+    let Some(users) =
+        user_rollup::user_growth_hybrid(database, None, None, since_ts, monthly).await?
     else {
         return Ok(None);
     };

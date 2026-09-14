@@ -143,15 +143,8 @@ async fn flush_batch(
     };
     // The target tables were cleared in this transaction. Keeping conflict handling here also makes
     // a malformed archive with duplicate ids deterministic rather than aborting halfway through.
-    insert_batch_ignore_conflicts(
-        database,
-        batch.table,
-        batch.columns,
-        batch.rows,
-        "id",
-        "id",
-    )
-    .await?;
+    insert_batch_ignore_conflicts(database, batch.table, batch.columns, batch.rows, "id", "id")
+        .await?;
     Ok(())
 }
 

@@ -20,6 +20,7 @@ fn event(timestamp: i64) -> EventInput {
         os: Some("test".into()),
         idempotency_key: Some("event-a".into()),
         attributes: Attributes::new(),
+        ..Default::default()
     }
 }
 
@@ -80,11 +81,14 @@ async fn source_mask_merges_without_invalidating_unrelated_rollup_fields() {
     telemetry::insert_events(&database, &scope, &[event(day_start + 1_000)])
         .await
         .unwrap();
-    let event_dirty = environment_dirty(&database, &scope.application_id, &scope.environment_id).await;
+    let event_dirty =
+        environment_dirty(&database, &scope.application_id, &scope.environment_id).await;
     assert_eq!(event_dirty.source_mask, rollups::DIRTY_SOURCE_EVENT);
-    assert!(rollups::recompute_claimed_day(&database, event_dirty)
-        .await
-        .unwrap());
+    assert!(
+        rollups::recompute_claimed_day(&database, event_dirty)
+            .await
+            .unwrap()
+    );
 
     telemetry::insert_metrics(&database, &scope, &[metric(day_start + 2_000)])
         .await
@@ -93,7 +97,8 @@ async fn source_mask_merges_without_invalidating_unrelated_rollup_fields() {
         .await
         .unwrap();
 
-    let non_event_dirty = environment_dirty(&database, &scope.application_id, &scope.environment_id).await;
+    let non_event_dirty =
+        environment_dirty(&database, &scope.application_id, &scope.environment_id).await;
     assert_eq!(
         non_event_dirty.source_mask,
         rollups::DIRTY_SOURCE_METRIC | rollups::DIRTY_SOURCE_LOG
@@ -102,9 +107,11 @@ async fn source_mask_merges_without_invalidating_unrelated_rollup_fields() {
     assert!(non_event_dirty.has_source(rollups::DIRTY_SOURCE_METRIC));
     assert!(non_event_dirty.has_source(rollups::DIRTY_SOURCE_LOG));
 
-    assert!(rollups::recompute_claimed_day(&database, non_event_dirty)
-        .await
-        .unwrap());
+    assert!(
+        rollups::recompute_claimed_day(&database, non_event_dirty)
+            .await
+            .unwrap()
+    );
 
     let row = database
         .query_one(
@@ -146,14 +153,17 @@ async fn historical_event_seeds_or_event_into_existing_metric_dirty_marker() {
         .await
         .unwrap();
     let initial = environment_dirty(&database, &scope.application_id, &scope.environment_id).await;
-    assert!(rollups::recompute_claimed_day(&database, initial)
-        .await
-        .unwrap());
+    assert!(
+        rollups::recompute_claimed_day(&database, initial)
+            .await
+            .unwrap()
+    );
 
     telemetry::insert_metrics(&database, &scope, &[metric(day_start + 2_000)])
         .await
         .unwrap();
-    let metric_only = environment_dirty(&database, &scope.application_id, &scope.environment_id).await;
+    let metric_only =
+        environment_dirty(&database, &scope.application_id, &scope.environment_id).await;
     assert_eq!(metric_only.source_mask, rollups::DIRTY_SOURCE_METRIC);
 
     assert_eq!(

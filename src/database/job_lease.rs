@@ -73,14 +73,20 @@ mod tests {
         let database = database::connect("sqlite::memory:").await.unwrap();
         database::migrate(&database).await.unwrap();
 
-        assert!(super::try_acquire_or_renew(&database, "alerts", "node-a", 60_000)
-            .await
-            .unwrap());
-        assert!(!super::try_acquire_or_renew(&database, "alerts", "node-b", 60_000)
-            .await
-            .unwrap());
-        assert!(super::try_acquire_or_renew(&database, "alerts", "node-a", 60_000)
-            .await
-            .unwrap());
+        assert!(
+            super::try_acquire_or_renew(&database, "alerts", "node-a", 60_000)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !super::try_acquire_or_renew(&database, "alerts", "node-b", 60_000)
+                .await
+                .unwrap()
+        );
+        assert!(
+            super::try_acquire_or_renew(&database, "alerts", "node-a", 60_000)
+                .await
+                .unwrap()
+        );
     }
 }

@@ -16,6 +16,7 @@ fn event(timestamp: i64, key: &str, user: &str) -> EventInput {
         os: Some("test".into()),
         idempotency_key: Some(key.into()),
         attributes: Attributes::new(),
+        ..Default::default()
     }
 }
 
@@ -35,12 +36,16 @@ async fn build_user_and_daily_rollups(database: &sea_orm::DatabaseConnection) {
             break;
         }
         for item in dirty {
-            assert!(user_rollup::recompute_claimed_day_user_set(database, &item)
-                .await
-                .unwrap());
-            assert!(rollups::recompute_claimed_day(database, item)
-                .await
-                .unwrap());
+            assert!(
+                user_rollup::recompute_claimed_day_user_set(database, &item)
+                    .await
+                    .unwrap()
+            );
+            assert!(
+                rollups::recompute_claimed_day(database, item)
+                    .await
+                    .unwrap()
+            );
         }
     }
 }
@@ -140,22 +145,37 @@ async fn monthly_trend_unions_users_across_days_and_preserves_partial_start() {
         .unwrap()
         .unwrap();
     assert_eq!(global.len(), 2);
-    assert_eq!((global[0].day.as_str(), global[0].events, global[0].users), ("2026-08", 2, 1));
-    assert_eq!((global[1].day.as_str(), global[1].events, global[1].users), ("2026-09", 2, 2));
+    assert_eq!(
+        (global[0].day.as_str(), global[0].events, global[0].users),
+        ("2026-08", 2, 1)
+    );
+    assert_eq!(
+        (global[1].day.as_str(), global[1].events, global[1].users),
+        ("2026-09", 2, 2)
+    );
 
-    let application = trends::application_daily_hybrid(
-        &database,
-        "app-a",
-        None,
-        Some(365),
-        Some(august),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let application =
+        trends::application_daily_hybrid(&database, "app-a", None, Some(365), Some(august))
+            .await
+            .unwrap()
+            .unwrap();
     assert_eq!(application.len(), 2);
-    assert_eq!((application[0].day.as_str(), application[0].events, application[0].users), ("2026-08", 1, 1));
-    assert_eq!((application[1].day.as_str(), application[1].events, application[1].users), ("2026-09", 2, 2));
+    assert_eq!(
+        (
+            application[0].day.as_str(),
+            application[0].events,
+            application[0].users
+        ),
+        ("2026-08", 1, 1)
+    );
+    assert_eq!(
+        (
+            application[1].day.as_str(),
+            application[1].events,
+            application[1].users
+        ),
+        ("2026-09", 2, 2)
+    );
 
     // Starting between the two August events excludes app-a's first event but keeps app-b's event.
     // The monthly projection must replace that partial day from raw data rather than use the whole
@@ -164,6 +184,12 @@ async fn monthly_trend_unions_users_across_days_and_preserves_partial_start() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!((partial[0].day.as_str(), partial[0].events, partial[0].users), ("2026-08", 1, 1));
-    assert_eq!((partial[1].day.as_str(), partial[1].events, partial[1].users), ("2026-09", 2, 2));
+    assert_eq!(
+        (partial[0].day.as_str(), partial[0].events, partial[0].users),
+        ("2026-08", 1, 1)
+    );
+    assert_eq!(
+        (partial[1].day.as_str(), partial[1].events, partial[1].users),
+        ("2026-09", 2, 2)
+    );
 }

@@ -122,8 +122,8 @@ pub async fn recompute_claimed_day_dimensions(
         return Ok(false);
     }
 
-    let environment_filter = (dirty.environment_id != GLOBAL_ENVIRONMENT)
-        .then_some(dirty.environment_id.as_str());
+    let environment_filter =
+        (dirty.environment_id != GLOBAL_ENVIRONMENT).then_some(dirty.environment_id.as_str());
     let delete = Query::delete()
         .from_table(Alias::new("telemetry_daily_dimensions"))
         .and_where(Expr::col(Alias::new("application_id")).eq(&dirty.application_id))
@@ -223,9 +223,7 @@ pub async fn event_dimension_timeline_hybrid(
     let since_day = since_ts.and_then(day_for_timestamp);
     let mut query = Query::select();
     query
-        .columns(
-            ["application_id", "day", "dimension_value", "count"].map(Alias::new),
-        )
+        .columns(["application_id", "day", "dimension_value", "count"].map(Alias::new))
         .from(Alias::new("telemetry_daily_dimensions"))
         .and_where(Expr::col(Alias::new("environment_id")).eq(rollup_environment))
         .and_where(Expr::col(Alias::new("dimension")).eq(dimension));
@@ -303,9 +301,7 @@ pub async fn event_dimension_timeline_hybrid(
         ));
     }
     for (app, day) in dirty {
-        values.retain(|(stored_app, stored_day, _), _| {
-            stored_app != &app || stored_day != &day
-        });
+        values.retain(|(stored_app, stored_day, _), _| stored_app != &app || stored_day != &day);
         for (_, value, count) in raw_dimension_counts(
             database,
             Some(&app),

@@ -39,13 +39,17 @@ async fn drain_daily_rollups(database: &sea_orm::DatabaseConnection) {
         }
         for item in dirty {
             if item.has_source(log_error_rollup::DIRTY_SOURCE_LOG_ERROR) {
-                assert!(log_error_rollup::recompute_claimed_day(database, &item)
-                    .await
-                    .unwrap());
+                assert!(
+                    log_error_rollup::recompute_claimed_day(database, &item)
+                        .await
+                        .unwrap()
+                );
             }
-            assert!(rollups::recompute_claimed_day(database, item)
-                .await
-                .unwrap());
+            assert!(
+                rollups::recompute_claimed_day(database, item)
+                    .await
+                    .unwrap()
+            );
         }
     }
 }
@@ -190,7 +194,7 @@ async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
             telemetry_count::RollupCountKind::ErrorLogs,
             Some(&scope.application_id),
             Some(&scope.environment_id),
-            Some(day1 + 2_500),
+            Some(day1 + 3_500),
             Some(day2 + 86_400_000),
         )
         .await

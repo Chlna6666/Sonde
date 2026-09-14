@@ -47,51 +47,18 @@ pub async fn query(
     days: Option<u32>,
 ) -> Result<ActivityStats, DbErr> {
     let now = chrono::Utc::now().timestamp_millis();
-    let active_millis = device_activity::total_active_millis(
-        database,
-        application_id,
-        environment_id,
-        since,
-    )
-    .await?;
-    let lifetime_active_millis = device_activity::total_active_millis(
-        database,
-        application_id,
-        environment_id,
-        None,
-    )
-    .await?;
-    let sessions = device_session::summary(
-        database,
-        application_id,
-        environment_id,
-        since,
-        None,
-    )
-    .await?;
-    let lifetime_sessions = device_session::summary(
-        database,
-        application_id,
-        environment_id,
-        None,
-        None,
-    )
-    .await?;
-    let active_devices = device_activity::unique_devices(
-        database,
-        application_id,
-        environment_id,
-        since,
-        None,
-    )
-    .await?;
-    let measured_devices = measured_devices(
-        database,
-        application_id,
-        environment_id,
-        since,
-    )
-    .await?;
+    let lifetime_active_millis =
+        device_activity::total_active_millis(database, application_id, environment_id, None)
+            .await?;
+    let sessions =
+        device_session::summary(database, application_id, environment_id, since, None).await?;
+    let lifetime_sessions =
+        device_session::summary(database, application_id, environment_id, None, None).await?;
+    let active_devices =
+        device_activity::unique_devices(database, application_id, environment_id, since, None)
+            .await?;
+    let measured_devices =
+        measured_devices(database, application_id, environment_id, since).await?;
     let dau = device_activity::unique_devices(
         database,
         application_id,
@@ -109,22 +76,11 @@ pub async fn query(
     )
     .await?;
 
-    let activity = device_activity::activity_timeline(
-        database,
-        application_id,
-        environment_id,
-        since,
-        days,
-    )
-    .await?;
-    let session_buckets = device_session::buckets(
-        database,
-        application_id,
-        environment_id,
-        since,
-        days,
-    )
-    .await?;
+    let activity =
+        device_activity::activity_timeline(database, application_id, environment_id, since, days)
+            .await?;
+    let session_buckets =
+        device_session::buckets(database, application_id, environment_id, since, days).await?;
 
     let mut buckets = BTreeMap::<String, ActivityTrendPoint>::new();
     for point in activity {
@@ -144,11 +100,7 @@ pub async fn query(
         );
     }
     for point in session_buckets {
-        let average_session_millis = if point.sessions == 0 {
-            0
-        } else {
-            point.active_millis / point.sessions
-        };
+        let average_session_millis = point.active_millis.checked_div(point.sessions).unwrap_or(0);
         buckets
             .entry(point.bucket.clone())
             .and_modify(|bucket| {
@@ -168,6 +120,14 @@ pub async fn query(
             });
     }
 
+    let total_trend_active_millis = buckets
+        .values()
+        .fold(0_u64, |sum, point| sum.saturating_add(point.active_millis));
+    let active_millis = if since.is_some() {
+        total_trend_active_millis
+    } else {
+        lifetime_active_millis
+    };
     let active_baseline = lifetime_active_millis.saturating_sub(active_millis);
     let session_baseline = lifetime_sessions
         .total_sessions
@@ -197,11 +157,9 @@ pub async fn query(
             measured_devices,
             measurement_coverage_pct: percentage(measured_devices, active_devices),
             average_session_millis: sessions.average_session_millis,
-            average_active_millis_per_device: if measured_devices == 0 {
-                0
-            } else {
-                active_millis / measured_devices
-            },
+            average_active_millis_per_device: active_millis
+                .checked_div(measured_devices)
+                .unwrap_or(0),
             stickiness_pct: percentage(dau, mau),
         },
         trend: buckets.into_values().collect(),

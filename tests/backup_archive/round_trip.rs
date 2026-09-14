@@ -24,8 +24,8 @@ const DERIVED_STATE_KEYS: &[&str] = &[
 ];
 
 #[tokio::test]
-async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth(
-) -> Result<(), Box<dyn Error>> {
+async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth()
+-> Result<(), Box<dyn Error>> {
     let source = database::connect("sqlite::memory:").await?;
     database::migrate(&source).await?;
     auth::create_super_admin(
@@ -175,9 +175,11 @@ async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth
     let applications = applications::list_applications(&target, None, true).await?;
     assert_eq!(applications.len(), 1);
     assert_eq!(applications[0].slug, "source-app");
-    assert!(auth::user_by_email(&target, "target@example.test")
-        .await?
-        .is_none());
+    assert!(
+        auth::user_by_email(&target, "target@example.test")
+            .await?
+            .is_none()
+    );
     let restored_user = auth::user_by_email(&target, "source@example.test")
         .await?
         .ok_or_else(|| io::Error::other("restored user missing"))?;
@@ -323,13 +325,8 @@ async fn corrupted_backup_is_rejected_before_target_is_modified() -> Result<(), 
     let target_user = auth::user_by_email(&target, "target@example.test")
         .await?
         .ok_or_else(|| io::Error::other("target user missing"))?;
-    let _ = applications::create_application(
-        &target,
-        "Keep Me",
-        "keep-me",
-        Some(&target_user.id),
-    )
-    .await?;
+    let _ = applications::create_application(&target, "Keep Me", "keep-me", Some(&target_user.id))
+        .await?;
 
     let result = backup_restore::restore_full_system_exact(&target, corrupt.path()).await;
     assert!(result.is_err());
@@ -337,9 +334,11 @@ async fn corrupted_backup_is_rejected_before_target_is_modified() -> Result<(), 
     let applications = applications::list_applications(&target, None, true).await?;
     assert_eq!(applications.len(), 1);
     assert_eq!(applications[0].slug, "keep-me");
-    assert!(auth::user_by_email(&target, "target@example.test")
-        .await?
-        .is_some());
+    assert!(
+        auth::user_by_email(&target, "target@example.test")
+            .await?
+            .is_some()
+    );
     Ok(())
 }
 

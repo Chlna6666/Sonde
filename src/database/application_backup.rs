@@ -278,7 +278,9 @@ fn validate_histogram(histogram: &HistogramBackup) -> Result<(), DbErr> {
         .chain(histogram.max)
     {
         if !value.is_finite() {
-            return Err(DbErr::Custom("histogram contains a non-finite value".into()));
+            return Err(DbErr::Custom(
+                "histogram contains a non-finite value".into(),
+            ));
         }
     }
     if histogram

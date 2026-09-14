@@ -68,10 +68,14 @@ async fn insert_batch_inner(
         return Ok(0);
     }
     if columns.is_empty() {
-        return Err(DbErr::Custom("batch insert requires at least one column".into()));
+        return Err(DbErr::Custom(
+            "batch insert requires at least one column".into(),
+        ));
     }
     if rows.iter().any(|row| row.len() != columns.len()) {
-        return Err(DbErr::Custom("batch insert column/value count mismatch".into()));
+        return Err(DbErr::Custom(
+            "batch insert column/value count mismatch".into(),
+        ));
     }
 
     let rows_per_statement = std::cmp::max(SAFE_MAX_BIND_PARAMS / columns.len(), 1);
@@ -124,9 +128,21 @@ pub async fn execute_delete(
     Ok(database.execute(&query).await?.rows_affected())
 }
 
+pub fn contains_like_pattern(value: &str) -> String {
+    let mut pattern = String::with_capacity(value.len() + 2);
+    pattern.push('%');
+    for character in value.chars() {
+        if !matches!(character, '%' | '_' | '\\') {
+            pattern.push(character);
+        }
+    }
+    pattern.push('%');
+    pattern
+}
+
 #[cfg(test)]
 mod tests {
-    use super::SAFE_MAX_BIND_PARAMS;
+    use super::{SAFE_MAX_BIND_PARAMS, contains_like_pattern};
 
     #[test]
     fn bind_budget_handles_wide_event_rows() {
@@ -134,5 +150,11 @@ mod tests {
         let rows = (SAFE_MAX_BIND_PARAMS / event_columns).max(1);
         assert!(rows * event_columns <= SAFE_MAX_BIND_PARAMS);
         assert!(rows >= 1);
+    }
+
+    #[test]
+    fn like_pattern_strips_wildcards() {
+        assert_eq!(contains_like_pattern("win%_\\dows"), "%windows%");
+        assert_eq!(contains_like_pattern("linux"), "%linux%");
     }
 }

@@ -70,10 +70,7 @@ struct BackfillDay {
     day: String,
 }
 
-pub async fn run_backfill_batch(
-    database: &DatabaseConnection,
-    limit: u64,
-) -> Result<usize, DbErr> {
+pub async fn run_backfill_batch(database: &DatabaseConnection, limit: u64) -> Result<usize, DbErr> {
     let state = ensure_backfill_seeded(database).await?;
     match state {
         BackfillState::Seeding(epoch) => {
@@ -167,7 +164,12 @@ pub async fn refresh_dirty_day(
     .await?;
     delete_pending_day(
         &transaction,
-        &backfill_day_id(&epoch, &dirty.application_id, &dirty.environment_id, &dirty.day),
+        &backfill_day_id(
+            &epoch,
+            &dirty.application_id,
+            &dirty.environment_id,
+            &dirty.day,
+        ),
     )
     .await?;
     transaction.commit().await?;
@@ -394,9 +396,7 @@ async fn seed_backfill_days_batch(
     Ok(scope_days.len())
 }
 
-async fn read_seed_cursor(
-    database: &impl ConnectionTrait,
-) -> Result<Option<SeedCursor>, DbErr> {
+async fn read_seed_cursor(database: &impl ConnectionTrait) -> Result<Option<SeedCursor>, DbErr> {
     let query = Query::select()
         .column(Alias::new("value"))
         .from(Alias::new("system_state"))
@@ -419,16 +419,20 @@ async fn write_seed_cursor(
     database: &impl ConnectionTrait,
     cursor: &SeedCursor,
 ) -> Result<(), DbErr> {
-    let value = serde_json::to_string(cursor)
-        .map_err(|error| DbErr::Custom(format!("failed to encode first-seen seed cursor: {error}")))?;
+    let value = serde_json::to_string(cursor).map_err(|error| {
+        DbErr::Custom(format!("failed to encode first-seen seed cursor: {error}"))
+    })?;
     let mut query = Query::insert();
     query
         .into_table(Alias::new("system_state"))
         .columns([Alias::new("key"), Alias::new("value")])
         .values(
-            [Value::from(BACKFILL_CURSOR_KEY.to_owned()), Value::from(value)]
-                .into_iter()
-                .map(Expr::value),
+            [
+                Value::from(BACKFILL_CURSOR_KEY.to_owned()),
+                Value::from(value),
+            ]
+            .into_iter()
+            .map(Expr::value),
         )
         .map_err(|error| DbErr::Custom(error.to_string()))?
         .on_conflict(
@@ -607,13 +611,14 @@ async fn recompute_scope_day(
             let update = Query::update()
                 .table(Alias::new("telemetry_user_first_seen"))
                 .value(Alias::new("first_seen_at"), candidate.first_seen_at)
-                .value(Alias::new("first_seen_day"), candidate.first_seen_day.clone())
+                .value(
+                    Alias::new("first_seen_day"),
+                    candidate.first_seen_day.clone(),
+                )
                 .value(Alias::new("updated_at"), now)
                 .and_where(Expr::col(Alias::new("id")).eq(id))
                 .and_where(Expr::col(Alias::new("epoch")).eq(epoch))
-                .and_where(
-                    Expr::col(Alias::new("first_seen_at")).gt(candidate.first_seen_at),
-                )
+                .and_where(Expr::col(Alias::new("first_seen_at")).gt(candidate.first_seen_at))
                 .to_owned();
             database.execute(&update).await?;
         }
@@ -766,10 +771,7 @@ async fn backfill_epoch_is_current(
         .is_some_and(|state| state.epoch() == epoch))
 }
 
-async fn has_pending_backfill(
-    database: &DatabaseConnection,
-    epoch: &str,
-) -> Result<bool, DbErr> {
+async fn has_pending_backfill(database: &DatabaseConnection, epoch: &str) -> Result<bool, DbErr> {
     has_pending_backfill_on(database, epoch).await
 }
 
@@ -836,10 +838,7 @@ async fn cleanup_other_epochs_batch(
     Ok(deleted)
 }
 
-async fn delete_pending_day(
-    database: &impl ConnectionTrait,
-    id: &str,
-) -> Result<(), DbErr> {
+async fn delete_pending_day(database: &impl ConnectionTrait, id: &str) -> Result<(), DbErr> {
     let delete = Query::delete()
         .from_table(Alias::new("telemetry_first_seen_backfill_days"))
         .and_where(Expr::col(Alias::new("id")).eq(id))

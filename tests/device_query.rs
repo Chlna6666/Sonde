@@ -1,7 +1,8 @@
 #![allow(clippy::unwrap_used)]
 
+mod common;
+
 use sonde::database::{
-    self,
     device_query::{self, DeviceProfileFilter},
     device_state::{self, DeviceObservation, DeviceTelemetryKind, TimedDimension},
     telemetry::TelemetryScope,
@@ -30,8 +31,7 @@ fn observation(received_at: i64, os: &str) -> DeviceObservation {
 
 #[tokio::test]
 async fn query_filters_device_risk_and_scope() -> Result<(), Box<dyn std::error::Error>> {
-    let database = database::connect("sqlite::memory:").await?;
-    database::migrate(&database).await?;
+    let database = common::memory_database().await;
     let scope = TelemetryScope {
         application_id: "app-security-query".into(),
         environment_id: "env-production".into(),
@@ -42,13 +42,7 @@ async fn query_filters_device_risk_and_scope() -> Result<(), Box<dyn std::error:
 
     device_state::observe(&database, &scope, low, &observation(now, "windows")).await?;
     device_state::observe(&database, &scope, risky, &observation(now, "windows")).await?;
-    device_state::observe(
-        &database,
-        &scope,
-        risky,
-        &observation(now + 1_000, "linux"),
-    )
-    .await?;
+    device_state::observe(&database, &scope, risky, &observation(now + 1_000, "linux")).await?;
 
     let page = device_query::list_profiles(
         &database,

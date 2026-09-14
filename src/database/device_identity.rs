@@ -12,10 +12,11 @@ pub fn scoped_hash(scope: &TelemetryScope, value: &str) -> String {
 }
 
 pub fn scoped_hash_parts(application_id: &str, environment_id: &str, value: &str) -> String {
-    let salt = format!("{application_id}:{environment_id}");
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
-    hasher.update(salt.as_bytes());
+    hasher.update(application_id.as_bytes());
+    hasher.update(b":");
+    hasher.update(environment_id.as_bytes());
     hex::encode(hasher.finalize())
 }
 
@@ -29,5 +30,10 @@ mod tests {
         let two = scoped_hash_parts("app-b", "prod", "source-device");
         assert_eq!(one.len(), 64);
         assert_ne!(one, two);
+        assert_eq!(
+            one,
+            scoped_hash_parts("app-a", "prod", "source-device"),
+            "scoped hash must be stable"
+        );
     }
 }

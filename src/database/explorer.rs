@@ -3,7 +3,7 @@ use sea_orm::{
     sea_query::{Alias, Expr, ExprTrait, Order, Query},
 };
 use serde::Serialize;
-use serde_json::Value as JsonValue;
+use serde_json::value::RawValue;
 
 #[derive(Debug, Clone)]
 pub struct ExplorerFilter {
@@ -37,7 +37,7 @@ pub struct EventRecord {
     pub app_version: Option<String>,
     pub launcher_version: Option<String>,
     pub os: Option<String>,
-    pub attributes: JsonValue,
+    pub attributes: Box<RawValue>,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,7 +52,7 @@ pub struct MetricRecord {
     pub histogram: Option<HistogramRecord>,
     pub unit: Option<String>,
     pub timestamp: i64,
-    pub attributes: JsonValue,
+    pub attributes: Box<RawValue>,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,7 +76,7 @@ pub struct LogRecord {
     pub trace_id: Option<String>,
     pub span_id: Option<String>,
     pub timestamp: i64,
-    pub attributes: JsonValue,
+    pub attributes: Box<RawValue>,
 }
 
 pub async fn events(
@@ -109,7 +109,7 @@ pub async fn events(
             app_version: row.try_get("", "app_version")?,
             launcher_version: row.try_get("", "launcher_version")?,
             os: row.try_get("", "os")?,
-            attributes: decode_json(row.try_get("", "attributes")?, "event attributes")?,
+            attributes: decode_raw_json(row.try_get("", "attributes")?, "event attributes")?,
         })
     })
     .await
@@ -150,7 +150,7 @@ pub async fn metrics(
             histogram: decode_histogram(&row)?,
             unit: row.try_get("", "unit")?,
             timestamp: row.try_get("", "timestamp")?,
-            attributes: decode_json(row.try_get("", "attributes")?, "metric attributes")?,
+            attributes: decode_raw_json(row.try_get("", "attributes")?, "metric attributes")?,
         })
     })
     .await
@@ -186,7 +186,7 @@ pub async fn logs(
             trace_id: row.try_get("", "trace_id")?,
             span_id: row.try_get("", "span_id")?,
             timestamp: row.try_get("", "timestamp")?,
-            attributes: decode_json(row.try_get("", "attributes")?, "log attributes")?,
+            attributes: decode_raw_json(row.try_get("", "attributes")?, "log attributes")?,
         })
     })
     .await
@@ -241,8 +241,8 @@ where
         .map_err(|error| DbErr::Custom(format!("invalid {column} JSON: {error}")))
 }
 
-fn decode_json(value: String, field: &str) -> Result<JsonValue, DbErr> {
-    serde_json::from_str(&value)
+fn decode_raw_json(value: String, field: &str) -> Result<Box<RawValue>, DbErr> {
+    RawValue::from_string(value)
         .map_err(|error| DbErr::Custom(format!("invalid stored {field} JSON: {error}")))
 }
 
@@ -271,8 +271,9 @@ fn apply_filter(
     if let Some(value) = &filter.text {
         select.and_where(
             Expr::col(Alias::new(searchable_column))
-                .like(format!("%{}%", escape_like(value)))
-                .or(Expr::col(Alias::new("attributes")).like(format!("%{}%", escape_like(value)))),
+                .like(crate::database::query::contains_like_pattern(value))
+                .or(Expr::col(Alias::new("attributes"))
+                    .like(crate::database::query::contains_like_pattern(value))),
         );
     }
 }
@@ -304,8 +305,4 @@ where
         page_size: filter.page_size,
         has_more,
     })
-}
-
-fn escape_like(value: &str) -> String {
-    value.replace('%', "\\%").replace('_', "\\_")
 }

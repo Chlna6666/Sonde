@@ -114,7 +114,10 @@ fn spawn_retention_worker(database: DatabaseConnection) {
             .await
             {
                 Ok(Some(report)) => {
-                    info!(apps = report.apps_processed, "leased retention sweep completed");
+                    info!(
+                        apps = report.apps_processed,
+                        "leased retention sweep completed"
+                    );
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -131,12 +134,9 @@ async fn run_retention_cycle(
     let report = retention::run_retention_sweep(database).await?;
     let now = chrono::Utc::now().timestamp_millis();
     let cutoff = now.saturating_sub(ALERT_DELIVERY_HISTORY_RETENTION_MILLIS);
-    let pruned = alert_delivery::prune_terminal_before(
-        database,
-        cutoff,
-        ALERT_DELIVERY_HISTORY_PRUNE_MAX,
-    )
-    .await?;
+    let pruned =
+        alert_delivery::prune_terminal_before(database, cutoff, ALERT_DELIVERY_HISTORY_PRUNE_MAX)
+            .await?;
     if pruned > 0 {
         info!(pruned, "pruned terminal alert delivery history");
     }
@@ -144,7 +144,10 @@ async fn run_retention_cycle(
     let risk_cutoff = now.saturating_sub(DEVICE_RISK_DECAY_QUIET_MILLIS);
     let decayed = device_risk::decay_scores(database, risk_cutoff).await?;
     if decayed > 0 {
-        info!(devices = decayed, "decayed device abuse risk after quiet period");
+        info!(
+            devices = decayed,
+            "decayed device abuse risk after quiet period"
+        );
     }
     Ok(report)
 }

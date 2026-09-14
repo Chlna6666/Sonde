@@ -47,7 +47,12 @@ impl MigrationTrait for FirstSeenIndex {
             manager,
             "idx_user_first_seen_scope_time",
             "telemetry_user_first_seen",
-            &["scope_kind", "application_id", "environment_id", "first_seen_at"],
+            &[
+                "scope_kind",
+                "application_id",
+                "environment_id",
+                "first_seen_at",
+            ],
             false,
         )
         .await?;

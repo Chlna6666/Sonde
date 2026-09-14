@@ -1,6 +1,6 @@
-use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, DbErr};
+use sea_orm::{DatabaseConnection, DbBackend, DbErr};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 
 use crate::{
@@ -202,22 +202,24 @@ fn spawn_lane<T, F, Fut>(
                 }
             }
 
-            let mut groups: HashMap<(String, String), WriteGroup<T>> = HashMap::new();
+            let mut groups: Vec<WriteGroup<T>> = Vec::new();
             for mut request in pending {
-                let key = (
-                    request.scope.application_id.clone(),
-                    request.scope.environment_id.clone(),
-                );
-                let group = groups.entry(key).or_insert_with(|| WriteGroup {
-                    scope: request.scope,
-                    items: Vec::new(),
-                    responses: Vec::new(),
-                });
-                group.items.append(&mut request.items);
-                group.responses.push(request.response);
+                if let Some(group) = groups.iter_mut().find(|group| {
+                    group.scope.application_id == request.scope.application_id
+                        && group.scope.environment_id == request.scope.environment_id
+                }) {
+                    group.items.append(&mut request.items);
+                    group.responses.push(request.response);
+                } else {
+                    groups.push(WriteGroup {
+                        scope: request.scope,
+                        items: std::mem::take(&mut request.items),
+                        responses: vec![request.response],
+                    });
+                }
             }
 
-            for (_, group) in groups {
+            for group in groups {
                 let permit = match write_gate.acquire().await {
                     Ok(permit) => permit,
                     Err(_) => {
@@ -248,7 +250,7 @@ mod tests {
 
     #[test]
     fn writer_limits_are_bounded() {
-        assert!(QUEUE_CAPACITY >= MAX_BATCH_REQUESTS);
-        assert!(MAX_BATCH_ITEMS >= MAX_BATCH_REQUESTS);
+        const { assert!(QUEUE_CAPACITY >= MAX_BATCH_REQUESTS) };
+        const { assert!(MAX_BATCH_ITEMS >= MAX_BATCH_REQUESTS) };
     }
 }

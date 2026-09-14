@@ -39,9 +39,7 @@ pub fn timeline(points: &[DimensionDayCount], bucket_expr: &str) -> Vec<VersionB
                 .values()
                 .fold(0_u64, |sum, count| sum.saturating_add(*count));
             let mut versions = versions.into_iter().collect::<Vec<_>>();
-            versions.sort_by(|left, right| {
-                right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0))
-            });
+            versions.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
             VersionBucket {
                 bucket,
                 total,
@@ -70,9 +68,7 @@ pub fn top_series(points: &[DimensionDayCount], bucket_expr: &str) -> Vec<Versio
 
     let all_buckets = buckets.keys().cloned().collect::<Vec<_>>();
     let mut top_versions = totals.into_iter().collect::<Vec<_>>();
-    top_versions.sort_by(|left, right| {
-        right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0))
-    });
+    top_versions.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
     top_versions.truncate(8);
 
     top_versions

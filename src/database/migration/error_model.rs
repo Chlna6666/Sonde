@@ -1,7 +1,8 @@
 use sea_orm_migration::prelude::*;
 
 use super::columns::{
-    bigint, create_index, create_table, nullable_bigint, nullable_string, nullable_text, string, text,
+    bigint, create_index, create_table, nullable_bigint, nullable_string, nullable_text, string,
+    text,
 };
 
 pub(super) struct ErrorTelemetryModel;
@@ -93,7 +94,12 @@ impl MigrationTrait for ErrorTelemetryModel {
             manager,
             "idx_error_occurrences_scope_user_time",
             "error_occurrences",
-            &["application_id", "environment_id", "anonymous_id", "timestamp"],
+            &[
+                "application_id",
+                "environment_id",
+                "anonymous_id",
+                "timestamp",
+            ],
             false,
         )
         .await

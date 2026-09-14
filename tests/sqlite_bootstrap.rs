@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used)]
 
+mod common;
+
 use sha2::Digest;
 use sonde::{
     auth,
@@ -8,12 +10,7 @@ use sonde::{
 
 #[tokio::test]
 async fn sqlite_migration_and_super_admin_creation_are_usable() {
-    let database = database::connect("sqlite::memory:")
-        .await
-        .expect("in-memory SQLite should connect");
-    database::migrate(&database)
-        .await
-        .expect("schema migration should complete");
+    let database = common::memory_database().await;
     let password_hash = auth::hash_password("Orbit-lantern-27-river", b"test-pepper")
         .expect("test password should hash");
     auth_store::create_super_admin(
@@ -66,12 +63,7 @@ async fn sqlite_migration_and_super_admin_creation_are_usable() {
 
 #[tokio::test]
 async fn application_management_and_api_keys_and_stats() {
-    let database = database::connect("sqlite::memory:")
-        .await
-        .expect("in-memory SQLite should connect");
-    database::migrate(&database)
-        .await
-        .expect("schema migration should complete");
+    let database = common::memory_database().await;
 
     let (app_id, env_id) =
         database::applications::create_application(&database, "Demo App", "demo-app", None)
@@ -157,10 +149,9 @@ async fn application_management_and_api_keys_and_stats() {
     assert_eq!(keys_after_del.len(), 1);
     assert_eq!(keys_after_del[0].id, key_id);
 
-    let deleted_revoked_count =
-        database::applications::delete_revoked_api_keys(&database, &app_id)
-            .await
-            .expect("delete revoked keys should succeed");
+    let deleted_revoked_count = database::applications::delete_revoked_api_keys(&database, &app_id)
+        .await
+        .expect("delete revoked keys should succeed");
     assert_eq!(deleted_revoked_count, 1);
 
     let keys_after_clear_revoked = database::applications::list_api_keys(&database, &app_id)
@@ -185,10 +176,11 @@ async fn application_management_and_api_keys_and_stats() {
         .expect("application stats query should succeed");
     assert_eq!(stats.overview.total_events, 0);
 
-    let export_payload = database::application_backup::export_single_application(&database, &app_id)
-        .await
-        .expect("export should succeed")
-        .expect("application export payload should exist");
+    let export_payload =
+        database::application_backup::export_single_application(&database, &app_id)
+            .await
+            .expect("export should succeed")
+            .expect("application export payload should exist");
     assert_eq!(export_payload.application.name, "Demo App Renamed");
     assert_eq!(export_payload.api_keys.len(), 1);
     assert_eq!(
@@ -196,13 +188,10 @@ async fn application_management_and_api_keys_and_stats() {
         database::application_backup::FORMAT_VERSION
     );
 
-    let imported_app_id = database::application_backup::import_single_application(
-        &database,
-        None,
-        export_payload,
-    )
-    .await
-    .expect("import single application should succeed");
+    let imported_app_id =
+        database::application_backup::import_single_application(&database, None, export_payload)
+            .await
+            .expect("import single application should succeed");
     let apps_after_import = database::applications::list_applications(&database, None, true)
         .await
         .expect("list apps should succeed");

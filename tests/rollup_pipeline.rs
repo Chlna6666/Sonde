@@ -16,6 +16,7 @@ fn event(timestamp: i64, idempotency_key: &str) -> EventInput {
         os: Some("test".into()),
         idempotency_key: Some(idempotency_key.into()),
         attributes: Attributes::new(),
+        ..Default::default()
     }
 }
 
@@ -47,9 +48,11 @@ async fn rollup_tracks_committed_ingest_and_dirty_raw_fallback() {
         .into_iter()
         .find(|item| item.application_id == "app-a" && item.environment_id == "prod")
         .unwrap();
-    assert!(rollups::recompute_claimed_day(&database, environment_dirty)
-        .await
-        .unwrap());
+    assert!(
+        rollups::recompute_claimed_day(&database, environment_dirty)
+            .await
+            .unwrap()
+    );
 
     let initial = rollups::application_event_trend_hybrid(&database, "app-a", Some("prod"), &day)
         .await

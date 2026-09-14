@@ -42,10 +42,7 @@ impl MigrationTrait for MetricHistogramRepair {
             }
             let update = Query::update()
                 .table(Alias::new("metric_points"))
-                .value(
-                    Alias::new("histogram_bucket_counts"),
-                    format!("[{count}]"),
-                )
+                .value(Alias::new("histogram_bucket_counts"), format!("[{count}]"))
                 .and_where(Expr::col(Alias::new("id")).eq(id))
                 .to_owned();
             manager.get_connection().execute(&update).await?;

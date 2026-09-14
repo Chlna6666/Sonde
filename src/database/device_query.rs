@@ -67,10 +67,7 @@ pub async fn list_profiles(
     let condition = build_condition(filter);
     let total = count_with_condition(database, condition.clone()).await?;
     let page_size = std::cmp::max(filter.page_size, 1);
-    let offset = filter
-        .page
-        .saturating_sub(1)
-        .saturating_mul(page_size);
+    let offset = filter.page.saturating_sub(1).saturating_mul(page_size);
 
     let query = Query::select()
         .columns(
@@ -158,7 +155,8 @@ pub async fn security_summary(
     let total = count_with_condition(database, base.clone()).await?;
     let active = count_with_condition(
         database,
-        base.clone().add(Expr::col(Alias::new("last_seen_at")).gte(active_since)),
+        base.clone()
+            .add(Expr::col(Alias::new("last_seen_at")).gte(active_since)),
     )
     .await?;
     let recent = count_with_condition(
@@ -170,12 +168,14 @@ pub async fn security_summary(
     .await?;
     let offline = count_with_condition(
         database,
-        base.clone().add(Expr::col(Alias::new("last_seen_at")).lt(recent_since)),
+        base.clone()
+            .add(Expr::col(Alias::new("last_seen_at")).lt(recent_since)),
     )
     .await?;
     let high_risk = count_with_condition(
         database,
-        base.clone().add(Expr::col(Alias::new("risk_score")).gte(50)),
+        base.clone()
+            .add(Expr::col(Alias::new("risk_score")).gte(50)),
     )
     .await?;
     let critical = count_with_condition(
@@ -209,7 +209,7 @@ fn build_condition(filter: &DeviceProfileFilter<'_>) -> Condition {
         condition = condition.add(Expr::col(Alias::new("risk_score")).lte(value));
     }
     if let Some(search) = filter.search.filter(|value| !value.is_empty()) {
-        let pattern = format!("%{search}%");
+        let pattern = crate::database::query::contains_like_pattern(search);
         condition = condition.add(
             Condition::any()
                 .add(Expr::col(Alias::new("device_hash")).like(pattern.clone()))
@@ -225,8 +225,8 @@ fn build_condition(filter: &DeviceProfileFilter<'_>) -> Condition {
 }
 
 fn scope_condition(application_id: &str, environment_id: Option<&str>) -> Condition {
-    let mut condition = Condition::all()
-        .add(Expr::col(Alias::new("application_id")).eq(application_id));
+    let mut condition =
+        Condition::all().add(Expr::col(Alias::new("application_id")).eq(application_id));
     if let Some(environment_id) = environment_id {
         condition = condition.add(Expr::col(Alias::new("environment_id")).eq(environment_id));
     }
@@ -238,7 +238,10 @@ async fn count_with_condition(
     condition: Condition,
 ) -> Result<u64, DbErr> {
     let query = Query::select()
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("count"))
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("count"),
+        )
         .from(Alias::new("telemetry_devices"))
         .cond_where(condition)
         .to_owned();

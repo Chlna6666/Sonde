@@ -114,7 +114,10 @@ pub async fn summary(
 ) -> Result<SessionSummary, DbErr> {
     let mut query = Query::select();
     query
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("sessions"))
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("sessions"),
+        )
         .expr_as(
             Expr::cust(sum_active_millis_expr(database.get_database_backend())?),
             Alias::new("active_millis"),
@@ -132,17 +135,11 @@ pub async fn summary(
         return Ok(SessionSummary::default());
     };
     let total_sessions = nonnegative(row.try_get::<i64>("", "sessions").unwrap_or(0));
-    let total_active_millis = nonnegative(
-        row.try_get::<i64>("", "active_millis").unwrap_or(0),
-    );
+    let total_active_millis = nonnegative(row.try_get::<i64>("", "active_millis").unwrap_or(0));
     Ok(SessionSummary {
         total_sessions,
         total_active_millis,
-        average_session_millis: if total_sessions == 0 {
-            0
-        } else {
-            total_active_millis / total_sessions
-        },
+        average_session_millis: total_active_millis.checked_div(total_sessions).unwrap_or(0),
     })
 }
 
@@ -162,7 +159,10 @@ pub async fn buckets(
     let mut query = Query::select();
     query
         .expr_as(Expr::cust(bucket_expr), Alias::new("bucket"))
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("sessions"))
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("sessions"),
+        )
         .expr_as(
             Expr::cust(sum_active_millis_expr(database.get_database_backend())?),
             Alias::new("active_millis"),
@@ -183,9 +183,7 @@ pub async fn buckets(
             Ok(SessionBucket {
                 bucket: row.try_get("", "bucket")?,
                 sessions: nonnegative(row.try_get::<i64>("", "sessions").unwrap_or(0)),
-                active_millis: nonnegative(
-                    row.try_get::<i64>("", "active_millis").unwrap_or(0),
-                ),
+                active_millis: nonnegative(row.try_get::<i64>("", "active_millis").unwrap_or(0)),
             })
         })
         .collect()
@@ -199,7 +197,10 @@ pub async fn sessions_before(
 ) -> Result<u64, DbErr> {
     let mut query = Query::select();
     query
-        .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("count"))
+        .expr_as(
+            Func::count(Expr::col(Alias::new("id"))),
+            Alias::new("count"),
+        )
         .from(Alias::new("telemetry_device_sessions"))
         .and_where(Expr::col(Alias::new("started_at")).lt(before));
     apply_scope(&mut query, application_id, environment_id);

@@ -211,7 +211,11 @@ async fn replace_dirty_days(
         Alias::new("total"),
     )
     .from(Alias::new(kind.raw_table()))
-    .and_where(day_expression.clone().is_in(dirty_days.iter().map(String::as_str)))
+    .and_where(
+        day_expression
+            .clone()
+            .is_in(dirty_days.iter().map(String::as_str)),
+    )
     .expr_as(day_expression, Alias::new("day"))
     .group_by_col(Alias::new("day"));
     if let Some(application_id) = application_id {

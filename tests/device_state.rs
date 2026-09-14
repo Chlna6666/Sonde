@@ -126,9 +126,7 @@ async fn device_profile_is_server_owned_and_monotonic() -> Result<(), Box<dyn st
     let row = database
         .query_one(
             &Query::select()
-                .columns(
-                    ["last_os", "os_changes", "risk_score", "last_anomaly"].map(Alias::new),
-                )
+                .columns(["last_os", "os_changes", "risk_score", "last_anomaly"].map(Alias::new))
                 .from(Alias::new("telemetry_devices"))
                 .and_where(Expr::col(Alias::new("id")).eq(device_hash))
                 .limit(1)

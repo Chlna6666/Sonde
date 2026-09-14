@@ -47,7 +47,8 @@ pub async fn reset_after_full_restore(database: &DatabaseConnection) -> Result<u
     database.execute(&reset_sessions).await?;
 
     let base_days = rollups::seed_historical_dirty_days_once(database).await?;
-    let dimension_days = dimension_rollup::seed_historical_dimension_dirty_days_once(database).await?;
+    let dimension_days =
+        dimension_rollup::seed_historical_dimension_dirty_days_once(database).await?;
     let user_days = user_rollup::seed_historical_user_dirty_days_once(database).await?;
     let log_error_days = log_error_rollup::seed_historical_dirty_days_once(database).await?;
     Ok([base_days, dimension_days, user_days, log_error_days]

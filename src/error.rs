@@ -5,7 +5,9 @@ use thiserror::Error;
 pub enum AppError {
     #[error("authentication required")]
     Unauthorized,
-    #[error("device-bound ingest token required; exchange the API key at /api/v1/ingest/token first")]
+    #[error(
+        "device-bound ingest token required; exchange the API key at /api/v1/ingest/token first"
+    )]
     IngestTokenRequired,
     #[error("permission denied")]
     Forbidden,

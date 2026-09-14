@@ -1,10 +1,8 @@
-use std::collections::BTreeMap;
-
 use serde::Serialize;
 
 use crate::{
     database::{device_history, device_identity, imports, telemetry},
-    domain::telemetry::EventInput,
+    domain::telemetry::{Attributes, EventInput},
     error::AppError,
     services::authentication::AuthenticatedUser,
     state::InstalledState,
@@ -92,9 +90,10 @@ pub(super) async fn import_rows(
         let source_device_id = row.user_hash.clone();
         let device_hash = device_identity::scoped_hash(scope, &source_device_id);
         let dedupe_key = format!("d1:{application_id}:{}:{}", row.day, row.user_hash);
-        let mut event = migrated_event(row);
+        let mut event = migrated_event(row)?;
         event.anonymous_id = Some(device_hash.clone());
-        if telemetry::insert_migrated_event(&installed.database, scope, &event, &dedupe_key).await? {
+        if telemetry::insert_migrated_event(&installed.database, scope, &event, &dedupe_key).await?
+        {
             inserted += 1;
         } else {
             deduped += 1;
@@ -108,8 +107,8 @@ pub(super) async fn import_rows(
     Ok((inserted, deduped))
 }
 
-fn migrated_event(row: super::parser::D1EventRow) -> EventInput {
-    let mut attributes = BTreeMap::new();
+fn migrated_event(row: super::parser::D1EventRow) -> Result<EventInput, AppError> {
+    let mut attributes = crate::domain::telemetry::AttributeMap::new();
     attributes.insert(
         "migration.source_day".into(),
         serde_json::Value::String(row.day),
@@ -128,7 +127,9 @@ fn migrated_event(row: super::parser::D1EventRow) -> EventInput {
             serde_json::Value::String(key_id),
         );
     }
-    EventInput {
+    let attributes = Attributes::from_map(attributes)
+        .map_err(|error| AppError::internal("encode migrated event attributes", error))?;
+    Ok(EventInput {
         name: "migration.application_start".into(),
         timestamp: Some(row.ts),
         anonymous_id: Some(row.user_hash),
@@ -136,7 +137,9 @@ fn migrated_event(row: super::parser::D1EventRow) -> EventInput {
         app_version: row.app_version,
         launcher_version: row.launcher_version,
         os: row.os,
+        system_language: None,
+        architecture: None,
         idempotency_key: None,
         attributes,
-    }
+    })
 }

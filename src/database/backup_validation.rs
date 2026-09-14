@@ -61,8 +61,6 @@ pub async fn validate_backup_file_semantics(path: &Path) -> Result<(), BackupErr
                     if last_id.as_deref() == Some(id) {
                         return invalid("backup contains a duplicate record id within one table");
                     }
-                } else {
-                    last_id = None;
                 }
             }
             last_table_order = Some(table_order);

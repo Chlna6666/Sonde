@@ -76,7 +76,10 @@ where
     if source_mask <= 0 || source_mask & !DIRTY_SOURCE_VALID != 0 {
         return Err(DbErr::Custom("invalid telemetry dirty source mask".into()));
     }
-    let days: BTreeSet<String> = timestamps.into_iter().filter_map(day_for_timestamp).collect();
+    let days: BTreeSet<String> = timestamps
+        .into_iter()
+        .filter_map(day_for_timestamp)
+        .collect();
     mark_dirty_days(database, scope, source_mask, days).await
 }
 
@@ -219,8 +222,8 @@ pub async fn recompute_claimed_day(
     }
 
     let (start, end) = day_bounds(&dirty.day)?;
-    let environment = (dirty.environment_id != GLOBAL_ENVIRONMENT)
-        .then_some(dirty.environment_id.as_str());
+    let environment =
+        (dirty.environment_id != GLOBAL_ENVIRONMENT).then_some(dirty.environment_id.as_str());
     let mut counts = if dirty.source_mask == DIRTY_SOURCE_ALL {
         (0, 0, 0, 0, 0)
     } else {
@@ -234,13 +237,8 @@ pub async fn recompute_claimed_day(
     };
 
     if dirty.has_source(DIRTY_SOURCE_EVENT) {
-        (counts.0, counts.1) = event_counts(
-            &transaction,
-            &dirty.application_id,
-            environment,
-            &dirty.day,
-        )
-        .await?;
+        (counts.0, counts.1) =
+            event_counts(&transaction, &dirty.application_id, environment, &dirty.day).await?;
     }
     if dirty.has_source(DIRTY_SOURCE_METRIC) {
         counts.2 = time_count(
@@ -326,6 +324,7 @@ async fn existing_rollup_counts(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upsert_rollup(
     database: &impl ConnectionTrait,
     application_id: &str,
@@ -375,8 +374,7 @@ async fn upsert_rollup(
         .on_conflict(
             OnConflict::column(Alias::new("id"))
                 .update_columns(
-                    ["events", "users", "metrics", "logs", "errors", "updated_at"]
-                        .map(Alias::new),
+                    ["events", "users", "metrics", "logs", "errors", "updated_at"].map(Alias::new),
                 )
                 .to_owned(),
         );
@@ -483,9 +481,7 @@ pub async fn application_event_trend_hybrid(
     let rollup_environment = environment_id.unwrap_or(GLOBAL_ENVIRONMENT);
 
     let rollup_query = Query::select()
-        .columns(
-            ["day", "events", "users", "metrics", "logs", "errors"].map(Alias::new),
-        )
+        .columns(["day", "events", "users", "metrics", "logs", "errors"].map(Alias::new))
         .from(Alias::new("telemetry_daily_rollups"))
         .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
         .and_where(Expr::col(Alias::new("environment_id")).eq(rollup_environment))
@@ -687,9 +683,7 @@ fn day_for_timestamp(timestamp: i64) -> Option<String> {
 
 fn timestamp_day_expr(backend: DbBackend) -> String {
     match backend {
-        DbBackend::Postgres => {
-            "to_char(to_timestamp(timestamp / 1000.0), 'YYYY-MM-DD')".into()
-        }
+        DbBackend::Postgres => "to_char(to_timestamp(timestamp / 1000.0), 'YYYY-MM-DD')".into(),
         DbBackend::MySql => "DATE_FORMAT(FROM_UNIXTIME(timestamp / 1000), '%Y-%m-%d')".into(),
         DbBackend::Sqlite => "strftime('%Y-%m-%d', timestamp / 1000, 'unixepoch')".into(),
         _ => "''".into(),

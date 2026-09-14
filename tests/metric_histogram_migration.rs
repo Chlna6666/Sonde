@@ -43,7 +43,10 @@ async fn migration_20_repairs_all_no_boundary_histogram_buckets() {
 
     database::Migrator::up(&database, Some(1)).await.unwrap();
 
-    assert_eq!(bucket_counts(&database, "single-bad-histogram").await, "[1]");
+    assert_eq!(
+        bucket_counts(&database, "single-bad-histogram").await,
+        "[1]"
+    );
     assert_eq!(
         bucket_counts(&database, "aggregate-bad-histogram").await,
         "[4]"

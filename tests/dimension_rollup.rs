@@ -22,6 +22,7 @@ fn event(
         os: Some(os.into()),
         idempotency_key: Some(idempotency_key.into()),
         attributes: Attributes::new(),
+        ..Default::default()
     }
 }
 
@@ -34,18 +35,18 @@ async fn recompute_environment_day(
         .await
         .unwrap()
         .into_iter()
-        .find(|item| {
-            item.application_id == application_id && item.environment_id == environment_id
-        })
+        .find(|item| item.application_id == application_id && item.environment_id == environment_id)
         .unwrap();
     assert!(
         dimension_rollup::recompute_claimed_day_dimensions(database, &dirty)
             .await
             .unwrap()
     );
-    assert!(rollups::recompute_claimed_day(database, dirty)
-        .await
-        .unwrap());
+    assert!(
+        rollups::recompute_claimed_day(database, dirty)
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]

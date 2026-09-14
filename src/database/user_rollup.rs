@@ -129,8 +129,8 @@ pub async fn recompute_claimed_day_user_set(
         return Ok(false);
     }
 
-    let environment = (dirty.environment_id != GLOBAL_ENVIRONMENT)
-        .then_some(dirty.environment_id.as_str());
+    let environment =
+        (dirty.environment_id != GLOBAL_ENVIRONMENT).then_some(dirty.environment_id.as_str());
     let fingerprints = raw_fingerprints(
         &transaction,
         Some(&dirty.application_id),
@@ -192,14 +192,8 @@ pub async fn unique_users_hybrid(
         return Ok(0);
     }
 
-    if let Some(daily_sets) = load_daily_user_sets_hybrid(
-        database,
-        application_id,
-        environment_id,
-        since,
-        until,
-    )
-    .await?
+    if let Some(daily_sets) =
+        load_daily_user_sets_hybrid(database, application_id, environment_id, since, until).await?
     {
         let sets = daily_sets
             .into_iter()
@@ -208,9 +202,11 @@ pub async fn unique_users_hybrid(
         return Ok(union_sorted_sets(sets).len() as u64);
     }
 
-    Ok(raw_fingerprints(database, application_id, environment_id, since, until, None)
-        .await?
-        .len() as u64)
+    Ok(
+        raw_fingerprints(database, application_id, environment_id, since, until, None)
+            .await?
+            .len() as u64,
+    )
 }
 
 /// Projects the same hybrid daily user sets into daily or monthly growth buckets.
@@ -241,10 +237,7 @@ pub async fn user_growth_hybrid(
         } else {
             daily.day
         };
-        grouped
-            .entry(bucket)
-            .or_default()
-            .push(daily.fingerprints);
+        grouped.entry(bucket).or_default().push(daily.fingerprints);
     }
 
     let mut cumulative = Vec::<Fingerprint>::new();
@@ -508,7 +501,7 @@ fn encode_fingerprints(values: &[Fingerprint]) -> Vec<u8> {
 }
 
 fn decode_fingerprints(encoded: &[u8]) -> Result<Vec<Fingerprint>, DbErr> {
-    if encoded.len() % FINGERPRINT_BYTES != 0 {
+    if !encoded.len().is_multiple_of(FINGERPRINT_BYTES) {
         return Err(DbErr::Custom(
             "invalid daily user-set fingerprint blob".into(),
         ));
@@ -720,6 +713,6 @@ mod tests {
 
     #[test]
     fn configured_chunk_stays_below_standard_blob_limit() {
-        assert!(FINGERPRINTS_PER_CHUNK * 16 < 65_535);
+        const { assert!(FINGERPRINTS_PER_CHUNK * 16 < 65_535) };
     }
 }

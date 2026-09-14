@@ -4,20 +4,24 @@ use sha2::{Digest, Sha256};
 use sonde::database::backup_archive::{self, BackupEnd, BackupManifest, BackupRecord};
 
 #[tokio::test]
-async fn current_validator_accepts_20_and_21_but_rejects_future_versions(
-) -> Result<(), Box<dyn Error>> {
+async fn current_validator_accepts_current_format_but_rejects_other_versions()
+-> Result<(), Box<dyn Error>> {
     assert_eq!(backup_archive::FORMAT_VERSION, "2.1");
 
-    for version in ["2.0", "2.1"] {
-        let archive = tempfile::NamedTempFile::new()?;
-        write_manifest_only_archive(archive.path(), version).await?;
-        let manifest = backup_archive::validate_backup_file(archive.path()).await?;
-        assert_eq!(manifest.format_version, version);
-    }
+    let archive = tempfile::NamedTempFile::new()?;
+    write_manifest_only_archive(archive.path(), backup_archive::FORMAT_VERSION).await?;
+    let manifest = backup_archive::validate_backup_file(archive.path()).await?;
+    assert_eq!(manifest.format_version, backup_archive::FORMAT_VERSION);
 
-    let future = tempfile::NamedTempFile::new()?;
-    write_manifest_only_archive(future.path(), "2.2").await?;
-    assert!(backup_archive::validate_backup_file(future.path()).await.is_err());
+    for other_version in ["2.0", "2.2"] {
+        let file = tempfile::NamedTempFile::new()?;
+        write_manifest_only_archive(file.path(), other_version).await?;
+        assert!(
+            backup_archive::validate_backup_file(file.path())
+                .await
+                .is_err()
+        );
+    }
     Ok(())
 }
 

@@ -27,7 +27,8 @@ async fn semantic_histogram_failure_does_not_modify_restore_target() -> Result<(
     let (application_id, _) =
         applications::create_application(&target, "Keep Me", "keep-me", None).await?;
 
-    let result = backup_validation::restore_full_system_exact_validated(&target, archive.path()).await;
+    let result =
+        backup_validation::restore_full_system_exact_validated(&target, archive.path()).await;
     assert!(result.is_err());
 
     let applications = applications::list_applications(&target, None, true).await?;
@@ -42,11 +43,18 @@ async fn duplicate_record_ids_are_rejected_even_with_valid_digest() -> Result<()
     let archive = tempfile::NamedTempFile::new()?;
     write_archive(
         archive.path(),
-        vec![scalar_metric_record("metric-1"), scalar_metric_record("metric-1")],
+        vec![
+            scalar_metric_record("metric-1"),
+            scalar_metric_record("metric-1"),
+        ],
     )
     .await?;
 
-    assert!(backup_archive::validate_backup_file(archive.path()).await.is_ok());
+    assert!(
+        backup_archive::validate_backup_file(archive.path())
+            .await
+            .is_ok()
+    );
     assert!(
         backup_validation::validate_backup_file_semantics(archive.path())
             .await

@@ -137,7 +137,12 @@ fn hour_for_timestamp(timestamp: i64) -> String {
         .unwrap_or_else(|| "1970-01-01 00:00".into())
 }
 
-fn activity_id(application_id: &str, environment_id: &str, device_hash: &str, hour: &str) -> String {
+fn activity_id(
+    application_id: &str,
+    environment_id: &str,
+    device_hash: &str,
+    hour: &str,
+) -> String {
     use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();

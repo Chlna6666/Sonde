@@ -95,10 +95,7 @@ pub async fn record_enrollment_with_budget(
     Ok(true)
 }
 
-pub async fn cleanup_expired(
-    database: &impl ConnectionTrait,
-    now: i64,
-) -> Result<u64, DbErr> {
+pub async fn cleanup_expired(database: &impl ConnectionTrait, now: i64) -> Result<u64, DbErr> {
     let mut removed = 0_u64;
     for table in ["ingest_device_enrollments", "ingest_rate_windows"] {
         let delete = Query::delete()
@@ -202,8 +199,5 @@ async fn try_update_window(
 }
 
 fn is_unique_violation(error: &DbErr) -> bool {
-    matches!(
-        error.sql_err(),
-        Some(SqlErr::UniqueConstraintViolation(_))
-    )
+    matches!(error.sql_err(), Some(SqlErr::UniqueConstraintViolation(_)))
 }

@@ -13,7 +13,10 @@ pub fn spawn_rollup_worker(database: DatabaseConnection) {
     tokio::spawn(async move {
         match rollups::seed_historical_dirty_days_once(&database).await {
             Ok(seed_count) if seed_count > 0 => {
-                info!(scope_days = seed_count, "seeded historical telemetry rollup work");
+                info!(
+                    scope_days = seed_count,
+                    "seeded historical telemetry rollup work"
+                );
             }
             Ok(_) => {}
             Err(error) => {
@@ -23,7 +26,10 @@ pub fn spawn_rollup_worker(database: DatabaseConnection) {
 
         match dimension_rollup::seed_historical_dimension_dirty_days_once(&database).await {
             Ok(seed_count) if seed_count > 0 => {
-                info!(scope_days = seed_count, "seeded historical telemetry dimension rollup work");
+                info!(
+                    scope_days = seed_count,
+                    "seeded historical telemetry dimension rollup work"
+                );
             }
             Ok(_) => {}
             Err(error) => {
@@ -32,7 +38,10 @@ pub fn spawn_rollup_worker(database: DatabaseConnection) {
         }
         match user_rollup::seed_historical_user_dirty_days_once(&database).await {
             Ok(seed_count) if seed_count > 0 => {
-                info!(scope_days = seed_count, "seeded historical telemetry user-set rollup work");
+                info!(
+                    scope_days = seed_count,
+                    "seeded historical telemetry user-set rollup work"
+                );
             }
             Ok(_) => {}
             Err(error) => {
@@ -41,7 +50,10 @@ pub fn spawn_rollup_worker(database: DatabaseConnection) {
         }
         match log_error_rollup::seed_historical_dirty_days_once(&database).await {
             Ok(seed_count) if seed_count > 0 => {
-                info!(scope_days = seed_count, "seeded historical log error rollup work");
+                info!(
+                    scope_days = seed_count,
+                    "seeded historical log error rollup work"
+                );
             }
             Ok(_) => {}
             Err(error) => {

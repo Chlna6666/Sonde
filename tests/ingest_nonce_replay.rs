@@ -14,8 +14,8 @@ use sonde::{
 type HmacSha256 = Hmac<Sha256>;
 
 #[tokio::test]
-async fn nonce_replay_is_rejected_across_independent_database_connections(
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn nonce_replay_is_rejected_across_independent_database_connections()
+-> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("nonce-replay.sqlite");
     let database_url = format!(
@@ -39,21 +39,15 @@ async fn nonce_replay_is_rejected_across_independent_database_connections(
         2
     );
     assert!(
-        ingest_nonce::record_once(
-            &replica_b,
-            "token-a",
-            "nonce-a",
-            expires_at + 120_000,
-        )
-        .await?
+        ingest_nonce::record_once(&replica_b, "token-a", "nonce-a", expires_at + 120_000,).await?
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn signed_ingest_replay_is_rejected_across_independent_installed_states(
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn signed_ingest_replay_is_rejected_across_independent_installed_states()
+-> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("signed-replay.sqlite");
     let database_url = format!(
@@ -76,17 +70,13 @@ async fn signed_ingest_replay_is_rejected_across_independent_installed_states(
         config.clone(),
         Arc::new(AuthSecurity::new(pepper)?),
     );
-    let state_b = InstalledState::new(
-        replica_b,
-        config,
-        Arc::new(AuthSecurity::new(pepper)?),
-    );
+    let state_b = InstalledState::new(replica_b, config, Arc::new(AuthSecurity::new(pepper)?));
 
     let user_agent = "SondeReplayTest/1.0";
     let client_binding = state_a
         .auth_security
         .ingest
-        .client_binding(user_agent, pepper);
+        .client_binding(user_agent, pepper)?;
     let (token, signing_key, _) = state_a.auth_security.ingest.issue_ingest_token(
         "app-1",
         "env-1",

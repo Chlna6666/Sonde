@@ -16,6 +16,7 @@ fn event(timestamp: i64, key: &str) -> EventInput {
         os: Some("test".into()),
         idempotency_key: Some(key.into()),
         attributes: Attributes::new(),
+        ..Default::default()
     }
 }
 
@@ -92,13 +93,9 @@ async fn event_count_hybrid_matches_exact_windows_and_dirty_fallback() {
     )
     .await
     .unwrap();
-    telemetry::insert_events(
-        &database,
-        &app_a_beta,
-        &[event(day2 + 2_000, "ab1")],
-    )
-    .await
-    .unwrap();
+    telemetry::insert_events(&database, &app_a_beta, &[event(day2 + 2_000, "ab1")])
+        .await
+        .unwrap();
     telemetry::insert_events(
         &database,
         &app_b_prod,
@@ -144,13 +141,9 @@ async fn event_count_hybrid_matches_exact_windows_and_dirty_fallback() {
         2
     );
 
-    telemetry::insert_events(
-        &database,
-        &app_a_prod,
-        &[event(day2 + 50_000, "a5")],
-    )
-    .await
-    .unwrap();
+    telemetry::insert_events(&database, &app_a_prod, &[event(day2 + 50_000, "a5")])
+        .await
+        .unwrap();
     assert_eq!(
         event_count(
             &database,

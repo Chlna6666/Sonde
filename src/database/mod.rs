@@ -1,9 +1,9 @@
 pub mod activity_stats;
 pub mod alert_delivery;
 pub mod alerts;
-mod application_transfer;
 pub mod application_backup;
 pub mod application_delete;
+mod application_transfer;
 pub mod applications;
 pub mod auth;
 pub mod auth_state;
@@ -76,5 +76,6 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
 }
 
 pub async fn migrate(database: &DatabaseConnection) -> Result<(), DbErr> {
-    Migrator::up(database, None).await
+    Migrator::up(database, None).await?;
+    auth::ensure_builtin_roles(database).await
 }

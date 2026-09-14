@@ -94,10 +94,7 @@ async fn live_activity_is_split_across_utc_days_and_sessions_are_server_derived(
         Some(120_000)
     );
     assert_eq!(
-        stats
-            .trend
-            .last()
-            .map(|point| point.cumulative_sessions),
+        stats.trend.last().map(|point| point.cumulative_sessions),
         Some(2)
     );
     assert_eq!(

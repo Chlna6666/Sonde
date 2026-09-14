@@ -50,6 +50,7 @@ struct DeviceRow {
     last_log_at: Option<i64>,
     last_error_at: Option<i64>,
     last_session_id: Option<String>,
+    #[allow(dead_code)]
     last_session_at: Option<i64>,
     last_app_version: Option<String>,
     last_app_version_at: Option<i64>,
@@ -114,13 +115,7 @@ pub async fn observe(
     observation: &DeviceObservation,
 ) -> Result<(), DbErr> {
     let transaction = database.begin().await?;
-    ensure_device_row(
-        &transaction,
-        scope,
-        device_hash,
-        observation.received_at,
-    )
-    .await?;
+    ensure_device_row(&transaction, scope, device_hash, observation.received_at).await?;
 
     let current = load_device_for_update(&transaction, device_hash)
         .await?
@@ -164,11 +159,7 @@ pub async fn observe(
         current.last_launcher_version_at,
         observation.launcher_version.as_ref(),
     );
-    let os = merge_dimension(
-        current.last_os,
-        current.last_os_at,
-        observation.os.as_ref(),
-    );
+    let os = merge_dimension(current.last_os, current.last_os_at, observation.os.as_ref());
     let system_language = merge_dimension(
         current.last_system_language,
         current.last_system_language_at,
@@ -254,29 +245,20 @@ pub async fn observe(
         .value(Alias::new("last_session_at"), session.last_activity_at)
         .value(Alias::new("last_app_version"), app_version.value)
         .value(Alias::new("last_app_version_at"), app_version.timestamp)
-        .value(
-            Alias::new("last_launcher_version"),
-            launcher_version.value,
-        )
+        .value(Alias::new("last_launcher_version"), launcher_version.value)
         .value(
             Alias::new("last_launcher_version_at"),
             launcher_version.timestamp,
         )
         .value(Alias::new("last_os"), os.value)
         .value(Alias::new("last_os_at"), os.timestamp)
-        .value(
-            Alias::new("last_system_language"),
-            system_language.value,
-        )
+        .value(Alias::new("last_system_language"), system_language.value)
         .value(
             Alias::new("last_system_language_at"),
             system_language.timestamp,
         )
         .value(Alias::new("last_architecture"), architecture.value)
-        .value(
-            Alias::new("last_architecture_at"),
-            architecture.timestamp,
-        )
+        .value(Alias::new("last_architecture_at"), architecture.timestamp)
         .value(Alias::new("event_items"), counters.event_items)
         .value(Alias::new("metric_items"), counters.metric_items)
         .value(Alias::new("log_items"), counters.log_items)
@@ -506,7 +488,8 @@ fn update_counters(current: &DeviceRow, observation: &DeviceObservation) -> Tele
             counters.event_items = counters.event_items.saturating_add(item_count);
         }
         DeviceTelemetryKind::Metric => {
-            counters.last_metric_at = max_timestamp(counters.last_metric_at, observation.received_at);
+            counters.last_metric_at =
+                max_timestamp(counters.last_metric_at, observation.received_at);
             counters.metric_items = counters.metric_items.saturating_add(item_count);
         }
         DeviceTelemetryKind::Log => {
@@ -521,11 +504,7 @@ fn update_counters(current: &DeviceRow, observation: &DeviceObservation) -> Tele
     counters
 }
 
-fn derive_session(
-    current_id: Option<String>,
-    last_seen_at: i64,
-    received_at: i64,
-) -> SessionState {
+fn derive_session(current_id: Option<String>, last_seen_at: i64, received_at: i64) -> SessionState {
     let gap = received_at.saturating_sub(last_seen_at);
     let had_current = current_id.is_some();
     if let Some(id) = current_id
@@ -573,9 +552,8 @@ fn merge_dimension(
         .as_deref()
         .is_some_and(|value| value != incoming.value.as_str());
     let change_interval = if changed {
-        current_timestamp.map(|timestamp| {
-            std::cmp::max(incoming.timestamp.saturating_sub(timestamp), 0)
-        })
+        current_timestamp
+            .map(|timestamp| std::cmp::max(incoming.timestamp.saturating_sub(timestamp), 0))
     } else {
         None
     };
@@ -595,12 +573,7 @@ fn change_increment(changed: bool) -> i64 {
     if changed { 1 } else { 0 }
 }
 
-fn add_risk(
-    score: &mut i32,
-    delta: i32,
-    flags: &mut Vec<&'static str>,
-    flag: &'static str,
-) {
+fn add_risk(score: &mut i32, delta: i32, flags: &mut Vec<&'static str>, flag: &'static str) {
     *score = std::cmp::min(score.saturating_add(delta), 100);
     flags.push(flag);
 }

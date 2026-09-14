@@ -16,6 +16,7 @@ fn event(timestamp: i64, key: &str, user: &str) -> EventInput {
         os: Some("test".into()),
         idempotency_key: Some(key.into()),
         attributes: Attributes::new(),
+        ..Default::default()
     }
 }
 
@@ -38,16 +39,18 @@ async fn refresh_and_clear_dirty(
         .await
         .unwrap()
         .into_iter()
-        .find(|item| {
-            item.application_id == application_id && item.environment_id == environment_id
-        })
+        .find(|item| item.application_id == application_id && item.environment_id == environment_id)
         .unwrap();
-    assert!(first_seen::refresh_dirty_day(database, &dirty)
-        .await
-        .unwrap());
-    assert!(rollups::recompute_claimed_day(database, dirty)
-        .await
-        .unwrap());
+    assert!(
+        first_seen::refresh_dirty_day(database, &dirty)
+            .await
+            .unwrap()
+    );
+    assert!(
+        rollups::recompute_claimed_day(database, dirty)
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -83,33 +86,19 @@ async fn first_seen_index_preserves_scope_and_dirty_fallback_semantics() {
     )
     .await
     .unwrap();
-    telemetry::insert_events(
-        &database,
-        &beta,
-        &[event(start + 3_000, "a-3", "user-a")],
-    )
-    .await
-    .unwrap();
-    telemetry::insert_events(
-        &database,
-        &other,
-        &[event(start + 4_000, "b-1", "user-a")],
-    )
-    .await
-    .unwrap();
+    telemetry::insert_events(&database, &beta, &[event(start + 3_000, "a-3", "user-a")])
+        .await
+        .unwrap();
+    telemetry::insert_events(&database, &other, &[event(start + 4_000, "b-1", "user-a")])
+        .await
+        .unwrap();
 
     backfill_all(&database).await;
 
     assert_eq!(
-        first_seen::count_new_users_hybrid(
-            &database,
-            Some("app-a"),
-            Some("prod"),
-            start,
-            None,
-        )
-        .await
-        .unwrap(),
+        first_seen::count_new_users_hybrid(&database, Some("app-a"), Some("prod"), start, None,)
+            .await
+            .unwrap(),
         2
     );
     assert_eq!(
@@ -127,36 +116,20 @@ async fn first_seen_index_preserves_scope_and_dirty_fallback_semantics() {
 
     // A new event makes the scope dirty. The index is intentionally stale until the worker runs,
     // but the hybrid query must still return the authoritative raw result immediately.
-    telemetry::insert_events(
-        &database,
-        &prod,
-        &[event(start + 5_000, "a-4", "user-c")],
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        first_seen::count_new_users_hybrid(
-            &database,
-            Some("app-a"),
-            Some("prod"),
-            start,
-            None,
-        )
+    telemetry::insert_events(&database, &prod, &[event(start + 5_000, "a-4", "user-c")])
         .await
-        .unwrap(),
+        .unwrap();
+    assert_eq!(
+        first_seen::count_new_users_hybrid(&database, Some("app-a"), Some("prod"), start, None,)
+            .await
+            .unwrap(),
         3
     );
     refresh_and_clear_dirty(&database, "app-a", "prod").await;
     assert_eq!(
-        first_seen::count_new_users_hybrid(
-            &database,
-            Some("app-a"),
-            Some("prod"),
-            start,
-            None,
-        )
-        .await
-        .unwrap(),
+        first_seen::count_new_users_hybrid(&database, Some("app-a"), Some("prod"), start, None,)
+            .await
+            .unwrap(),
         3
     );
 }

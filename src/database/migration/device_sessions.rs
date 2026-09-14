@@ -41,7 +41,12 @@ impl MigrationTrait for DeviceSessions {
             manager,
             "idx_device_sessions_device_started",
             "telemetry_device_sessions",
-            &["application_id", "environment_id", "device_hash", "started_at"],
+            &[
+                "application_id",
+                "environment_id",
+                "device_hash",
+                "started_at",
+            ],
             false,
         )
         .await

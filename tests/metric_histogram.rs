@@ -92,7 +92,10 @@ async fn histogram_population_survives_storage_and_explorer_projection() {
     telemetry::insert_metrics(
         &database,
         &scope,
-        &[aggregate_histogram(timestamp), legacy_histogram(timestamp + 1)],
+        &[
+            aggregate_histogram(timestamp),
+            legacy_histogram(timestamp + 1),
+        ],
     )
     .await
     .unwrap();
@@ -127,9 +130,7 @@ async fn histogram_population_survives_storage_and_explorer_projection() {
     assert_eq!(aggregate.try_get::<f64>("", "value").unwrap(), 10.5);
     assert_eq!(
         serde_json::from_str::<Vec<f64>>(
-            &aggregate
-                .try_get::<String>("", "histogram_bounds")
-                .unwrap()
+            &aggregate.try_get::<String>("", "histogram_bounds").unwrap()
         )
         .unwrap(),
         vec![5.0, 10.0, 20.0]
