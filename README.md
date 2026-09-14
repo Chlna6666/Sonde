@@ -4,6 +4,8 @@
 
 Sonde is a self-hosted telemetry analytics platform for teams that operate more than one application. It combines a high-throughput Actix Web API with an embedded React management console in a single deployable service.
 
+Further reading: [architecture](docs/architecture.md), [performance](docs/performance.md), [performance results](docs/performance-results.md), [testing](docs/testing.md).
+
 ## What it does
 
 - Collects custom events, numeric metrics, and structured logs in efficient batches.
@@ -139,6 +141,14 @@ Telemetry types intentionally do **not** expose `anonymousId`, `timestamp`, or `
 
 See [`sdk/rust/README.md`](sdk/rust/README.md) for full queue, retry and `SpoolOptions` tuning details. The underlying `sonde-hmac-sha256-v2` protocol remains an implementation reference for future SDKs in other languages; regular application code should use the Rust SDK instead of duplicating the signing protocol.
 
+## Performance
+
+The `sonde` binary uses Microsoft **mimalloc v3** as its process global allocator (`mimalloc` 0.1.52+, default; do not enable the crate `v2` feature). Ingest HMAC verification, scoped device hashing, SSE live updates, and writer coalescing also avoid short-lived heap buffers on the hot path. See [docs/performance.md](docs/performance.md) and captured numbers in [docs/performance-results.md](docs/performance-results.md).
+
+```powershell
+cargo bench --bench hot_path --locked
+```
+
 ## Quality checks
 
 ```powershell
@@ -146,6 +156,8 @@ cargo fmt --all --check
 cargo check --all-targets --all-features --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --all-targets --all-features --locked
+cargo test --test api_concurrency --locked
+cargo bench --bench hot_path --locked -- --quick
 
 cargo fmt --manifest-path sdk/rust/Cargo.toml --check
 cargo check --manifest-path sdk/rust/Cargo.toml

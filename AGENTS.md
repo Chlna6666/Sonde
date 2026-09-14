@@ -92,6 +92,8 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --all-targets --all-features --locked
 ```
 
+Optional microbenchmarks live in `benches/` and are run with `cargo bench --bench hot_path --locked`. Concurrent HTTP contracts live in `tests/api_concurrency.rs`. Recorded numbers belong in `docs/performance-results.md`.
+
 For `web/` changes also run typecheck, tests, and production build with the repository-pinned Node/pnpm versions.
 
 ## Change discipline

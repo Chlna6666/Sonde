@@ -4,6 +4,8 @@
 
 Sonde 是面向多应用团队的自托管遥测分析平台。它将高吞吐的 Actix Web API 与内嵌 React 管理控制台整合为一个可部署的独立服务。
 
+延伸阅读：[架构](docs/architecture.md)、[性能](docs/performance.md)、[性能测试结果](docs/performance-results.md)、[测试](docs/testing.md)。
+
 ## 能做什么
 
 - 高效批量采集自定义事件、数值指标与结构化日志。
@@ -157,12 +159,22 @@ println!(
 
 更完整的内存队列、重试和 `SpoolOptions` 调整说明见 [`sdk/rust/README.md`](sdk/rust/README.md)。底层签名协议仅用于实现其它语言 SDK 或协议调试，普通应用不应自行重复实现 HMAC 链路。
 
+## 性能
+
+`sonde` 进程使用 Microsoft **mimalloc v3** 作为全局分配器（`mimalloc` 0.1.52+ 默认实现；不要打开 crate 的 `v2` feature）。摄入 HMAC 校验、设备作用域哈希、SSE 实时推送和写入合并也会避免热路径上的短命堆分配。详见 [docs/performance.md](docs/performance.md) 与实测记录 [docs/performance-results.md](docs/performance-results.md)。
+
+```powershell
+cargo bench --bench hot_path --locked
+```
+
 ## 质量检查
 
 ```powershell
 cargo fmt --all --check
 cargo clippy --all-targets --all-features --locked -- -D warnings
-cargo test --all-targets
+cargo test --all-targets --all-features --locked
+cargo test --test api_concurrency --locked
+cargo bench --bench hot_path --locked -- --quick
 
 cargo fmt --manifest-path sdk/rust/Cargo.toml --check
 cargo check --manifest-path sdk/rust/Cargo.toml
