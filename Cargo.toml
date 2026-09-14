@@ -21,14 +21,15 @@ chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 hex = "0.4"
 mime_guess = "2"
-mimalloc = { version = "0.1", default-features = false }
+# 0.1.52+ defaults to Microsoft mimalloc v3. Do not enable the `v2` feature.
+mimalloc = { version = "0.1.52", default-features = false }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 rust-embed = { version = "8.7", features = ["compression"] }
 sea-orm = { version = "2.0.0", features = ["runtime-tokio-rustls", "sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "with-json", "with-chrono", "macros"] }
 sea-orm-migration = { version = "2.0.0", features = ["runtime-tokio-rustls", "sqlx-mysql", "sqlx-postgres", "sqlx-sqlite"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 sha1 = "0.10"
 sha2 = "0.10"
 hmac = "0.12"
@@ -42,9 +43,15 @@ uuid = { version = "1", features = ["v7", "serde"] }
 
 [dev-dependencies]
 actix-http = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "hot_path"
+harness = false
 
 [profile.release]
 lto = "thin"
+codegen-units = 1
 strip = true
 
 [lints.rust]

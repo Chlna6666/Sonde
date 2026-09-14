@@ -1,3 +1,9 @@
+//! Self-hosted telemetry analytics for multiple applications.
+//!
+//! The `sonde` binary installs Microsoft mimalloc v3 as the process global allocator
+//! so the Actix HTTP stack, ingest queues, and JSON codecs share a fragmentation-aware
+//! heap. Library consumers should set their own allocator if they embed these modules.
+
 mod bootstrap;
 
 pub mod api;
@@ -7,6 +13,7 @@ pub mod database;
 pub mod domain;
 pub mod error;
 pub mod ingest_signature;
+pub mod json;
 pub mod security;
 pub mod services;
 pub mod state;
@@ -34,22 +41,28 @@ pub async fn run() -> io::Result<()> {
         info!("Sonde is waiting for one-time web setup");
     }
     info!(address = %runtime.bind, "starting Sonde");
+    let emit_hsts = !runtime.bind_is_loopback();
 
     HttpServer::new(move || {
+        let mut headers = middleware::DefaultHeaders::new()
+            .add(("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"))
+            .add(("x-content-type-options", "nosniff"))
+            .add(("x-frame-options", "DENY"))
+            .add(("referrer-policy", "no-referrer"))
+            .add(("permissions-policy", "camera=(), microphone=(), geolocation=()"));
+        if emit_hsts {
+            headers = headers.add((
+                "strict-transport-security",
+                "max-age=31536000; includeSubDomains",
+            ));
+        }
         App::new()
             .app_data(web::Data::new(state.clone()))
             .app_data(api::json_config(2_097_152))
             .app_data(api::query_config())
             .app_data(api::path_config())
             .app_data(web::PayloadConfig::default().limit(4_194_304))
-            .wrap(
-                middleware::DefaultHeaders::new()
-                    .add(("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"))
-                    .add(("x-content-type-options", "nosniff"))
-                    .add(("x-frame-options", "DENY"))
-                    .add(("referrer-policy", "no-referrer"))
-                    .add(("permissions-policy", "camera=(), microphone=(), geolocation=()")),
-            )
+            .wrap(headers)
             .wrap(middleware::Compress::default())
             .wrap(middleware::NormalizePath::trim())
             .wrap(middleware::Logger::default())
