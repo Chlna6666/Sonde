@@ -18,8 +18,18 @@ pub async fn serve(request: HttpRequest) -> HttpResponse {
     if let Ok(proxy_target) = std::env::var("SONDE_DEV_PROXY") {
         let proxy_target = proxy_target.trim().trim_end_matches('/');
         if !proxy_target.is_empty() {
-            return proxy_dev_request(proxy_target, &request).await;
+            if is_loopback_proxy_target(proxy_target) {
+                return proxy_dev_request(proxy_target, &request).await;
+            }
+            tracing::warn!(
+                target = %proxy_target,
+                "ignoring SONDE_DEV_PROXY because the target is not a loopback address"
+            );
         }
+    }
+
+    if is_source_map(path) {
+        return HttpResponse::NotFound().finish();
     }
 
     let asset_path = if path.is_empty() { "index.html" } else { path };
@@ -68,6 +78,28 @@ async fn proxy_dev_request(proxy_target: &str, request: &HttpRequest) -> HttpRes
         }
         Err(_) => HttpResponse::BadGateway()
             .body("Could not connect to Vite dev server (is 'pnpm dev' running?)"),
+    }
+}
+
+/// Rejects source maps even if a stale `web/dist` still contains them.
+fn is_source_map(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(".map")
+}
+
+/// The development proxy may only ever forward to the local machine, so a stray
+/// `SONDE_DEV_PROXY` value cannot turn the server into an open forward proxy.
+fn is_loopback_proxy_target(target: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(target) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return false;
+    }
+    match parsed.host() {
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+        None => false,
     }
 }
 

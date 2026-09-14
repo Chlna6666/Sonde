@@ -351,6 +351,39 @@ pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Result<[u8; 32], AppError> {
     Ok(output)
 }
 
+/// Fixed-window throttle for the unauthenticated setup wizard, which runs before any
+/// installation (and therefore before `AuthSecurity`) exists. Without it, an exposed
+/// not-yet-installed instance is a convenient probe for reachable database endpoints.
+pub struct PreInstallThrottle {
+    buckets: Mutex<HashMap<String, RateBucket>>,
+    limit: u64,
+    window_ms: i64,
+}
+
+impl PreInstallThrottle {
+    #[must_use]
+    pub fn new(limit: u64, window_ms: i64) -> Self {
+        Self {
+            buckets: Mutex::new(HashMap::new()),
+            limit,
+            window_ms,
+        }
+    }
+
+    /// Charges one request against `key`, returning `false` once the window budget is spent.
+    pub async fn charge(&self, key: &str, max_entries: usize) -> bool {
+        charge_rate(
+            &self.buckets,
+            key,
+            1,
+            self.limit,
+            self.window_ms,
+            max_entries,
+        )
+        .await
+    }
+}
+
 pub struct AuthSecurity {
     attempts: Mutex<HashMap<String, Attempt>>,
     challenges: Mutex<HashMap<String, Challenge>>,
@@ -414,21 +447,50 @@ impl AuthSecurity {
 
     pub async fn record_failure(&self, account_key: &str, source_key: &str) -> LoginGate {
         let now = chrono::Utc::now().timestamp_millis();
+        self.bump_attempts(&[account_key, source_key], now).await;
+        self.issue_challenge(account_key, source_key, now).await
+    }
+
+    /// Reports how long the client must wait before another second-factor attempt is accepted.
+    ///
+    /// Second-factor verification needs its own throttle: a valid password yields a fresh
+    /// pending token on every sign-in, so the sign-in gate alone cannot bound how fast an
+    /// attacker walks the six-digit code space.
+    pub async fn two_factor_gate(&self, keys: &[&str]) -> Option<u64> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let attempts = self.attempts.lock().await;
+        let next_allowed_at = keys
+            .iter()
+            .filter_map(|key| attempts.get(*key))
+            .map(|attempt| attempt.next_allowed_at)
+            .max()
+            .unwrap_or(0);
+        (next_allowed_at > now).then(|| ((next_allowed_at - now) as u64).div_ceil(1_000))
+    }
+
+    /// Records a rejected second-factor attempt against the account and the request source.
+    pub async fn record_two_factor_failure(&self, keys: &[&str]) -> u64 {
+        let now = chrono::Utc::now().timestamp_millis();
+        self.bump_attempts(keys, now).await
+    }
+
+    async fn bump_attempts(&self, keys: &[&str], now: i64) -> u64 {
         let mut attempts = self.attempts.lock().await;
         if attempts.len() > 20_000 {
             attempts.retain(|_, a| a.next_allowed_at > now - 86_400_000);
         }
-        for key in [account_key, source_key] {
-            let attempt = attempts.entry(key.to_owned()).or_default();
+        let mut cooldown_seconds = 0_u64;
+        for key in keys {
+            let attempt = attempts.entry((*key).to_owned()).or_default();
             attempt.failures = attempt.failures.saturating_add(1);
             let delay_seconds = attempt
                 .failures
                 .checked_sub(2)
                 .map_or(0, |power| 2_u64.saturating_pow(power).min(300));
             attempt.next_allowed_at = now + delay_seconds as i64 * 1_000;
+            cooldown_seconds = cooldown_seconds.max(delay_seconds);
         }
-        drop(attempts);
-        self.issue_challenge(account_key, source_key, now).await
+        cooldown_seconds
     }
 
     pub async fn record_success(&self, account_key: &str, source_key: &str) {
@@ -472,6 +534,22 @@ impl AuthSecurity {
             && challenge.account_key == account_key
             && challenge.source_key == source_key
     }
+}
+
+/// Upper bound for page-based pagination. Deep `OFFSET` scans are expensive, and an unbounded
+/// page number also overflows the offset computation.
+pub const MAX_PAGE: u64 = 10_000;
+
+/// Clamps a caller-supplied page number into `1..=MAX_PAGE`.
+#[must_use]
+pub fn bounded_page(page: Option<u64>) -> u64 {
+    page.unwrap_or(1).clamp(1, MAX_PAGE)
+}
+
+/// Clamps a caller-supplied page size into `1..=200`.
+#[must_use]
+pub fn bounded_page_size(page_size: Option<u64>) -> u64 {
+    page_size.unwrap_or(50).clamp(1, 200)
 }
 
 /// Validates that an identifier (application ID, environment ID, key ID, user ID, slug, etc.)
@@ -681,6 +759,57 @@ pub mod tests {
             );
             assert!(!ingest.check_device_ingest_items("app", "device", 1).await);
         });
+    }
+
+    #[test]
+    fn second_factor_failures_throttle_further_attempts() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let security = AuthSecurity::new(b"pepper").unwrap();
+            let keys = ["2fa-account:user-1", "2fa-source:203.0.113.7"];
+            assert!(security.two_factor_gate(&keys).await.is_none());
+
+            assert_eq!(security.record_two_factor_failure(&keys).await, 0);
+            assert!(security.two_factor_gate(&keys).await.is_none());
+
+            assert_eq!(security.record_two_factor_failure(&keys).await, 1);
+            assert_eq!(security.two_factor_gate(&keys).await, Some(1));
+
+            assert_eq!(security.record_two_factor_failure(&keys).await, 2);
+            assert_eq!(security.two_factor_gate(&keys).await, Some(2));
+
+            security.record_success(keys[0], keys[1]).await;
+            assert!(security.two_factor_gate(&keys).await.is_none());
+        });
+    }
+
+    #[test]
+    fn pre_install_throttle_limits_each_source() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let throttle = PreInstallThrottle::new(2, 60_000);
+            assert!(throttle.charge("203.0.113.7", 16).await);
+            assert!(throttle.charge("203.0.113.7", 16).await);
+            assert!(!throttle.charge("203.0.113.7", 16).await);
+            assert!(throttle.charge("198.51.100.9", 16).await);
+        });
+    }
+
+    #[test]
+    fn pagination_bounds_are_clamped() {
+        assert_eq!(bounded_page(Some(0)), 1);
+        assert_eq!(bounded_page(None), 1);
+        assert_eq!(bounded_page(Some(5)), 5);
+        assert_eq!(bounded_page(Some(u64::MAX)), MAX_PAGE);
+        assert_eq!(bounded_page_size(None), 50);
+        assert_eq!(bounded_page_size(Some(0)), 1);
+        assert_eq!(bounded_page_size(Some(10_000)), 200);
     }
 
     #[test]

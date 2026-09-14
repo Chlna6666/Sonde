@@ -5,6 +5,12 @@ services:
       dockerfile: Dockerfile
     container_name: sonde
     restart: unless-stopped
+    # Publish through a TLS-terminating reverse proxy, ideally on loopback only:
+    #   - "127.0.0.1:8080:8080"
+    # Session cookies are forced `Secure` whenever SONDE_BIND is not loopback, so a plain-HTTP
+    # instance reached from other hosts requires TLS in front of it. Serving plain HTTP to the
+    # LAN therefore needs the explicit SONDE_ALLOW_INSECURE_COOKIES=1 opt-out below, which
+    # accepts that session cookies can be captured by anyone on the path.
     ports:
       - "8080:8080"
     environment:
@@ -13,6 +19,14 @@ services:
       - RUST_LOG=sonde=info,actix_web=info
     volumes:
       - sonde_data:/app/data
+    # The process binds an unprivileged port, writes only to /app/data, and stages backup
+    # restores in /tmp, so it needs no Linux capabilities and no privilege escalation.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp
 
 volumes:
   sonde_data:

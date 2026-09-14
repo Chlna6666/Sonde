@@ -29,6 +29,7 @@ pub struct RuntimeConfig {
     pub database_url_override: Option<String>,
     pub password_pepper: PasswordPepper,
     pub trusted_proxies: Vec<IpAddr>,
+    pub allow_insecure_cookies: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -70,6 +71,7 @@ impl RuntimeConfig {
             trusted_proxies: parse_trusted_proxies(
                 env::var("SONDE_TRUSTED_PROXIES").ok().as_deref(),
             )?,
+            allow_insecure_cookies: env_flag("SONDE_ALLOW_INSECURE_COOKIES"),
         })
     }
 
@@ -79,6 +81,25 @@ impl RuntimeConfig {
             || self.bind.starts_with("[::1]:")
             || self.bind.starts_with("localhost:")
     }
+
+    /// Whether session cookies must stay marked `Secure`.
+    ///
+    /// A server reachable from other hosts has to assume TLS termination in front of it, so the
+    /// secure cookie mode is enforced server-side. `SONDE_ALLOW_INSECURE_COOKIES` is the explicit
+    /// opt-out for plain-HTTP deployments that cannot be moved behind TLS.
+    #[must_use]
+    pub fn requires_secure_cookies(&self) -> bool {
+        !self.bind_is_loopback() && !self.allow_insecure_cookies
+    }
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name).is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 fn load_or_create_pepper(path: &Path) -> io::Result<PasswordPepper> {

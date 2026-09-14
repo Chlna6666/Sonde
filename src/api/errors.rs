@@ -60,8 +60,8 @@ async fn groups(
         severity,
         from: query.from,
         to: query.to,
-        page: query.page.unwrap_or(1).max(1),
-        page_size: query.page_size.unwrap_or(50).clamp(1, 200),
+        page: crate::security::bounded_page(query.page),
+        page_size: crate::security::bounded_page_size(query.page_size),
     };
     Ok(HttpResponse::Ok().json(errors::groups(&installed, &user, &filter).await?))
 }

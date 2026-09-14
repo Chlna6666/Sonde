@@ -46,6 +46,7 @@ async fn application_devices_and_backup_routes_are_not_shadowed() {
         database_url_override: None,
         password_pepper: PasswordPepper::new(pepper),
         trusted_proxies: Vec::new(),
+        allow_insecure_cookies: true,
     };
 
     let database = database::connect(&db_url).await.unwrap();

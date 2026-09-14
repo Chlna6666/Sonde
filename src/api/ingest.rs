@@ -193,7 +193,10 @@ fn publish(state: &AppState, application_id: &str, kind: &str, accepted: usize) 
     message.push_str(",\"accepted\":");
     crate::json::write_usize(&mut message, accepted);
     message.push('}');
-    let _ = state.live_updates.send(message);
+    let _ = state.live_updates.send(crate::state::LiveUpdate {
+        application_id: application_id.to_owned(),
+        payload: message,
+    });
 }
 
 fn user_agent(request: &HttpRequest) -> &str {

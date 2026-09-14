@@ -23,7 +23,20 @@ async fn updates(
         loop {
             tokio::select! {
                 update = receiver.recv() => match update {
-                    Ok(message) => yield Ok::<_, Infallible>(web::Bytes::from(format!("event: telemetry\ndata: {message}\n\n"))),
+                    Ok(update) => {
+                        // Live activity is scoped per application: a subscriber must not learn
+                        // about applications it cannot read.
+                        if user
+                            .require("telemetry.read", Some(&update.application_id))
+                            .is_err()
+                        {
+                            continue;
+                        }
+                        yield Ok::<_, Infallible>(web::Bytes::from(format!(
+                            "event: telemetry\ndata: {}\n\n",
+                            update.payload
+                        )));
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 },

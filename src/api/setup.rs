@@ -67,6 +67,7 @@ async fn test(
     body: web::Json<TestRequest>,
 ) -> Result<HttpResponse, AppError> {
     require_same_origin(&request)?;
+    require_setup_budget(&state, &request).await?;
     if state.is_installed().await {
         return Err(AppError::NotFound);
     }
@@ -80,6 +81,7 @@ async fn complete(
     body: web::Json<CompleteRequest>,
 ) -> Result<HttpResponse, AppError> {
     require_same_origin(&request)?;
+    require_setup_budget(&state, &request).await?;
     let _guard = state.setup_lock.lock().await;
     if state.is_installed().await {
         return Err(AppError::NotFound);
@@ -99,6 +101,20 @@ async fn complete(
     )
     .await?;
     Ok(HttpResponse::Created().json(serde_json::json!({ "installed": true })))
+}
+
+/// Setup runs before any account exists, so the per-source budget is the only throttle
+/// available: `test` makes the server open a database connection to a caller-supplied URL.
+async fn require_setup_budget(
+    state: &web::Data<Arc<AppState>>,
+    request: &HttpRequest,
+) -> Result<(), AppError> {
+    let client_ip = super::request_auth::client_ip(request, &state.runtime.trusted_proxies);
+    if state.charge_setup_request(&client_ip).await {
+        Ok(())
+    } else {
+        Err(AppError::TooManyRequests)
+    }
 }
 
 fn require_same_origin(request: &HttpRequest) -> Result<(), AppError> {

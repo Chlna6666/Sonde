@@ -290,7 +290,12 @@ where
     select
         .order_by(Alias::new("timestamp"), Order::Desc)
         .limit(filter.page_size + 1)
-        .offset(filter.page.saturating_sub(1) * filter.page_size);
+        .offset(
+            filter
+                .page
+                .saturating_sub(1)
+                .saturating_mul(filter.page_size),
+        );
     let mut items: Vec<T> = database
         .query_all(&select)
         .await?

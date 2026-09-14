@@ -13,7 +13,8 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
-    sourcemap: true,
+    // Never ship source maps: web/dist is embedded into the server binary and served publicly.
+    sourcemap: false,
     cssCodeSplit: true,
     chunkSizeWarningLimit: 600,
     rollupOptions: {

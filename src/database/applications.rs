@@ -397,7 +397,7 @@ pub async fn list_audit_logs(
             sea_orm::Order::Desc,
         )
         .limit(page_size + 1)
-        .offset(page.saturating_sub(1) * page_size);
+        .offset(page.saturating_sub(1).saturating_mul(page_size));
 
     if let Some(act) = action
         && !act.trim().is_empty()

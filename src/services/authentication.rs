@@ -8,7 +8,9 @@ use crate::{
 };
 
 pub trait AuthRequest {
-    fn session_token(&self) -> Option<String>;
+    /// Reads the session cookie that matches the installation's cookie mode, so a deployment
+    /// cannot be driven through the insecure development cookie name.
+    fn session_token(&self, secure_cookie: bool) -> Option<String>;
     fn csrf_token(&self) -> Option<&str>;
 }
 
@@ -190,16 +192,35 @@ pub async fn verify_2fa_login(
     installed: &InstalledState,
     temp_token: &str,
     code: &str,
+    source: &str,
 ) -> Result<LoginOutcome, AppError> {
+    let source_key = format!("2fa-source:{}", auth::token_hash(source));
+    require_second_factor_allowed(installed, &[&source_key]).await?;
+
     let user_id = auth_state::consume_2fa_temp_token(&installed.database, temp_token)
         .await?
         .ok_or(AppError::Unauthorized)?;
+
+    // Keyed by account so re-authenticating for a fresh pending token cannot reset the throttle.
+    let account_key = format!("2fa-account:{user_id}");
+    require_second_factor_allowed(installed, &[&account_key]).await?;
 
     let (enabled, secret_opt) = auth_store::get_totp_info(&installed.database, &user_id).await?;
     let Some(secret) = secret_opt else {
         return Err(AppError::Unauthorized);
     };
     if !enabled || !verify_totp_once(installed, &user_id, &secret, code).await? {
+        let cooldown = installed
+            .auth_security
+            .record_two_factor_failure(&[&account_key, &source_key])
+            .await;
+        if cooldown > 0 {
+            tracing::warn!(
+                user_id = %user_id,
+                cooldown_seconds = cooldown,
+                "second-factor verification failures triggered a cooldown"
+            );
+        }
         return Err(AppError::Validation("Invalid 2FA verification code".into()));
     }
 
@@ -207,6 +228,10 @@ pub async fn verify_2fa_login(
         .await?
         .filter(|u| u.active)
         .ok_or(AppError::Unauthorized)?;
+    installed
+        .auth_security
+        .record_success(&account_key, &source_key)
+        .await;
 
     let (session_token, csrf_token) =
         auth_state::create_session(&installed.database, &credential.id).await?;
@@ -216,6 +241,16 @@ pub async fn verify_2fa_login(
         csrf_token,
         user,
     })
+}
+
+async fn require_second_factor_allowed(
+    installed: &InstalledState,
+    keys: &[&str],
+) -> Result<(), AppError> {
+    match installed.auth_security.two_factor_gate(keys).await {
+        Some(_) => Err(AppError::TooManyRequests),
+        None => Ok(()),
+    }
 }
 
 pub async fn setup_2fa(
@@ -346,7 +381,7 @@ pub async fn logout(
     installed: &InstalledState,
     request: &impl AuthRequest,
 ) -> Result<(), AppError> {
-    if let Some(token) = request.session_token() {
+    if let Some(token) = request.session_token(installed.config.secure_cookie) {
         auth_state::revoke_session(&installed.database, &auth::token_hash(&token)).await?;
     }
     Ok(())
@@ -379,7 +414,9 @@ async fn authenticate_session(
     installed: &InstalledState,
     request: &impl AuthRequest,
 ) -> Result<(AuthenticatedUser, String), AppError> {
-    let token = request.session_token().ok_or(AppError::Unauthorized)?;
+    let token = request
+        .session_token(installed.config.secure_cookie)
+        .ok_or(AppError::Unauthorized)?;
     let session = auth_state::session(&installed.database, &auth::token_hash(&token))
         .await?
         .ok_or(AppError::Unauthorized)?;

@@ -306,6 +306,16 @@ pub async fn evaluate_all_rules(database: &DatabaseConnection) -> Result<usize, 
             warn!(rule_id = %rule.id, "failed to parse alert expression");
             continue;
         };
+        // Re-validate stored expressions: filter field names reach the SQL builder as identifiers,
+        // and a rule can arrive through a restored backup without passing the write-time checks.
+        if let Err(reason) = expression.validate() {
+            warn!(
+                rule_id = %rule.id,
+                reason,
+                "skipping alert rule whose stored expression is no longer valid"
+            );
+            continue;
+        }
 
         let window_ms = i64::from(expression.window_minutes) * 60_000;
         let window_start = now - window_ms;

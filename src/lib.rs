@@ -23,7 +23,7 @@ pub mod web_assets;
 use std::{io, sync::Arc};
 
 use actix_web::{App, HttpServer, middleware, web};
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::{config::RuntimeConfig, state::AppState};
@@ -39,6 +39,17 @@ pub async fn run() -> io::Result<()> {
 
     if !state.is_installed().await {
         info!("Sonde is waiting for one-time web setup");
+    }
+    if !runtime.bind_is_loopback() && runtime.allow_insecure_cookies {
+        warn!(
+            "SONDE_ALLOW_INSECURE_COOKIES is set: session cookies will not be marked Secure on a \
+             non-loopback bind; side effects include cookie theft over plaintext HTTP"
+        );
+    }
+    if runtime.bind_is_loopback() {
+        info!(
+            "SONDE_BIND is loopback-only; remote clients must reach Sonde through a reverse proxy"
+        );
     }
     info!(address = %runtime.bind, "starting Sonde");
     let emit_hsts = !runtime.bind_is_loopback();

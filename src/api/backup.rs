@@ -1,4 +1,4 @@
-use actix_web::{HttpRequest, HttpResponse, Responder, error as web_error, web};
+use actix_web::{HttpRequest, HttpResponse, Responder, error as web_error, http::header, web};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -26,6 +26,10 @@ pub struct UpdateSystemSettingsRequest {
     pub timezone: Option<String>,
     pub locale: Option<String>,
 }
+
+/// Restore streams to a staging file, so the whole archive must be bounded: a per-record limit
+/// alone still lets a client fill the disk one newline-delimited record at a time.
+const MAX_RESTORE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route(
@@ -161,6 +165,9 @@ async fn restore_system_backup(
 ) -> Result<HttpResponse, AppError> {
     let installed = state.installed().await?;
     let user = authentication::authenticate_mutation(&installed, &req).await?;
+    if declared_content_length(&req).is_some_and(|length| length > MAX_RESTORE_BYTES) {
+        return Err(AppError::PayloadTooLarge);
+    }
 
     // NamedTempFile owns deletion. The async handle returned by reopen writes to the same inode,
     // while the guard keeps the path alive for the validation and restore passes.
@@ -171,11 +178,16 @@ async fn restore_system_backup(
         .map_err(|error| AppError::internal("reopen backup restore staging file", error))?;
     let mut staging_file = tokio::fs::File::from_std(staging_file);
     let mut current_record_bytes = 0_usize;
+    let mut total_bytes = 0_u64;
 
     while let Some(chunk) = body.next().await {
         let chunk = chunk.map_err(|error| {
             AppError::Validation(format!("backup upload was interrupted: {error}"))
         })?;
+        total_bytes = total_bytes.saturating_add(chunk.len() as u64);
+        if total_bytes > MAX_RESTORE_BYTES {
+            return Err(AppError::PayloadTooLarge);
+        }
         for byte in chunk.as_ref() {
             if *byte == b'\n' {
                 current_record_bytes = 0;
@@ -207,4 +219,12 @@ async fn restore_system_backup(
         "restoredRecords": restored,
         "formatVersion": backup_archive::FORMAT_VERSION,
     })))
+}
+
+fn declared_content_length(request: &HttpRequest) -> Option<u64> {
+    request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
 }

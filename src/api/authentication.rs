@@ -119,6 +119,7 @@ async fn login(
     request: HttpRequest,
     body: web::Json<LoginRequest>,
 ) -> Result<HttpResponse, AppError> {
+    super::request_auth::reject_cross_site_origin(&request)?;
     let installed = state.installed().await?;
     let source = login_source(&request, &state.runtime.trusted_proxies);
     let identifier = body.identifier()?;
@@ -175,6 +176,7 @@ async fn login(
 
 async fn verify_2fa(
     state: web::Data<Arc<AppState>>,
+    request: HttpRequest,
     body: web::Json<TwoFactorVerifyRequest>,
 ) -> Result<HttpResponse, AppError> {
     if body.temp_token.len() > 256 || body.code.len() > 16 {
@@ -182,9 +184,11 @@ async fn verify_2fa(
             "invalid 2FA verification request".into(),
         ));
     }
+    super::request_auth::reject_cross_site_origin(&request)?;
     let installed = state.installed().await?;
+    let source = login_source(&request, &state.runtime.trusted_proxies);
     let outcome =
-        authentication::verify_2fa_login(&installed, &body.temp_token, &body.code).await?;
+        authentication::verify_2fa_login(&installed, &body.temp_token, &body.code, &source).await?;
     let cookie = session_cookie(&installed.config, outcome.session_token, Duration::hours(8));
     Ok(HttpResponse::Ok()
         .insert_header((header::CACHE_CONTROL, "no-store"))

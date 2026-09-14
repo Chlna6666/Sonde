@@ -60,7 +60,7 @@ async fn recover_existing_database(
         database_url: database_url.to_owned(),
         locale: "en".into(),
         timezone: "UTC".into(),
-        secure_cookie: !runtime.bind_is_loopback(),
+        secure_cookie: runtime.requires_secure_cookies(),
     };
     config
         .write_atomic(&runtime.config_path)

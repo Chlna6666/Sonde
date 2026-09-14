@@ -1,9 +1,4 @@
-use actix_web::{
-    HttpResponse, ResponseError,
-    error::{JsonPayloadError, PathError, QueryPayloadError},
-    http::StatusCode,
-    web,
-};
+use actix_web::{HttpResponse, ResponseError, error::JsonPayloadError, http::StatusCode, web};
 use serde::Serialize;
 
 use crate::error::AppError;
@@ -70,25 +65,17 @@ pub(crate) fn json_config(limit: usize) -> web::JsonConfig {
 
 pub(crate) fn query_config() -> web::QueryConfig {
     web::QueryConfig::default().error_handler(|error, _request| {
-        let error = match error {
-            QueryPayloadError::Deserialize(error) => {
-                AppError::Validation(format!("invalid query parameters: {error}"))
-            }
-            other => AppError::Validation(format!("invalid query parameters: {other}")),
-        };
-        error.into()
+        // Deserializer details describe internal field names and types; keep them out of the
+        // response body and leave them in the log stream instead.
+        tracing::debug!(error = ?error, "query parameters rejected");
+        AppError::Validation("invalid query parameters".into()).into()
     })
 }
 
 pub(crate) fn path_config() -> web::PathConfig {
     web::PathConfig::default().error_handler(|error, _request| {
-        let error = match error {
-            PathError::Deserialize(error) => {
-                AppError::Validation(format!("invalid route parameters: {error}"))
-            }
-            other => AppError::Validation(format!("invalid route parameters: {other}")),
-        };
-        error.into()
+        tracing::debug!(error = ?error, "route parameters rejected");
+        AppError::Validation("invalid route parameters".into()).into()
     })
 }
 
@@ -104,7 +91,8 @@ fn json_payload_error(error: JsonPayloadError) -> AppError {
             AppError::Validation("invalid JSON request body".into())
         }
         JsonPayloadError::Payload(error) => {
-            AppError::Validation(format!("request body could not be read: {error}"))
+            tracing::debug!(error = ?error, "request body could not be read");
+            AppError::Validation("request body could not be read".into())
         }
         JsonPayloadError::Serialize(error) => {
             AppError::internal("serialize extracted JSON request", error)

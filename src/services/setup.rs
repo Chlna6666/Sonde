@@ -1,5 +1,7 @@
 use std::{fs, path::Path, sync::Arc};
 
+use tracing::warn;
+
 use crate::{
     auth,
     config::InstallationConfig,
@@ -55,11 +57,12 @@ pub async fn complete(state: &AppState, input: SetupInput<'_>) -> Result<(), App
         input.locale,
     )
     .await?;
+    let secure_cookie = resolve_secure_cookie(state, input.secure_cookie);
     let config = InstallationConfig {
         database_url,
         locale: input.locale.to_owned(),
         timezone: input.timezone.to_owned(),
-        secure_cookie: input.secure_cookie,
+        secure_cookie,
     };
     config
         .write_atomic(&state.runtime.config_path)
@@ -172,6 +175,24 @@ fn normalize_path(path: &Path) -> std::path::PathBuf {
         }
     }
     out
+}
+
+/// Session cookies must be `Secure` whenever the server can be reached from another host, so the
+/// secure mode is forced server-side instead of trusting the value submitted by the setup page.
+fn resolve_secure_cookie(state: &AppState, requested: bool) -> bool {
+    if state.runtime.requires_secure_cookies() {
+        return true;
+    }
+    if requested {
+        return true;
+    }
+    if !state.runtime.bind_is_loopback() {
+        warn!(
+            "SONDE_ALLOW_INSECURE_COOKIES is enabled: session cookies will not be marked Secure on a \
+             non-loopback bind; terminate TLS in front of Sonde and remove the flag"
+        );
+    }
+    false
 }
 
 fn validate_identity(email: &str, username: &str) -> Result<(), AppError> {

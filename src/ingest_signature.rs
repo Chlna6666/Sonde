@@ -33,7 +33,12 @@ fn unix_millis() -> i64 {
 
 #[must_use = "HMAC verification failure must be handled"]
 pub fn verify_at(request: VerifyRequest<'_>, now_ms: i64) -> Result<(), AppError> {
-    if (now_ms - request.timestamp_ms).abs() > 60_000 {
+    // `checked_sub` + `unsigned_abs` keep an attacker-supplied extreme timestamp from
+    // overflowing (a panic under `overflow-checks`) and always resolve to "stale".
+    let drift = now_ms
+        .checked_sub(request.timestamp_ms)
+        .map(i64::unsigned_abs);
+    if drift.is_none_or(|drift| drift > 60_000) {
         return Err(AppError::Validation(
             "request timestamp drift too large (allowed +/- 60s)".into(),
         ));
@@ -216,6 +221,28 @@ mod tests {
         assert!(std::str::from_utf8(&zero).unwrap().contains("\n0\n"));
         let negative = canonical_request(-12, "n", "post", "/p", b"");
         assert!(std::str::from_utf8(&negative).unwrap().contains("\n-12\n"));
+    }
+
+    #[test]
+    fn extreme_timestamps_are_rejected_instead_of_overflowing() {
+        let signature = "0".repeat(64);
+        for timestamp in [i64::MIN, i64::MIN / 2, i64::MAX] {
+            assert!(
+                super::verify_at(
+                    request(
+                        "key",
+                        timestamp,
+                        "nonce-1",
+                        "POST",
+                        "/api/v1/ingest/events",
+                        b"{}",
+                        &signature,
+                    ),
+                    0,
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

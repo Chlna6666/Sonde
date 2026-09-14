@@ -81,8 +81,8 @@ async fn list_audit_logs(
 ) -> Result<impl Responder, AppError> {
     let installed = state.installed().await?;
     let user = authentication::authenticate(&installed, &req).await?;
-    let page = query.page.unwrap_or(1);
-    let page_size = query.page_size.unwrap_or(50);
+    let page = crate::security::bounded_page(query.page);
+    let page_size = crate::security::bounded_page_size(query.page_size);
     let logs = access::list_audit_logs(
         &installed,
         &user,

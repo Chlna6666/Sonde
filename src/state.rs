@@ -6,12 +6,24 @@ use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore, TryAcquireErro
 use crate::{
     config::{InstallationConfig, RuntimeConfig},
     error::AppError,
-    security::AuthSecurity,
+    security::{AuthSecurity, PreInstallThrottle},
     services::ingest_writer::IngestWriter,
 };
 
 const MAX_IN_FLIGHT_INGEST_REQUESTS: usize = 64;
 const MAX_IN_FLIGHT_ANALYTICS_QUERIES: usize = 8;
+const SETUP_REQUESTS_PER_MINUTE: u64 = 30;
+const MAX_SETUP_THROTTLE_ENTRIES: usize = 4_096;
+
+/// A telemetry activity notification fanned out to live-update subscribers.
+///
+/// The application id travels alongside the serialized payload so every subscriber can drop
+/// updates for applications it is not allowed to read.
+#[derive(Clone, Debug)]
+pub struct LiveUpdate {
+    pub application_id: String,
+    pub payload: String,
+}
 
 pub struct InstalledState {
     pub database: DatabaseConnection,
@@ -40,9 +52,10 @@ pub struct AppState {
     pub runtime: RuntimeConfig,
     installed: RwLock<Option<Arc<InstalledState>>>,
     pub setup_lock: Mutex<()>,
-    pub live_updates: broadcast::Sender<String>,
+    pub live_updates: broadcast::Sender<LiveUpdate>,
     ingest_gate: Arc<Semaphore>,
     analytics_gate: Arc<Semaphore>,
+    setup_throttle: PreInstallThrottle,
 }
 
 impl AppState {
@@ -60,7 +73,16 @@ impl AppState {
             live_updates,
             ingest_gate: Arc::new(Semaphore::new(MAX_IN_FLIGHT_INGEST_REQUESTS)),
             analytics_gate: Arc::new(Semaphore::new(MAX_IN_FLIGHT_ANALYTICS_QUERIES)),
+            setup_throttle: PreInstallThrottle::new(SETUP_REQUESTS_PER_MINUTE, 60_000),
         })
+    }
+
+    /// Throttles the unauthenticated setup wizard endpoints, which are reachable before any
+    /// installation (and therefore before the login gate) exists.
+    pub async fn charge_setup_request(&self, client_ip: &str) -> bool {
+        self.setup_throttle
+            .charge(client_ip, MAX_SETUP_THROTTLE_ENTRIES)
+            .await
     }
 
     pub async fn installed(&self) -> Result<Arc<InstalledState>, AppError> {
