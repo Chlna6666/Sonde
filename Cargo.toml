@@ -13,7 +13,7 @@ categories = ["web-programming::http-server"]
 
 [dependencies]
 actix-web = "4.11"
-argon2 = "0.5"
+argon2 = "0.6"
 async-stream = "0.3"
 awc = { version = "3", features = ["rustls-0_23"] }
 base64 = "0.22"
