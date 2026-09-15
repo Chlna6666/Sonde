@@ -1,5 +1,6 @@
 # Rust and frontend build output
 /target/
+/sdk/rust/target/
 /web/dist/
 /web/node_modules/
 
