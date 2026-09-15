@@ -1,0 +1,47 @@
+# Build context hygiene. Without this file, `docker compose up --build` uploads the whole
+# working tree as build context. A populated Rust tree easily exceeds 80 GB here
+# (target/debug/deps with PDBs, target/debug/incremental) plus web/node_modules, which makes
+# the build physically impossible on typical developer machines.
+#
+# The Dockerfile only needs: Cargo.toml, Cargo.lock, build.rs, src/, and web/
+# (package.json + pnpm-lock.yaml + sources). Everything below is excluded.
+#
+# NOTE: web/dist is intentionally NOT excluded — the compiled frontend is embedded into the
+# binary at compile time via rust-embed.
+
+# Rust build artifacts
+target/
+**/target/
+sdk/rust/target/
+rust/target/
+**/*.pdb
+
+# Frontend dependencies (reinstalled inside the image via pnpm)
+web/node_modules/
+**/node_modules/
+
+# VCS, editor and agent scratch space
+.git/
+.gitignore
+.github/
+.workbuddy/
+.vscode/
+.idea/
+
+# Local runtime state, secrets and databases — never bake these into an image
+/data/
+data/
+**/*.sqlite
+**/*.sqlite-shm
+**/*.sqlite-wal
+**/*.sqlite-journal
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Generated output and local-only material
+deliverables/
+*.log
+*.tmp
