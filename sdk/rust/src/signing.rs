@@ -16,7 +16,8 @@ pub(crate) fn sign(
     body: &[u8],
 ) -> Result<String> {
     let canonical = canonical_request(timestamp_ms, nonce, method, path, body);
-    let mut mac = HmacSha256::new_from_slice(signing_key.as_bytes()).map_err(|_| Error::SigningKey)?;
+    let mut mac =
+        HmacSha256::new_from_slice(signing_key.as_bytes()).map_err(|_| Error::SigningKey)?;
     mac.update(&canonical);
     Ok(hex::encode(mac.finalize().into_bytes()))
 }
@@ -59,13 +60,7 @@ mod tests {
         let timestamp = 1_725_000_000_123_i64;
         let nonce = "018f47f2-2d4b-7d6c-9f30-111111111111";
         let body = br#"{"items":[{"name":"app_startup"}]}"#;
-        let canonical = canonical_request(
-            timestamp,
-            nonce,
-            "POST",
-            "/api/v1/ingest/events",
-            body,
-        );
+        let canonical = canonical_request(timestamp, nonce, "POST", "/api/v1/ingest/events", body);
         let mut mac = match Hmac::<Sha256>::new_from_slice(key.as_bytes()) {
             Ok(mac) => mac,
             Err(_) => return,
@@ -73,15 +68,7 @@ mod tests {
         mac.update(&canonical);
         let expected = hex::encode(mac.finalize().into_bytes());
         assert_eq!(
-            sign(
-                key,
-                timestamp,
-                nonce,
-                "POST",
-                "/api/v1/ingest/events",
-                body,
-            )
-            .ok(),
+            sign(key, timestamp, nonce, "POST", "/api/v1/ingest/events", body,).ok(),
             Some(expected),
         );
     }

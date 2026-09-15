@@ -211,7 +211,10 @@ impl SondeClient {
         }
         let requests = [
             ("events", self.inner.queues.events.request_shutdown().await),
-            ("metrics", self.inner.queues.metrics.request_shutdown().await),
+            (
+                "metrics",
+                self.inner.queues.metrics.request_shutdown().await,
+            ),
             ("logs", self.inner.queues.logs.request_shutdown().await),
             ("errors", self.inner.queues.errors.request_shutdown().await),
         ];
@@ -542,13 +545,10 @@ impl Transport {
 }
 
 async fn await_requests(
-    requests: [
-        (
-            &'static str,
-            Result<tokio::sync::oneshot::Receiver<Result<()>>>,
-        );
-        4
-    ],
+    requests: [(
+        &'static str,
+        Result<tokio::sync::oneshot::Receiver<Result<()>>>,
+    ); 4],
 ) -> Result<()> {
     let mut first_error = None;
     for (kind, request) in requests {

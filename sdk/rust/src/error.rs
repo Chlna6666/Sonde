@@ -18,21 +18,19 @@ pub enum Error {
     QueueFull { kind: &'static str },
     #[error("telemetry {kind} queue is closed")]
     QueueClosed { kind: &'static str },
-    #[error("non-blocking enqueue is unavailable for durable {kind} delivery; use the async enqueue API")]
+    #[error(
+        "non-blocking enqueue is unavailable for durable {kind} delivery; use the async enqueue API"
+    )]
     DurableEnqueueRequiresAsync { kind: &'static str },
     #[error("durable {kind} enqueue task failed: {reason}")]
-    DurableEnqueueTask {
-        kind: &'static str,
-        reason: String,
-    },
+    DurableEnqueueTask { kind: &'static str, reason: String },
     #[error("telemetry {kind} spool reached its {max_bytes} byte capacity")]
-    SpoolFull {
-        kind: &'static str,
-        max_bytes: u64,
-    },
+    SpoolFull { kind: &'static str, max_bytes: u64 },
     #[error("telemetry spool at {path:?} is already locked by another client/process")]
     SpoolLocked { path: PathBuf },
-    #[error("telemetry spool at {path:?} belongs to a different Sonde endpoint/device/bootstrap key")]
+    #[error(
+        "telemetry spool at {path:?} belongs to a different Sonde endpoint/device/bootstrap key"
+    )]
     SpoolBindingMismatch { path: PathBuf },
     #[error("failed to access telemetry spool at {path:?}: {source}")]
     SpoolIo {
@@ -45,15 +43,9 @@ pub enum Error {
     #[error("Sonde client is shutting down")]
     ShuttingDown,
     #[error("{pending} durable {kind} telemetry item(s) remain deferred after retry exhaustion")]
-    DeferredTelemetry {
-        kind: &'static str,
-        pending: usize,
-    },
+    DeferredTelemetry { kind: &'static str, pending: usize },
     #[error("Sonde rejected {rejected} item(s) from the {kind} delivery queue")]
-    RejectedItems {
-        kind: &'static str,
-        rejected: usize,
-    },
+    RejectedItems { kind: &'static str, rejected: usize },
     #[error("Sonde returned an invalid or ambiguous delivery response: {0}")]
     InvalidServerResponse(String),
     #[error("failed to access Sonde device ID storage at {path:?}: {source}")]
@@ -63,10 +55,7 @@ pub enum Error {
         source: io::Error,
     },
     #[error("stored Sonde device ID at {path:?} is invalid: {reason}")]
-    InvalidStoredDeviceId {
-        path: PathBuf,
-        reason: &'static str,
-    },
+    InvalidStoredDeviceId { path: PathBuf, reason: &'static str },
     #[error("failed to serialize telemetry payload: {0}")]
     Serialization(#[from] serde_json::Error),
     #[error("HTTP request failed: {0}")]

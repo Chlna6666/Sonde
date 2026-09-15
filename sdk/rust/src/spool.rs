@@ -120,6 +120,7 @@ impl Spool {
         let lock_path = directory.join("spool.lock");
         let lock_file = StdOpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)
@@ -207,10 +208,7 @@ impl Spool {
             .filter_map(|segment| segment.max_sequence)
             .max()
             .unwrap_or(0);
-        let next_sequence = max_seen
-            .max(acknowledged_sequence)
-            .saturating_add(1)
-            .max(1);
+        let next_sequence = max_seen.max(acknowledged_sequence).saturating_add(1).max(1);
 
         if segments.is_empty() {
             let path = segment_path(&directory, next_sequence);
@@ -246,6 +244,7 @@ impl Spool {
 
         let mut ack_file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&ack_path)
@@ -286,8 +285,7 @@ impl Spool {
         let frame_len = u64::try_from(frame.len()).map_err(|_| Error::PayloadTooLarge)?;
 
         if state.segments.last().is_some_and(|segment| {
-            segment.size > 0
-                && segment.size.saturating_add(frame_len) > state.options.segment_bytes
+            segment.size > 0 && segment.size.saturating_add(frame_len) > state.options.segment_bytes
         }) {
             roll_segment(&mut state).await?;
             cleanup_acknowledged_segments(&mut state).await?;
@@ -324,10 +322,11 @@ impl Spool {
             return Err(spool_io(&active_path, source));
         }
 
+        let spool_directory = state.directory.clone();
         let active = state
             .segments
             .last_mut()
-            .ok_or_else(|| spool_corrupt(&state.directory, "missing active segment metadata"))?;
+            .ok_or_else(|| spool_corrupt(&spool_directory, "missing active segment metadata"))?;
         active.size = active.size.saturating_add(frame_len);
         active.max_sequence = Some(sequence);
         state.total_bytes = state.total_bytes.saturating_add(frame_len);
@@ -400,7 +399,10 @@ async fn ensure_binding(directory: &Path, binding: [u8; 32]) -> Result<()> {
     match fs::read(&path).await {
         Ok(bytes) => {
             if bytes.len() != META_BYTES || bytes[..META_MAGIC.len()] != META_MAGIC {
-                return Err(spool_corrupt(&path, "unsupported or corrupt spool metadata"));
+                return Err(spool_corrupt(
+                    &path,
+                    "unsupported or corrupt spool metadata",
+                ));
             }
             if bytes[META_MAGIC.len()..] != binding {
                 return Err(Error::SpoolBindingMismatch { path });
@@ -526,7 +528,10 @@ async fn scan_segment(
         let frame_len_u64 = u64::try_from(frame_len)
             .map_err(|_| spool_corrupt(path, "record frame length overflow"))?;
         if frame_len_u64 > segment_limit.saturating_add(RECORD_HEADER_BYTES as u64) {
-            return Err(spool_corrupt(path, "record length exceeds spool segment limit"));
+            return Err(spool_corrupt(
+                path,
+                "record length exceeds spool segment limit",
+            ));
         }
         if remaining < frame_len {
             if allow_truncated_tail {

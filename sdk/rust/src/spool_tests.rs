@@ -10,10 +10,7 @@ use crate::{
 };
 
 fn test_root(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "sonde-spool-{name}-{}",
-        uuid::Uuid::new_v4()
-    ))
+    std::env::temp_dir().join(format!("sonde-spool-{name}-{}", uuid::Uuid::new_v4()))
 }
 
 fn options(root: &Path) -> SpoolOptions {
@@ -89,9 +86,7 @@ fn repairs_truncated_active_segment_tail() -> Result<(), Box<dyn std::error::Err
         Ok::<(), crate::Error>(())
     })?;
 
-    let segment = root
-        .join("events")
-        .join("00000000000000000001.wal");
+    let segment = root.join("events").join("00000000000000000001.wal");
     let valid_len = fs::metadata(&segment)?.len();
     let mut file = OpenOptions::new().append(true).open(&segment)?;
     file.write_all(b"SNDWpartial-tail")?;

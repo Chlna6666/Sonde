@@ -1,7 +1,7 @@
 use std::{
     fs::{self, OpenOptions},
     io::Write,
-    path::{Path, PathBuf},
+    path::Path,
     thread,
     time::Duration,
 };
@@ -34,7 +34,10 @@ pub fn load_or_create_device_id(path: impl AsRef<Path>) -> Result<String> {
         return Ok(device_id);
     }
 
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent).map_err(|source| storage_error(parent, source))?;
     }
 

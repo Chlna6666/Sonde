@@ -264,6 +264,9 @@ pub struct BatchReceipt {
 #[derive(Clone, Debug, Deserialize)]
 pub struct RejectedItem {
     pub index: usize,
+    /// Populated from the server response; retained because it is part of the
+    /// wire contract even though the SDK does not surface it yet.
+    #[allow(dead_code)]
     pub reason: String,
 }
 

@@ -216,7 +216,8 @@ impl<T: QueuedTelemetry> DeliveryQueue<T> {
             }
             None => (None, Vec::new()),
         };
-        let recovered_items: Vec<QueuedItem> = recovered.into_iter().map(QueuedItem::from).collect();
+        let recovered_items: Vec<QueuedItem> =
+            recovered.into_iter().map(QueuedItem::from).collect();
 
         let (sender, receiver) = mpsc::channel(options.queue_capacity);
         let counters = Arc::new(QueueCounters::default());
@@ -616,8 +617,10 @@ mod tests {
     #[test]
     fn validates_delivery_configuration() {
         assert!(DeliveryOptions::default().validate().is_ok());
-        let mut invalid = DeliveryOptions::default();
-        invalid.queue_capacity = 0;
+        let mut invalid = DeliveryOptions {
+            queue_capacity: 0,
+            ..DeliveryOptions::default()
+        };
         assert!(invalid.validate().is_err());
         invalid = DeliveryOptions::default();
         invalid.max_batch_items = 1_001;
