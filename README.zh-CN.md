@@ -31,6 +31,20 @@ docker compose up -d --build
 
 访问 <http://127.0.0.1:8080> 并完成初始化向导。Docker 会将运行数据持久化到 `sonde_data` 卷中。
 
+### 首次安装令牌（Setup Token）
+
+初始化向导（`/api/v1/setup/*`）在任何账号存在之前运行，因此必须在请求头 `X-Sonde-Setup-Token` 中携带一次性安装令牌；安装完成后令牌立即作废。
+
+- **首次启动前先设置 `SONDE_SETUP_TOKEN`（至少 16 个字符）**，这是推荐做法。
+- 若未设置，Sonde 会在每次启动时生成一个随机令牌并打印到启动日志一次：
+
+  ```bash
+  docker compose logs sonde 2>&1 | grep -i token
+  ```
+
+  注意：**每次重启都会重新生成令牌**。安装过程中若重启容器，之前复制的令牌即失效，向导会开始返回 401。
+- 实例尚未完成安装时，切勿将 8080 端口暴露到不受信任的网络。
+
 ## 本地开发
 
 依赖：Rust 1.95.0+、Node.js 22+、pnpm 10+。
@@ -61,9 +75,32 @@ Debug 构建会跳过内嵌前端的生产打包。若需在 Debug 模式构建�
 | `SONDE_CONFIG_PATH` | 覆盖生成的配置文件位置 | `$SONDE_DATA_DIR/sonde.json` |
 | `SONDE_PEPPER_PATH` | 覆盖生成的密码 Pepper 文件位置 | `$SONDE_DATA_DIR/sonde.password-pepper` |
 | `SONDE_DATABASE_URL` | 覆盖数据库连接字符串 | 未设置 |
+| `SONDE_SETUP_TOKEN` | 初始化向导所需的一次性令牌，至少 16 个字符 | 未设置（每次启动生成随机令牌并打印到日志） |
+| `SONDE_MASTER_KEY` | 64 位十六进制主密钥，用于加密存储的机密（当前为 TOTP 共享密钥） | 未设置（生成为 `$SONDE_DATA_DIR/sonde.master-key`） |
+| `SONDE_TRUSTED_PROXIES` | 允许提供客户端地址的代理 IP，逗号分隔 | 未设置（不信任任何代理） |
+| `SONDE_ALLOW_INSECURE_COOKIES` | 当 `SONDE_BIND` 非回环地址时，关闭强制 `Secure` 会话 Cookie | 未设置（关闭） |
 | `SONDE_DEV_PROXY` | Vite 开发服务器地址 | 未设置 |
 | `SONDE_BUILD_WEB` | 在 Debug 构建中打包前端资源 | 未设置 |
 | `RUST_LOG` | 日志过滤规则 | `sonde=info,actix_web=info` |
+
+### HTTPS、Secure Cookie 与反向代理
+
+当 `SONDE_BIND` **不是**回环地址时，Sonde 会强制会话 Cookie 带 `Secure` 属性并使用 `__Host-` 前缀（见 `RuntimeConfig::requires_secure_cookies()`）。此时若以纯 HTTP 访问，例如 `http://192.168.1.10:8080`，浏览器会拒绝保存 Cookie，表现为**静默登录失败**。
+
+请二选一：在 Sonde 前置 TLS 反向代理（推荐；代理与 Sonde 同机时可只映射 `127.0.0.1:8080:8080`），或显式设置 `SONDE_ALLOW_INSECURE_COOKIES=1`——后者意味着会话 Cookie 可能被链路上的任何人截获。详见 [`docker-compose.yml`](docker-compose.yml) 中的注释。
+
+### 备份
+
+请完整备份 `SONDE_DATA_DIR`（Docker 中即 `sonde_data` 卷）。其中以下文件必须包含：
+
+| 文件 | 内容 | 丢失后果 |
+| --- | --- | --- |
+| `sonde.json` | 安装配置，含数据库 URL 与凭据 | 需要重新安装 |
+| `sonde.password-pepper` | 口令 Pepper（可用 `SONDE_PEPPER_PATH` 覆盖位置） | **所有口令无法验证，全员锁死** |
+| `sonde.master-key` | 存储机密的 AEAD 主密钥 | **所有已注册的 TOTP 无法恢复** |
+| `sonde.sqlite` | SQLite 数据库文件（仅 SQLite 部署） | 全部遥测数据丢失 |
+
+多副本部署必须为每个副本注入相同的 `SONDE_MASTER_KEY`（64 位十六进制字符），否则副本之间无法解密彼此存储的 TOTP 机密。
 
 ## Rust SDK 接入
 

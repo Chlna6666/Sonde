@@ -31,6 +31,20 @@ docker compose up -d --build
 
 Open <http://127.0.0.1:8080> and complete the initialization wizard. Docker persists application data in the `sonde_data` volume.
 
+### First-run setup token
+
+The wizard (`/api/v1/setup/*`) runs before any account exists, so it requires a one-time setup token sent in the `X-Sonde-Setup-Token` header. The token is invalidated as soon as installation completes.
+
+- **Set `SONDE_SETUP_TOKEN` (16+ characters) before the first start.** That is the recommended path.
+- If you do not set it, Sonde generates a random token at startup and logs it once:
+
+  ```bash
+  docker compose logs sonde 2>&1 | grep -i token
+  ```
+
+  A new token is generated on **every** restart, so restarting the container mid-installation invalidates the token you already copied and the wizard starts answering 401.
+- Never leave port 8080 reachable from untrusted networks while the instance is still uninstalled.
+
 ## Local development
 
 Requirements: Rust 1.95.0+, Node.js 22+, and pnpm 10+.
@@ -61,9 +75,32 @@ Debug builds skip the embedded production frontend bundle. Set `SONDE_BUILD_WEB=
 | `SONDE_CONFIG_PATH` | Overrides the generated configuration file location | `$SONDE_DATA_DIR/sonde.json` |
 | `SONDE_PEPPER_PATH` | Overrides the generated password-pepper file location | `$SONDE_DATA_DIR/sonde.password-pepper` |
 | `SONDE_DATABASE_URL` | Database connection-string override | unset |
+| `SONDE_SETUP_TOKEN` | One-time token required by the installation wizard; minimum 16 characters | unset (a random token is generated and logged at every startup) |
+| `SONDE_MASTER_KEY` | 64-hex-character key encrypting stored secrets (currently TOTP shared secrets) | unset (generated as `$SONDE_DATA_DIR/sonde.master-key`) |
+| `SONDE_TRUSTED_PROXIES` | Comma-separated proxy IPs allowed to supply the client address | unset (no proxy trusted) |
+| `SONDE_ALLOW_INSECURE_COOKIES` | Opts out of forced `Secure` session cookies when `SONDE_BIND` is not loopback | unset (disabled) |
 | `SONDE_DEV_PROXY` | Vite development-server URL | unset |
 | `SONDE_BUILD_WEB` | Builds frontend assets during debug builds | unset |
 | `RUST_LOG` | Tracing filter | `sonde=info,actix_web=info` |
+
+### HTTPS, secure cookies and reverse proxies
+
+Whenever `SONDE_BIND` is **not** a loopback address, Sonde forces session cookies to be `Secure` and uses the `__Host-` prefix (`RuntimeConfig::requires_secure_cookies()`). Reaching such an instance over plain HTTP — for example `http://192.168.1.10:8080` — therefore fails to log in **silently**: the browser refuses to store the cookie.
+
+Either terminate TLS in front of Sonde (recommended; publish the proxy on `127.0.0.1:8080:8080` if it runs on the same host), or set `SONDE_ALLOW_INSECURE_COOKIES=1`, accepting that session cookies can be captured by anyone on the network path. See the comments in [`docker-compose.yml`](docker-compose.yml).
+
+### Backups
+
+Back up the whole `SONDE_DATA_DIR` (the `sonde_data` volume in Docker). These files are mandatory:
+
+| File | Contents | Consequence of loss |
+| --- | --- | --- |
+| `sonde.json` | Installation config, including the database URL and its credentials | Reinstallation required |
+| `sonde.password-pepper` | Password pepper (override with `SONDE_PEPPER_PATH`) | **Every password becomes unverifiable — all users are locked out** |
+| `sonde.master-key` | AEAD master key for stored secrets | **Every enrolled TOTP factor becomes unrecoverable** |
+| `sonde.sqlite` | SQLite database file (SQLite deployments only) | All telemetry lost |
+
+Multi-replica deployments must inject the same `SONDE_MASTER_KEY` (64 hex characters) into every replica; otherwise replicas cannot decrypt each other's stored TOTP secrets.
 
 ## Rust SDK
 
