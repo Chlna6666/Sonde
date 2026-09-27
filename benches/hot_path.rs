@@ -1,7 +1,9 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use hmac::{Hmac, Mac};
+use std::hint::black_box;
+
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 use sonde::{
     database::{device_identity, query},

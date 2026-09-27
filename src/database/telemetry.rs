@@ -46,12 +46,13 @@ pub async fn insert_events(
         "received_at",
     ];
     let mut inserted = 0_u64;
+    let mut day_cache = UtcDayCache::default();
 
     for chunk in events.chunks(100) {
         let mut rows = Vec::with_capacity(chunk.len());
         for event in chunk {
             let timestamp = event.timestamp.unwrap_or(received_at);
-            let day = utc_day(timestamp);
+            let day = day_cache.get_day(timestamp);
             let attributes_json = encode_attributes(&event.attributes)?;
             let dedupe_key = event
                 .idempotency_key
@@ -352,6 +353,23 @@ fn utc_day(timestamp: i64) -> String {
         .unwrap_or_else(|| String::from("1970-01-01"))
 }
 
+#[derive(Default)]
+struct UtcDayCache {
+    cached_day_epoch: Option<i64>,
+    cached_str: String,
+}
+
+impl UtcDayCache {
+    fn get_day(&mut self, timestamp_millis: i64) -> &str {
+        let day_epoch = timestamp_millis.div_euclid(86_400_000);
+        if self.cached_day_epoch != Some(day_epoch) {
+            self.cached_str = utc_day(timestamp_millis);
+            self.cached_day_epoch = Some(day_epoch);
+        }
+        &self.cached_str
+    }
+}
+
 fn scoped_event_dedupe_key(scope: &TelemetryScope, idempotency_key: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"sonde:event-idempotency:v1\0");
@@ -485,7 +503,7 @@ pub async fn insert_errors(
 mod tests {
     use sha2::{Digest, Sha256};
 
-    use super::{TelemetryScope, anonymous_hash, scoped_event_dedupe_key};
+    use super::{TelemetryScope, UtcDayCache, anonymous_hash, scoped_event_dedupe_key, utc_day};
 
     #[test]
     fn idempotency_key_is_scoped_to_application_and_environment() {
@@ -520,5 +538,23 @@ mod tests {
             hex::encode(hasher.finalize())
         };
         assert_eq!(anonymous_hash(&scope, "device-1"), expected);
+    }
+
+    #[test]
+    fn utc_day_cache_matches_utc_day() {
+        let mut cache = UtcDayCache::default();
+        let timestamps = [
+            0,
+            1_000,
+            86_399_999,
+            86_400_000,
+            1_700_000_000_000,
+            1_700_000_001_000,
+            -1_000,
+            -86_400_000,
+        ];
+        for &ts in &timestamps {
+            assert_eq!(cache.get_day(ts), &utc_day(ts));
+        }
     }
 }

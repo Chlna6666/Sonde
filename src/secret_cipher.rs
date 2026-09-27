@@ -8,8 +8,8 @@
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce, aead::Aead};
-use hmac::{Hmac, Mac};
-use rand::RngCore;
+use hmac::{Hmac, KeyInit as HmacKeyInit, Mac};
+use rand::Rng;
 use sha2::Sha256;
 
 use crate::error::AppError;
@@ -26,7 +26,7 @@ pub struct SecretCipher {
 impl SecretCipher {
     /// Derives the AEAD key from the installation master key.
     pub fn new(master_key: &[u8; 32]) -> Result<Self, AppError> {
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(master_key)
+        let mut mac = <Hmac<Sha256> as HmacKeyInit>::new_from_slice(master_key)
             .map_err(|error| AppError::internal("initialize secret key derivation", error))?;
         mac.update(DERIVE_INFO);
         let derived: [u8; 32] = mac.finalize().into_bytes().into();

@@ -1,9 +1,9 @@
 use argon2::{
     Algorithm, Argon2, Params, Version,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
@@ -17,12 +17,8 @@ pub fn hash_password(password: &str, pepper: &[u8]) -> Result<String, AppError> 
 }
 
 pub fn hash_password_unchecked(password: &str, pepper: &[u8]) -> Result<String, AppError> {
-    let mut salt_bytes = [0_u8; 16];
-    rand::rng().fill_bytes(&mut salt_bytes);
-    let salt = SaltString::encode_b64(&salt_bytes)
-        .map_err(|error| AppError::internal("encode password salt", error))?;
     password_hasher(pepper)?
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password(password.as_bytes())
         .map(|hash| hash.to_string())
         .map_err(|error| AppError::internal("hash password", error))
 }

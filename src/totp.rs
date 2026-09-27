@@ -1,5 +1,5 @@
-use hmac::{Hmac, Mac};
-use rand::RngCore;
+use hmac::{Hmac, KeyInit, Mac};
+use rand::Rng;
 use sha1::Sha1;
 
 type HmacSha1 = Hmac<Sha1>;

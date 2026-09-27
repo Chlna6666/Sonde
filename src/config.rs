@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use rand::RngCore;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]

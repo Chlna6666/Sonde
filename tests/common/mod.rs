@@ -5,7 +5,7 @@
 
 #![allow(dead_code, clippy::expect_used, clippy::unwrap_used)]
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sea_orm::DatabaseConnection;
 use sha2::{Digest, Sha256};
 use sonde::{
