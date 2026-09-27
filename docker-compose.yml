@@ -16,7 +16,7 @@ services:
     # the token Sonde generates and logs at startup. Never leave port 8080 reachable from the
     # internet while the instance is still uninstalled.
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       - SONDE_BIND=0.0.0.0:8080
       - SONDE_DATA_DIR=/app/data
@@ -25,12 +25,13 @@ services:
       - sonde_data:/app/data
     # The process binds an unprivileged port, writes only to /app/data, and stages backup
     # restores in /tmp, so it needs no Linux capabilities and no privilege escalation.
+    read_only: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     tmpfs:
-      - /tmp
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
 
 volumes:
   sonde_data:

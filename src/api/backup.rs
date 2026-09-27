@@ -171,7 +171,10 @@ async fn restore_system_backup(
 
     // NamedTempFile owns deletion. The async handle returned by reopen writes to the same inode,
     // while the guard keeps the path alive for the validation and restore passes.
-    let staging = tempfile::NamedTempFile::new()
+    // Keep large restore uploads on the configured data volume. The official container mounts
+    // /tmp as tmpfs, so using the process-global temp directory would turn a bounded 2 GiB
+    // restore into an avoidable memory/OOM risk.
+    let staging = tempfile::NamedTempFile::new_in(&state.runtime.data_dir)
         .map_err(|error| AppError::internal("create backup restore staging file", error))?;
     let staging_file = staging
         .reopen()
