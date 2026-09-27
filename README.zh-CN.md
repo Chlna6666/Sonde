@@ -102,6 +102,8 @@ Debug 构建会跳过内嵌前端的生产打包。若需在 Debug 模式构建�
 
 多副本部署必须为每个副本注入相同的 `SONDE_MASTER_KEY`（64 位十六进制字符），否则副本之间无法解密彼此存储的 TOTP 机密。
 
+流式 `.sonde.ndjson` 是**数据库归档，不替代安装级密钥备份**。2.2 格式中的密码哈希绑定来源实例的 `sonde.password-pepper`，归档只记录该 Pepper 的单向标识。若目标 Pepper 不一致，恢复会在任何破坏性数据库写入前被拒绝。迁移服务器时，应先把原实例的 `sonde.password-pepper` 恢复到目标服务器，再恢复流式归档。TOTP seed 刻意不进入归档，因此归档恢复后用户需要重新绑定 2FA。
+
 ## Rust SDK 接入
 
 官方 Rust SDK 位于仓库的 `sdk/rust`，设置了 `publish = false`，不会发布到 crates.io。Cargo 对 Git dependency 会遍历仓库寻找目标 crate，因此可以直接使用仓库根地址：

@@ -102,6 +102,8 @@ Back up the whole `SONDE_DATA_DIR` (the `sonde_data` volume in Docker). These fi
 
 Multi-replica deployments must inject the same `SONDE_MASTER_KEY` (64 hex characters) into every replica; otherwise replicas cannot decrypt each other's stored TOTP secrets.
 
+The streamed `.sonde.ndjson` archive is a **database archive, not a replacement for installation-level secret backup**. Password hashes in format 2.2 are bound to the source installation's `sonde.password-pepper`; the archive records only a one-way identifier for that pepper. A restore is rejected before any destructive database write if the target pepper does not match. For server migration, restore the original `sonde.password-pepper` on the target first, then restore the streamed archive. TOTP seeds are intentionally excluded from the archive, so users must re-enroll 2FA after archive restore.
+
 ## Rust SDK
 
 The official Rust SDK lives in `sdk/rust`. It is intentionally marked `publish = false` and is not published to crates.io. Cargo traverses a Git repository to locate the requested package, so consumers can depend on the repository root directly:

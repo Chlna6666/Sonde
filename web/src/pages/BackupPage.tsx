@@ -18,6 +18,7 @@ type BackupManifest = {
   backupType: string;
   exportedAt: number;
   serverVersion: string;
+  passwordPepperId: string;
   containsSecrets: boolean;
   totpSecretsIncluded: boolean;
   ephemeralAuthStateIncluded: boolean;
@@ -31,7 +32,7 @@ type RestoreResponse = {
 };
 
 const BACKUP_TYPE = "sonde_full_backup_ndjson";
-const CURRENT_FORMAT_VERSION = "2.1";
+const CURRENT_FORMAT_VERSION = "2.2";
 const MANIFEST_READ_BYTES = 64 * 1024;
 
 export function BackupPage() {
@@ -82,6 +83,9 @@ export function BackupPage() {
             version: record.data.formatVersion ?? "unknown",
           }),
         );
+      }
+      if (!/^[0-9a-f]{64}$/i.test(record.data.passwordPepperId ?? "")) {
+        throw new Error(t("backup.notSondeBackup"));
       }
       setRestoreFile(file);
       setManifest(record.data);
