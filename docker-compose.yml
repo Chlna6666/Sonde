@@ -23,8 +23,9 @@ services:
       - RUST_LOG=sonde=info,actix_web=info
     volumes:
       - sonde_data:/app/data
-    # The process binds an unprivileged port, writes only to /app/data, and stages backup
-    # restores in /tmp, so it needs no Linux capabilities and no privilege escalation.
+    # The process binds an unprivileged port and writes persistent/runtime staging data only to
+    # /app/data. /tmp is a small scratch tmpfs and is not used for large backup restore staging,
+    # so the service needs no Linux capabilities and no privilege escalation.
     read_only: true
     security_opt:
       - no-new-privileges:true
