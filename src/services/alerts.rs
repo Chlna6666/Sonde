@@ -738,6 +738,11 @@ async fn dispatch_to_channel(
     channel: &NotificationChannelRecord,
     payload: &serde_json::Value,
 ) -> Result<(), String> {
+    // Re-validate persisted channel configuration before each delivery. Channels may arrive
+    // through a full-system restore or direct database maintenance and therefore must not rely
+    // solely on create/update-time validation.
+    validate_channel_config(&channel.kind, &channel.config)?;
+
     let message = payload
         .get("message")
         .and_then(|value| value.as_str())
@@ -941,6 +946,34 @@ fn validate_custom_headers(config: &serde_json::Value) -> Result<(), String> {
         if key.is_empty() || key.len() > 128 || value.len() > 4_096 {
             return Err("webhook header name or value exceeds the allowed size".into());
         }
+
+        let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+            .map_err(|_| "webhook header name is invalid".to_string())?;
+        reqwest::header::HeaderValue::from_bytes(value.as_bytes())
+            .map_err(|_| "webhook header value is invalid".to_string())?;
+
+        // Request framing/routing headers are owned by reqwest and the destination URL. Allowing
+        // a stored webhook configuration to override Host can turn a public pinned IP into a
+        // virtual-host SSRF gadget; hop-by-hop/framing headers can also create ambiguous requests.
+        if matches!(
+            name.as_str(),
+            "host"
+                | "content-length"
+                | "transfer-encoding"
+                | "connection"
+                | "proxy-connection"
+                | "proxy-authenticate"
+                | "proxy-authorization"
+                | "te"
+                | "trailer"
+                | "upgrade"
+                | "keep-alive"
+        ) {
+            return Err(format!(
+                "webhook header '{}' is controlled by the HTTP client and cannot be overridden",
+                name.as_str()
+            ));
+        }
     }
     Ok(())
 }
@@ -1021,7 +1054,7 @@ fn source_name(expression: &AlertExpression) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_pending_hits, truncate_delivery_error};
+    use super::{parse_pending_hits, truncate_delivery_error, validate_channel_config};
     use crate::domain::outbound;
 
     #[test]
@@ -1035,6 +1068,29 @@ mod tests {
         assert!(outbound::validate_outbound_url("http://127.0.0.1/hook").is_err());
         assert!(outbound::validate_outbound_url("http://localhost/hook").is_err());
         assert!(outbound::validate_outbound_url("https://example.com/hook").is_ok());
+    }
+
+    #[test]
+    fn webhook_custom_headers_cannot_override_routing_or_framing() {
+        for header in ["Host", "Content-Length", "Transfer-Encoding", "Connection"] {
+            let config = serde_json::json!({
+                "url": "https://example.com/hook",
+                "headers": { header: "attacker-controlled" }
+            });
+            assert!(
+                validate_channel_config("webhook", &config).is_err(),
+                "{header} must be rejected"
+            );
+        }
+
+        let valid = serde_json::json!({
+            "url": "https://example.com/hook",
+            "headers": {
+                "Authorization": "Bearer synthetic-test-token",
+                "X-Sonde-Test": "ok"
+            }
+        });
+        assert!(validate_channel_config("webhook", &valid).is_ok());
     }
 
     #[test]
