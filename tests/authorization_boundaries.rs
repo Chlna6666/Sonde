@@ -16,6 +16,7 @@ struct Fixture {
     _temp_dir: tempfile::TempDir,
     runtime: RuntimeConfig,
     database: sea_orm::DatabaseConnection,
+    owner_id: String,
     owner_token: String,
     owner_csrf: String,
     app_id: String,
@@ -83,6 +84,7 @@ async fn fixture() -> Fixture {
         _temp_dir: temp_dir,
         runtime,
         database,
+        owner_id: owner.id,
         owner_token,
         owner_csrf,
         app_id,
@@ -232,6 +234,46 @@ async fn only_unscoped_owner_can_create_privileged_users() {
         .to_request();
     let resp = test::call_service(&app, allowed).await;
     assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn last_super_admin_cannot_be_disabled_or_have_its_session_revoked() {
+    let fixture = fixture().await;
+    let state = Arc::new(AppState::load(fixture.runtime.clone()).await.unwrap());
+    let app = test::init_service(
+        App::new()
+            .app_data(Data::new(state))
+            .configure(api::configure),
+    )
+    .await;
+
+    let disable = test::TestRequest::patch()
+        .uri(&format!("/api/v1/admin/users/{}", fixture.owner_id))
+        .cookie(session_cookie(&fixture.owner_token))
+        .insert_header(("x-csrf-token", fixture.owner_csrf.as_str()))
+        .set_json(serde_json::json!({
+            "email": "admin@example.com",
+            "username": "admin",
+            "locale": "en",
+            "active": false,
+            "role": "Super Admin"
+        }))
+        .to_request();
+    let resp = test::call_service(&app, disable).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::CONFLICT);
+
+    let owner = auth_store::user_by_id(&fixture.database, &fixture.owner_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(owner.active);
+
+    let me = test::TestRequest::get()
+        .uri("/api/v1/auth/me")
+        .cookie(session_cookie(&fixture.owner_token))
+        .to_request();
+    let resp = test::call_service(&app, me).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
 }
 
 #[tokio::test]

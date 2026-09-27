@@ -105,7 +105,7 @@ pub async fn update_user(
             "email and username are required".into(),
         ));
     }
-    auth_store::update_user(
+    let outcome = auth_store::update_user(
         &installed.database,
         target_user_id,
         input.email,
@@ -115,6 +115,7 @@ pub async fn update_user(
         input.role,
     )
     .await?;
+    require_user_mutation_applied(outcome)?;
     if !input.active {
         auth_state::revoke_sessions_for_user(&installed.database, target_user_id).await?;
     }
@@ -169,8 +170,9 @@ pub async fn delete_user(
         ));
     }
     ensure_target_manageable(installed, user, target_user_id).await?;
+    let outcome = auth_store::delete_user(&installed.database, target_user_id).await?;
+    require_user_mutation_applied(outcome)?;
     auth_state::revoke_sessions_for_user(&installed.database, target_user_id).await?;
-    auth_store::delete_user(&installed.database, target_user_id).await?;
 
     applications::audit(
         &installed.database,
@@ -258,6 +260,18 @@ async fn ensure_target_manageable(
         return Err(AppError::Forbidden);
     }
     Ok(())
+}
+
+fn require_user_mutation_applied(
+    outcome: auth_store::UserMutationOutcome,
+) -> Result<(), AppError> {
+    match outcome {
+        auth_store::UserMutationOutcome::Applied => Ok(()),
+        auth_store::UserMutationOutcome::NotFound => Err(AppError::NotFound),
+        auth_store::UserMutationOutcome::WouldRemoveLastActiveOwner => Err(AppError::Conflict(
+            "at least one active Super Admin must remain".into(),
+        )),
+    }
 }
 
 fn validate_assignable_global_role(actor: &AuthenticatedUser, role: &str) -> Result<(), AppError> {

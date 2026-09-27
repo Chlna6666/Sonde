@@ -47,6 +47,7 @@ pub struct RoleSummary {
     pub permissions: Vec<String>,
 }
 
+#[must_use = "user mutation outcomes must be handled before reporting success or applying side effects"]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UserMutationOutcome {
     Applied,
