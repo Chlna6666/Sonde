@@ -9,6 +9,7 @@ RUN pnpm build
 FROM rust:1.95-bookworm AS server
 WORKDIR /source
 COPY Cargo.toml Cargo.lock build.rs ./
+COPY benches ./benches
 COPY src ./src
 COPY --from=web /source/web/dist ./web/dist
 ENV SONDE_SKIP_WEB_BUILD=1

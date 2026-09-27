@@ -715,7 +715,7 @@ async fn active_super_admin_count(database: &impl ConnectionTrait) -> Result<i64
             Expr::col((Alias::new("role_bindings"), Alias::new("role_id")))
                 .equals((Alias::new("roles"), Alias::new("id"))),
         )
-        .and_where(Expr::col((Alias::new("users"), Alias::new("active")).eq(true))
+        .and_where(Expr::col((Alias::new("users"), Alias::new("active"))).eq(true))
         .and_where(Expr::col((Alias::new("role_bindings"), Alias::new("application_id"))).is_null())
         .and_where(Expr::col((Alias::new("roles"), Alias::new("name"))).eq(SUPER_ADMIN_ROLE))
         .to_owned();
