@@ -96,6 +96,16 @@ fn session_cookie(token: &str) -> actix_web::cookie::Cookie<'static> {
 }
 
 #[tokio::test]
+async fn active_super_admin_count_is_read_back_with_an_explicit_alias() {
+    let fixture = fixture().await;
+    assert!(
+        auth_store::has_active_super_admin(&fixture.database)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
 async fn application_member_cannot_be_granted_privileged_roles() {
     let fixture = fixture().await;
     let member_hash = auth::hash_password(PASSWORD, &[42_u8; 32]).unwrap();

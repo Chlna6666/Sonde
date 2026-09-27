@@ -703,7 +703,10 @@ async fn load_global_user_state(
 
 async fn active_super_admin_count(database: &impl ConnectionTrait) -> Result<i64, DbErr> {
     let query = Query::select()
-        .expr(Expr::col((Alias::new("users"), Alias::new("id"))).count())
+        .expr_as(
+            Expr::col((Alias::new("users"), Alias::new("id"))).count(),
+            Alias::new("count"),
+        )
         .from(Alias::new("users"))
         .inner_join(
             Alias::new("role_bindings"),
