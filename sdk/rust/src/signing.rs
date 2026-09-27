@@ -1,4 +1,4 @@
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
@@ -49,7 +49,7 @@ fn canonical_request(
 
 #[cfg(test)]
 mod tests {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
 
     use super::{canonical_request, sign};
