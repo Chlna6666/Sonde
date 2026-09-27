@@ -14,6 +14,9 @@ use sonde::{
 };
 use tokio::io::AsyncWriteExt;
 
+const TEST_PASSWORD_PEPPER_ID: &str =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
 const DERIVED_STATE_KEYS: &[&str] = &[
     "telemetry_rollup_backfill",
     "telemetry_dimension_rollup_backfill",
@@ -118,6 +121,7 @@ async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth
     write_backup(&source, &archive).await?;
     let manifest = backup_archive::validate_backup_file(archive.path()).await?;
     assert_eq!(manifest.format_version, backup_archive::FORMAT_VERSION);
+    assert_eq!(manifest.password_pepper_id, TEST_PASSWORD_PEPPER_ID);
     assert!(!manifest.totp_secrets_included);
 
     let target = database::connect("sqlite::memory:").await?;
@@ -453,7 +457,10 @@ async fn write_backup(
 ) -> Result<(), Box<dyn Error>> {
     let file = archive.reopen()?;
     let mut file = tokio::fs::File::from_std(file);
-    let stream = backup_archive::export_full_system_stream(database.clone());
+    let stream = backup_archive::export_full_system_stream(
+        database.clone(),
+        TEST_PASSWORD_PEPPER_ID.to_owned(),
+    );
     pin_mut!(stream);
     while let Some(chunk) = stream.next().await {
         file.write_all(&chunk?).await?;

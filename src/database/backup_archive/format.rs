@@ -19,7 +19,7 @@ use crate::database::backup_records::{
     BackupRoleBinding, BackupUser,
 };
 
-pub const FORMAT_VERSION: &str = "2.1";
+pub const FORMAT_VERSION: &str = "2.2";
 pub const BACKUP_TYPE: &str = "sonde_full_backup_ndjson";
 pub const CONTENT_TYPE: &str = "application/x-ndjson";
 pub const FILE_EXTENSION: &str = "sonde.ndjson";
@@ -33,6 +33,8 @@ pub struct BackupManifest {
     pub backup_type: String,
     pub exported_at: i64,
     pub server_version: String,
+    #[serde(default)]
+    pub password_pepper_id: String,
     pub contains_secrets: bool,
     pub totp_secrets_included: bool,
     pub ephemeral_auth_state_included: bool,
@@ -201,6 +203,7 @@ struct TableSpec {
 
 pub fn export_full_system_stream(
     database: DatabaseConnection,
+    password_pepper_id: String,
 ) -> impl Stream<Item = Result<Vec<u8>, BackupError>> {
     async_stream::try_stream! {
         let transaction = match database.get_database_backend() {
@@ -215,6 +218,7 @@ pub fn export_full_system_stream(
             backup_type: BACKUP_TYPE.to_owned(),
             exported_at: chrono::Utc::now().timestamp_millis(),
             server_version: env!("CARGO_PKG_VERSION").to_owned(),
+            password_pepper_id,
             contains_secrets: true,
             totp_secrets_included: false,
             ephemeral_auth_state_included: false,
@@ -346,6 +350,16 @@ fn validate_manifest(manifest: &BackupManifest) -> Result<(), BackupError> {
             "unsupported backup type {}",
             manifest.backup_type
         )));
+    }
+    if manifest.password_pepper_id.len() != 64
+        || !manifest
+            .password_pepper_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(BackupError::Invalid(
+            "backup password pepper identifier is missing or invalid".into(),
+        ));
     }
     Ok(())
 }

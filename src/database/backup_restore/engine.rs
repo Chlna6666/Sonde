@@ -10,6 +10,7 @@ use tokio::{
 };
 
 use crate::database::{
+    auth as auth_store,
     backup_archive::{self, BackupError, BackupRecord},
     query::insert_batch_ignore_conflicts,
 };
@@ -74,6 +75,11 @@ pub async fn restore_full_system_exact(
     }
 
     flush_batch(&transaction, batch.take()).await?;
+    if !auth_store::has_active_super_admin(&transaction).await? {
+        return Err(BackupError::Invalid(
+            "backup must contain at least one active Super Admin".into(),
+        ));
+    }
     transaction.commit().await?;
     Ok(restored)
 }

@@ -9,6 +9,11 @@ use sonde::database::{
     backup_validation,
 };
 
+const TEST_PASSWORD_PEPPER_ID: &str =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const OTHER_PASSWORD_PEPPER_ID: &str =
+    "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
 #[tokio::test]
 async fn semantic_histogram_failure_does_not_modify_restore_target() -> Result<(), Box<dyn Error>> {
     let archive = tempfile::NamedTempFile::new()?;
@@ -27,8 +32,12 @@ async fn semantic_histogram_failure_does_not_modify_restore_target() -> Result<(
     let (application_id, _) =
         applications::create_application(&target, "Keep Me", "keep-me", None).await?;
 
-    let result =
-        backup_validation::restore_full_system_exact_validated(&target, archive.path()).await;
+    let result = backup_validation::restore_full_system_exact_validated(
+        &target,
+        archive.path(),
+        TEST_PASSWORD_PEPPER_ID,
+    )
+    .await;
     assert!(result.is_err());
 
     let applications = applications::list_applications(&target, None, true).await?;
@@ -60,6 +69,56 @@ async fn duplicate_record_ids_are_rejected_even_with_valid_digest() -> Result<()
             .await
             .is_err()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn password_pepper_mismatch_is_rejected_before_restore_mutates_target()
+-> Result<(), Box<dyn Error>> {
+    let archive = tempfile::NamedTempFile::new()?;
+    write_archive(archive.path(), Vec::new()).await?;
+
+    let target = database::connect("sqlite::memory:").await?;
+    database::migrate(&target).await?;
+    let (application_id, _) =
+        applications::create_application(&target, "Keep Me", "keep-me", None).await?;
+
+    let result = backup_validation::restore_full_system_exact_validated(
+        &target,
+        archive.path(),
+        OTHER_PASSWORD_PEPPER_ID,
+    )
+    .await;
+    assert!(result.is_err());
+
+    let applications = applications::list_applications(&target, None, true).await?;
+    assert_eq!(applications.len(), 1);
+    assert_eq!(applications[0].id, application_id);
+    Ok(())
+}
+
+#[tokio::test]
+async fn restore_without_active_super_admin_rolls_back_destructive_transaction()
+-> Result<(), Box<dyn Error>> {
+    let archive = tempfile::NamedTempFile::new()?;
+    write_archive(archive.path(), Vec::new()).await?;
+
+    let target = database::connect("sqlite::memory:").await?;
+    database::migrate(&target).await?;
+    let (application_id, _) =
+        applications::create_application(&target, "Keep Me", "keep-me", None).await?;
+
+    let result = backup_validation::restore_full_system_exact_validated(
+        &target,
+        archive.path(),
+        TEST_PASSWORD_PEPPER_ID,
+    )
+    .await;
+    assert!(result.is_err());
+
+    let applications = applications::list_applications(&target, None, true).await?;
+    assert_eq!(applications.len(), 1);
+    assert_eq!(applications[0].id, application_id);
     Ok(())
 }
 
@@ -114,6 +173,7 @@ async fn write_archive(
         backup_type: backup_archive::BACKUP_TYPE.into(),
         exported_at: 1_777_680_000_000,
         server_version: "test".into(),
+        password_pepper_id: TEST_PASSWORD_PEPPER_ID.into(),
         contains_secrets: false,
         totp_secrets_included: false,
         ephemeral_auth_state_included: false,

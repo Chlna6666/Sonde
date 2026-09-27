@@ -6,14 +6,14 @@ use sonde::database::backup_archive::{self, BackupEnd, BackupManifest, BackupRec
 #[tokio::test]
 async fn current_validator_accepts_current_format_but_rejects_other_versions()
 -> Result<(), Box<dyn Error>> {
-    assert_eq!(backup_archive::FORMAT_VERSION, "2.1");
+    assert_eq!(backup_archive::FORMAT_VERSION, "2.2");
 
     let archive = tempfile::NamedTempFile::new()?;
     write_manifest_only_archive(archive.path(), backup_archive::FORMAT_VERSION).await?;
     let manifest = backup_archive::validate_backup_file(archive.path()).await?;
     assert_eq!(manifest.format_version, backup_archive::FORMAT_VERSION);
 
-    for other_version in ["2.0", "2.2"] {
+    for other_version in ["2.0", "2.1", "2.3"] {
         let file = tempfile::NamedTempFile::new()?;
         write_manifest_only_archive(file.path(), other_version).await?;
         assert!(
@@ -34,6 +34,8 @@ async fn write_manifest_only_archive(
         backup_type: backup_archive::BACKUP_TYPE.into(),
         exported_at: 1_777_680_000_000,
         server_version: "test".into(),
+        password_pepper_id:
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
         contains_secrets: false,
         totp_secrets_included: false,
         ephemeral_auth_state_included: false,

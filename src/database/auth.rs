@@ -726,6 +726,10 @@ async fn active_super_admin_count(database: &impl ConnectionTrait) -> Result<i64
         .unwrap_or(0))
 }
 
+pub async fn has_active_super_admin(database: &impl ConnectionTrait) -> Result<bool, DbErr> {
+    Ok(active_super_admin_count(database).await? > 0)
+}
+
 pub async fn list_roles(database: &DatabaseConnection) -> Result<Vec<RoleSummary>, DbErr> {
     let query = Query::select()
         .columns(["id", "name", "builtin", "permissions"].map(Alias::new))

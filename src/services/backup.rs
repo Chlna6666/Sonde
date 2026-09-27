@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use futures_util::Stream;
+use sha2::{Digest, Sha256};
 
 use crate::{
     database::{
@@ -13,6 +14,7 @@ use crate::{
 
 const APPLICATION_EXPORT_TYPE: &str = "sonde_application";
 const MAX_HISTOGRAM_BOUNDS: usize = 256;
+const PASSWORD_PEPPER_ID_CONTEXT: &[u8] = b"sonde-backup-password-pepper-id-v1\0";
 
 pub async fn export_application(
     installed: &InstalledState,
@@ -79,6 +81,7 @@ pub async fn export_system_backup(
 
     Ok(backup_archive::export_full_system_stream(
         installed.database.clone(),
+        password_pepper_id(installed.auth_security.pepper()),
     ))
 }
 
@@ -89,10 +92,14 @@ pub async fn restore_system_backup(
 ) -> Result<u64, AppError> {
     require_system_backup_access(user)?;
 
-    let restored =
-        backup_validation::restore_full_system_exact_validated(&installed.database, path)
-            .await
-            .map_err(map_backup_error)?;
+    let expected_password_pepper_id = password_pepper_id(installed.auth_security.pepper());
+    let restored = backup_validation::restore_full_system_exact_validated(
+        &installed.database,
+        path,
+        &expected_password_pepper_id,
+    )
+    .await
+    .map_err(map_backup_error)?;
 
     // Rollups are derived cache state. Readers fall back to authoritative raw telemetry until the
     // normal dirty-day workers rebuild every projection after an exact restore.
@@ -246,6 +253,13 @@ fn require_system_backup_access(user: &AuthenticatedUser) -> Result<(), AppError
     } else {
         Err(AppError::Forbidden)
     }
+}
+
+fn password_pepper_id(pepper: &[u8]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(PASSWORD_PEPPER_ID_CONTEXT);
+    digest.update(pepper);
+    hex::encode(digest.finalize())
 }
 
 fn map_backup_error(error: backup_archive::BackupError) -> AppError {

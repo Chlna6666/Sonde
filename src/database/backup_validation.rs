@@ -18,15 +18,23 @@ const MAX_HISTOGRAM_BOUNDS: usize = 256;
 pub async fn restore_full_system_exact_validated(
     database: &DatabaseConnection,
     path: &Path,
+    expected_password_pepper_id: &str,
 ) -> Result<u64, BackupError> {
-    validate_backup_file_semantics(path).await?;
+    let manifest = validate_backup_file_semantics(path).await?;
+    if manifest.password_pepper_id != expected_password_pepper_id {
+        return Err(BackupError::Invalid(
+            "backup was created with a different password pepper; restore the original sonde.password-pepper before restoring this archive".into(),
+        ));
+    }
     backup_restore::restore_full_system_exact(database, path).await
 }
 
-pub async fn validate_backup_file_semantics(path: &Path) -> Result<(), BackupError> {
+pub async fn validate_backup_file_semantics(
+    path: &Path,
+) -> Result<backup_archive::BackupManifest, BackupError> {
     // The first pass proves record framing, manifest compatibility, record count and archive digest.
     // Only after the complete file is known to be structurally valid do we inspect record semantics.
-    backup_archive::validate_backup_file(path).await?;
+    let manifest = backup_archive::validate_backup_file(path).await?;
 
     let file = File::open(path).await?;
     let mut reader = BufReader::new(file);
@@ -70,7 +78,7 @@ pub async fn validate_backup_file_semantics(path: &Path) -> Result<(), BackupErr
             validate_metric(metric)?;
         }
     }
-    Ok(())
+    Ok(manifest)
 }
 
 fn record_identity(record: &BackupRecord) -> Option<(u8, &str)> {
