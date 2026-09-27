@@ -128,13 +128,8 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
 
-      # RUSTSEC-2026-0258 (h2 unbounded empty DATA frames) is a documented, temporary
-      # exception: the advisory is only fixed in h2 0.4.16 while actix-http 3.x still pulls
-      # h2 0.3.x. Compensating control: reverse proxies terminate HTTP/2 and speak HTTP/1.1
-      # to Sonde, so the vulnerable code path is not reachable from the internet. Revisit
-      # when actix-http/awc migrate to h2 0.4 (tracked by Dependabot).
       - name: Audit Rust dependencies
-        run: cargo audit --ignore RUSTSEC-2026-0258
+        run: cargo audit
 
   security-frontend:
     name: Dependency audit (web)
