@@ -279,14 +279,10 @@ async fn last_super_admin_cannot_be_disabled_or_have_its_session_revoked() {
 #[tokio::test]
 async fn api_key_environment_must_belong_to_the_requested_application() {
     let fixture = fixture().await;
-    let (_other_app_id, other_environment_id) = application_store::create_application(
-        &fixture.database,
-        "Other App",
-        "other-app",
-        None,
-    )
-    .await
-    .unwrap();
+    let (_other_app_id, other_environment_id) =
+        application_store::create_application(&fixture.database, "Other App", "other-app", None)
+            .await
+            .unwrap();
 
     let state = Arc::new(AppState::load(fixture.runtime.clone()).await.unwrap());
     let app = test::init_service(

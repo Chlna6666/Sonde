@@ -34,8 +34,8 @@ async fn write_manifest_only_archive(
         backup_type: backup_archive::BACKUP_TYPE.into(),
         exported_at: 1_777_680_000_000,
         server_version: "test".into(),
-        password_pepper_id:
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+        password_pepper_id: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            .into(),
         contains_secrets: false,
         totp_secrets_included: false,
         ephemeral_auth_state_included: false,

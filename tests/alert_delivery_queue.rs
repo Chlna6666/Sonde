@@ -133,14 +133,11 @@ async fn evaluator_persists_delivery_and_worker_retries_without_process_state() 
     assert_eq!(delivery.1, "failed");
     assert_eq!(delivery.2, 3);
     assert!(delivery.3.is_none());
-    assert!(
-        delivery
-            .5
-            .as_deref()
-            .is_some_and(|error| error
-                .to_ascii_lowercase()
-                .contains("unsupported notification channel kind"))
-    );
+    assert!(delivery.5.as_deref().is_some_and(|error| {
+        error
+            .to_ascii_lowercase()
+            .contains("unsupported notification channel kind")
+    }));
 }
 
 #[tokio::test]
