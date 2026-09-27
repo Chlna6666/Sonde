@@ -112,6 +112,66 @@ jobs:
       - name: Build
         run: pnpm build
 
+
+  production-smoke:
+    name: Production image smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SONDE_E2E_URL: http://127.0.0.1:8091
+      SONDE_E2E_SETUP_TOKEN: ci-setup-token-2026-sonde
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Validate Compose
+        run: docker compose config --quiet
+
+      - name: Build production image
+        run: docker build --tag "sonde-ci:${GITHUB_SHA}" .
+
+      - name: Start hardened container
+        run: |
+          docker volume create sonde-ci-data
+          docker run --detach --name sonde-ci \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --publish 127.0.0.1:8091:8080 \
+            --volume sonde-ci-data:/app/data \
+            --env SONDE_SETUP_TOKEN="$SONDE_E2E_SETUP_TOKEN" \
+            "sonde-ci:${GITHUB_SHA}"
+
+      - name: Wait for live endpoint
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error "$SONDE_E2E_URL/health/live"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs sonde-ci
+          exit 1
+
+      - name: Install browser smoke dependencies
+        run: |
+          python3 -m pip install --disable-pip-version-check -r tests/requirements-e2e.txt
+          python3 -m playwright install --with-deps chromium
+
+      - name: Browser smoke
+        run: python3 tests/e2e_smoke.py
+
+      - name: Container logs
+        if: failure()
+        run: docker logs sonde-ci
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm --force sonde-ci 2>/dev/null || true
+          docker volume rm sonde-ci-data 2>/dev/null || true
+
   security-rust:
     name: Dependency audit (Rust)
     runs-on: ubuntu-latest
