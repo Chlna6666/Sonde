@@ -29,7 +29,7 @@ cd Sonde
 docker compose up -d --build
 ```
 
-Open <http://127.0.0.1:8080> and complete the initialization wizard. Docker persists application data in the `sonde_data` volume.
+Open <http://127.0.0.1:8080> and complete the initialization wizard. Docker persists application data in the `sonde_data` volume. The reference Compose file is deliberately loopback-only and enables non-Secure cookies for this local HTTP quick start; do not expose that configuration on a LAN or the internet.
 
 ### First-run setup token
 
@@ -87,7 +87,7 @@ Debug builds skip the embedded production frontend bundle. Set `SONDE_BUILD_WEB=
 
 Whenever `SONDE_BIND` is **not** a loopback address, Sonde forces session cookies to be `Secure` and uses the `__Host-` prefix (`RuntimeConfig::requires_secure_cookies()`). Reaching such an instance over plain HTTP — for example `http://192.168.1.10:8080` — therefore fails to log in **silently**: the browser refuses to store the cookie.
 
-Either terminate TLS in front of Sonde (recommended; publish the proxy on `127.0.0.1:8080:8080` if it runs on the same host), or set `SONDE_ALLOW_INSECURE_COOKIES=1`, accepting that session cookies can be captured by anyone on the network path. See the comments in [`docker-compose.yml`](docker-compose.yml).
+The reference `docker-compose.yml` publishes Sonde only on host loopback and defaults `SONDE_ALLOW_INSECURE_COOKIES=1` so the documented local HTTP quick start can actually log in. For a TLS-terminating reverse proxy, set `SONDE_ALLOW_INSECURE_COOKIES=0` (or run the image directly without the opt-out) so Sonde emits `Secure`/`__Host-` session cookies. Never use the insecure-cookie opt-out with a non-loopback host publish.
 
 ### Backups
 

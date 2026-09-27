@@ -141,6 +141,7 @@ jobs:
             --publish 127.0.0.1:8091:8080 \
             --volume sonde-ci-data:/app/data \
             --env SONDE_SETUP_TOKEN="$SONDE_E2E_SETUP_TOKEN" \
+            --env SONDE_ALLOW_INSECURE_COOKIES=1 \
             "sonde-ci:${GITHUB_SHA}"
 
       - name: Wait for live endpoint

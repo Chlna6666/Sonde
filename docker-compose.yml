@@ -5,12 +5,14 @@ services:
       dockerfile: Dockerfile
     container_name: sonde
     restart: unless-stopped
-    # Publish through a TLS-terminating reverse proxy, ideally on loopback only:
-    #   - "127.0.0.1:8080:8080"
-    # Session cookies are forced `Secure` whenever SONDE_BIND is not loopback, so a plain-HTTP
-    # instance reached from other hosts requires TLS in front of it. Serving plain HTTP to the
-    # LAN therefore needs the explicit SONDE_ALLOW_INSECURE_COOKIES=1 opt-out below, which
-    # accepts that session cookies can be captured by anyone on the path.
+    # The reference Compose deployment is a loopback-only HTTP quick start. The container must
+    # listen on 0.0.0.0, so Sonde cannot infer the host-side 127.0.0.1 publish and would otherwise
+    # force Secure cookies that browsers refuse to store over http://127.0.0.1.
+    #
+    # SONDE_ALLOW_INSECURE_COOKIES therefore defaults to 1 here only because the published port is
+    # pinned to host loopback. For a TLS reverse proxy set SONDE_ALLOW_INSECURE_COOKIES=0 (or use
+    # the image directly without the opt-out). Never combine the opt-out with a non-loopback host
+    # publish.
     #
     # First-run initialization requires a one-time setup token: set SONDE_SETUP_TOKEN, or read
     # the token Sonde generates and logs at startup. Never leave port 8080 reachable from the
@@ -20,6 +22,7 @@ services:
     environment:
       - SONDE_BIND=0.0.0.0:8080
       - SONDE_DATA_DIR=/app/data
+      - SONDE_ALLOW_INSECURE_COOKIES=${SONDE_ALLOW_INSECURE_COOKIES:-1}
       - RUST_LOG=sonde=info,actix_web=info
     volumes:
       - sonde_data:/app/data
