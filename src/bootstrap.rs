@@ -14,7 +14,7 @@ pub async fn load_installed(
     runtime: &RuntimeConfig,
 ) -> Result<Option<Arc<InstalledState>>, AppError> {
     if runtime.config_path.exists() {
-        return load_from_config(runtime).await.map(Some);
+        return load_from_config(runtime).await;
     }
 
     if let Some(url) = runtime.database_url_override.as_deref() {
@@ -31,7 +31,9 @@ pub async fn load_installed(
     recover_existing_database(runtime, &database_url).await
 }
 
-async fn load_from_config(runtime: &RuntimeConfig) -> Result<Arc<InstalledState>, AppError> {
+async fn load_from_config(
+    runtime: &RuntimeConfig,
+) -> Result<Option<Arc<InstalledState>>, AppError> {
     let mut config = InstallationConfig::read(&runtime.config_path)
         .map_err(|error| AppError::internal("read installation config", error))?;
     if let Some(url) = &runtime.database_url_override {
@@ -40,7 +42,23 @@ async fn load_from_config(runtime: &RuntimeConfig) -> Result<Arc<InstalledState>
 
     let database = database::connect(&config.database_url).await?;
     database::migrate(&database).await?;
-    build_installed(runtime, database, config)
+    // A configuration file only proves the wizard got far enough to write it; the database is
+    // the source of truth for whether installation actually completed. Trusting the file alone
+    // would boot an instance with no administrator if the wizard failed in between, which no
+    // later start could recover from.
+    if !is_database_installed(&database).await {
+        tracing::warn!(
+            "installation config exists but the database is not initialized; \
+             falling back to the setup wizard"
+        );
+        return Ok(None);
+    }
+    // Re-assert the server-side policy on every start: an instance installed while bound to
+    // loopback and later exposed on a public bind must not keep issuing cookies without `Secure`.
+    if runtime.requires_secure_cookies() {
+        config.secure_cookie = true;
+    }
+    build_installed(runtime, database, config).map(Some)
 }
 
 async fn recover_existing_database(

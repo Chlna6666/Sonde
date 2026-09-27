@@ -126,62 +126,81 @@ fn env_flag(name: &str) -> bool {
 
 fn load_or_create_pepper(path: &Path) -> io::Result<PasswordPepper> {
     if path.exists() {
-        return read_pepper(path);
+        return Ok(PasswordPepper(Arc::new(read_secret_file(
+            path,
+            "password pepper",
+        )?)));
     }
     let mut value = [0_u8; 32];
     rand::rng().fill_bytes(&mut value);
-    write_new_secret_file(path, &value)?;
-    Ok(PasswordPepper(Arc::new(value)))
+    match write_new_secret_file(path, &value) {
+        Ok(()) => Ok(PasswordPepper(Arc::new(value))),
+        // A concurrent start created the file between `exists()` and `create_new`, so the bytes
+        // we generated were never written. The persisted value is the only one every process can
+        // agree on; reading it back keeps this process from sealing data under a key that exists
+        // nowhere else.
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(PasswordPepper(Arc::new(
+            read_secret_file(path, "password pepper")?,
+        ))),
+        Err(error) => Err(error),
+    }
 }
 
-/// Reads the 32-byte secret at `path`, creating it from the OS CSPRNG on first start.
+/// Reads the 32-byte master key at `path`, creating it from the OS CSPRNG on first start.
 fn load_or_create_master_key_file(path: &Path) -> io::Result<MasterKey> {
     if path.exists() {
-        let bytes = fs::read(path)?;
-        let value: [u8; 32] = bytes.try_into().map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "master key must contain exactly 32 bytes",
-            )
-        })?;
-        return Ok(MasterKey(Arc::new(value)));
+        return Ok(MasterKey(Arc::new(read_secret_file(path, "master key")?)));
     }
     let mut value = [0_u8; 32];
     rand::rng().fill_bytes(&mut value);
-    write_new_secret_file(path, &value)?;
-    Ok(MasterKey(Arc::new(value)))
-}
-
-fn write_new_secret_file(path: &Path, value: &[u8; 32]) -> io::Result<()> {
-    match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-    {
-        Ok(mut file) => {
-            use io::Write;
-            file.write_all(value)?;
-            file.sync_all()?;
-            restrict_secret_permissions(path)?;
-            Ok(())
-        }
+    match write_new_secret_file(path, &value) {
+        Ok(()) => Ok(MasterKey(Arc::new(value))),
+        // See `load_or_create_pepper`: the file on disk wins so all processes share one key.
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            // A concurrent start created the file first; load that one.
-            Ok(())
+            Ok(MasterKey(Arc::new(read_secret_file(path, "master key")?)))
         }
         Err(error) => Err(error),
     }
 }
 
-fn read_pepper(path: &Path) -> io::Result<PasswordPepper> {
+fn write_new_secret_file(path: &Path, value: &[u8; 32]) -> io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    use io::Write;
+    file.write_all(value)?;
+    file.sync_all()?;
+    // Tightening permissions is best effort and must never block startup: on Windows it shells
+    // out to `icacls`, which needs `USERNAME` that service accounts frequently do not have.
+    if let Err(error) = restrict_secret_permissions(path) {
+        tracing::warn!(
+            error = %error,
+            "could not restrict permissions on a freshly written secret file"
+        );
+    }
+    Ok(())
+}
+
+/// Reads a 32-byte secret, failing loudly when the file is not exactly that size.
+///
+/// A truncated or partially written secret is never silently replaced: doing so would invalidate
+/// every password hash or TOTP secret already sealed with the previous value, which is exactly
+/// the kind of unrecoverable, silent damage this guard exists to prevent.
+fn read_secret_file(path: &Path, label: &str) -> io::Result<[u8; 32]> {
     let bytes = fs::read(path)?;
-    let value: [u8; 32] = bytes.try_into().map_err(|_| {
+    bytes.try_into().map_err(|actual: Vec<u8>| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            "password pepper must contain exactly 32 bytes",
+            format!(
+                "{label} at {} must be exactly 32 bytes but holds {}; \
+                 restore it from a backup, or delete it only if you accept that passwords and \
+                 TOTP secrets sealed with the previous value become unrecoverable",
+                path.display(),
+                actual.len()
+            ),
         )
-    })?;
-    Ok(PasswordPepper(Arc::new(value)))
+    })
 }
 
 /// 32-byte installation master key backing the AEAD encryption of stored secrets
@@ -304,7 +323,15 @@ impl InstallationConfig {
             &temporary,
             serde_json::to_vec_pretty(self).map_err(io::Error::other)?,
         )?;
-        restrict_secret_permissions(&temporary)?;
+        // Same reasoning as `InstallationConfig::read`: a missing `USERNAME` or an exotic
+        // filesystem must not turn installation into a hard failure while the database has
+        // already been marked as initialized.
+        if let Err(error) = restrict_secret_permissions(&temporary) {
+            tracing::warn!(
+                error = %error,
+                "could not restrict installation config permissions; the file carries database credentials"
+            );
+        }
         fs::rename(temporary, path)
     }
 }
