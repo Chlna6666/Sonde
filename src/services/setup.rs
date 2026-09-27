@@ -42,7 +42,7 @@ pub async fn test_connection(
 
 pub async fn complete(state: &AppState, input: SetupInput<'_>) -> Result<(), AppError> {
     let database_url = resolve_database_url(state, input.database_type, input.database_url)?;
-    validate_identity(input.email, input.username)?;
+    auth::validate_identity(input.email, input.username)?;
     auth::validate_password(input.password)?;
     prepare_sqlite_path(&state.runtime.data_dir, &database_url)?;
     let database = database::connect(&database_url).await?;
@@ -237,20 +237,6 @@ fn resolve_secure_cookie(state: &AppState, requested: bool) -> bool {
         );
     }
     false
-}
-
-fn validate_identity(email: &str, username: &str) -> Result<(), AppError> {
-    if !email.contains('@') || email.len() > 254 {
-        return Err(AppError::Validation(
-            "valid super administrator email is required".into(),
-        ));
-    }
-    if username.len() < 2 || username.len() > 64 {
-        return Err(AppError::Validation(
-            "username must be 2..64 characters".into(),
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

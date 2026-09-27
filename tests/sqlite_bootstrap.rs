@@ -52,6 +52,11 @@ async fn sqlite_migration_and_super_admin_creation_are_usable() {
         Some("Updated Admin".to_string())
     );
 
+    let owner_by_upper_email = auth_store::user_by_identifier(&database, "OWNER@EXAMPLE.COM")
+        .await
+        .expect("query by normalized email should succeed");
+    assert!(owner_by_upper_email.is_some());
+
     let updated_by_username = auth_store::user_by_identifier(&database, "Updated Admin")
         .await
         .expect("query by updated username should succeed");

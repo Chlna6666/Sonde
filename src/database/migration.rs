@@ -24,6 +24,7 @@ mod rollup_generation;
 mod tables;
 mod user_rollup_chunks;
 mod user_rollups;
+mod user_identity_uniqueness;
 
 use alert_delivery_queue::AlertDeliveryQueue;
 use auth_shared_state::SharedAuthState;
@@ -52,6 +53,7 @@ use tables::{
 };
 use user_rollup_chunks::UserRollupChunks;
 use user_rollups::UserRollups;
+use user_identity_uniqueness::UserIdentityUniqueness;
 
 pub struct Migrator;
 
@@ -87,6 +89,7 @@ impl MigratorTrait for Migrator {
             Box::new(DeviceActivityDays),
             Box::new(DeviceActivityHours),
             Box::new(DeviceSessions),
+            Box::new(UserIdentityUniqueness),
         ]
     }
 }

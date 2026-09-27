@@ -264,8 +264,9 @@ pub async fn user_by_identifier(
     database: &DatabaseConnection,
     identifier: &str,
 ) -> Result<Option<UserCredential>, DbErr> {
-    let norm = identifier.trim().to_lowercase();
-    let query = Query::select()
+    let identifier = identifier.trim();
+    let mut query = Query::select();
+    query
         .columns(
             [
                 "id",
@@ -280,14 +281,13 @@ pub async fn user_by_identifier(
             .map(Alias::new),
         )
         .from(Alias::new("users"))
-        .and_where(
-            Expr::col(Alias::new("email"))
-                .eq(&norm)
-                .or(Expr::col(Alias::new("username")).eq(identifier.trim()))
-                .or(Expr::col(Alias::new("username")).eq(&norm)),
-        )
-        .limit(1)
-        .to_owned();
+        .limit(1);
+    if identifier.contains('@') {
+        query.and_where(Expr::col(Alias::new("email")).eq(identifier.to_lowercase()));
+    } else {
+        query.and_where(Expr::col(Alias::new("username")).eq(identifier));
+    }
+    let query = query.to_owned();
     database
         .query_one(&query)
         .await?

@@ -27,6 +27,30 @@ pub fn hash_password_unchecked(password: &str, pepper: &[u8]) -> Result<String, 
         .map_err(|error| AppError::internal("hash password", error))
 }
 
+pub fn validate_identity(email: &str, username: &str) -> Result<(), AppError> {
+    let trimmed_email = email.trim();
+    if trimmed_email != email
+        || !trimmed_email.contains('@')
+        || trimmed_email.len() > 254
+        || trimmed_email.is_empty()
+    {
+        return Err(AppError::Validation("valid email is required".into()));
+    }
+
+    let trimmed_username = username.trim();
+    let username_len = trimmed_username.chars().count();
+    if trimmed_username != username
+        || !(2..=64).contains(&username_len)
+        || trimmed_username.contains('@')
+    {
+        return Err(AppError::Validation(
+            "username must be 2..64 characters, contain no @, and have no surrounding whitespace"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn validate_password(password: &str) -> Result<(), AppError> {
     if password.chars().count() < 15 || password.chars().count() > 128 {
         return Err(AppError::PasswordLength);
@@ -104,7 +128,9 @@ pub fn constant_time_eq(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{constant_time_eq, hash_password, validate_password, verify_password};
+    use super::{
+        constant_time_eq, hash_password, validate_identity, validate_password, verify_password,
+    };
 
     #[test]
     fn constant_time_eq_requires_exact_match() {
@@ -134,6 +160,14 @@ mod tests {
             b"different-pepper"
         ));
         Ok(())
+    }
+
+    #[test]
+    fn account_identity_rejects_ambiguous_usernames_and_surrounding_whitespace() {
+        assert!(validate_identity("alice@example.com", "Alice User").is_ok());
+        assert!(validate_identity("alice@example.com", "alice@example.com").is_err());
+        assert!(validate_identity(" alice@example.com", "Alice").is_err());
+        assert!(validate_identity("alice@example.com", " Alice").is_err());
     }
 
     #[test]

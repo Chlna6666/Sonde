@@ -48,11 +48,7 @@ pub async fn create_user(
 ) -> Result<String, AppError> {
     user.require("members.manage", None)?;
     validate_assignable_global_role(user, input.role)?;
-    if input.email.trim().is_empty() || input.username.trim().is_empty() {
-        return Err(AppError::Validation(
-            "email and username are required".into(),
-        ));
-    }
+    auth::validate_identity(input.email, input.username)?;
     auth::validate_password(input.password)?;
     let password_hash = auth::hash_password(input.password, input.pepper)?;
     let user_id = auth_store::create_user(
@@ -100,11 +96,7 @@ pub async fn update_user(
     if let Some(role) = input.role {
         validate_assignable_global_role(user, role)?;
     }
-    if input.email.trim().is_empty() || input.username.trim().is_empty() {
-        return Err(AppError::Validation(
-            "email and username are required".into(),
-        ));
-    }
+    auth::validate_identity(input.email, input.username)?;
     let outcome = auth_store::update_user(
         &installed.database,
         target_user_id,
