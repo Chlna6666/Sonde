@@ -497,7 +497,7 @@ impl AuthSecurity {
                 let eviction = attempts
                     .iter()
                     .filter(|(existing, _)| {
-                        !keys.iter().any(|current| **current == existing.as_str())
+                        !keys.iter().any(|current| *current == existing.as_str())
                     })
                     .min_by_key(|(_, attempt)| attempt.next_allowed_at)
                     .map(|(key, _)| key.clone());
