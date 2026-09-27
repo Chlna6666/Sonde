@@ -34,9 +34,17 @@ async fn get_public_application(
     path: web::Path<String>,
     query: web::Query<PublicStatsQuery>,
 ) -> Result<impl Responder, AppError> {
+    let slug = path.into_inner();
+    if slug.len() < 2
+        || slug.len() > 64
+        || !slug
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(AppError::NotFound);
+    }
     let _permit = state.try_acquire_analytics()?;
     let installed = state.installed().await?;
-    let slug = path.into_inner();
     let app = applications::public_by_slug(&installed, &slug)
         .await?
         .ok_or(AppError::NotFound)?;

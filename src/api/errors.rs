@@ -97,8 +97,8 @@ async fn occurrences(
             &installed,
             &user,
             &group_id,
-            query.page.unwrap_or(1).max(1),
-            query.page_size.unwrap_or(50).clamp(1, 200),
+            crate::security::bounded_page(query.page),
+            crate::security::bounded_page_size(query.page_size),
             query.from,
             query.to,
         )

@@ -193,8 +193,17 @@ async fn verify_2fa(
             "invalid 2FA verification request".into(),
         ));
     }
-    super::request_auth::reject_cross_site_origin(&request)?;
     let installed = state.installed().await?;
+    let fallback_scheme = if installed.config.secure_cookie {
+        "https"
+    } else {
+        "http"
+    };
+    super::request_auth::reject_cross_site_origin(
+        &request,
+        &state.runtime.trusted_proxies,
+        fallback_scheme,
+    )?;
     let source = login_source(&request, &state.runtime.trusted_proxies);
     let outcome =
         authentication::verify_2fa_login(&installed, &body.temp_token, &body.code, &source).await?;

@@ -57,7 +57,7 @@ pub async fn run() -> io::Result<()> {
 
     HttpServer::new(move || {
         let mut headers = middleware::DefaultHeaders::new()
-            .add(("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"))
+            .add(("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"))
             .add(("x-content-type-options", "nosniff"))
             .add(("x-frame-options", "DENY"))
             .add(("referrer-policy", "no-referrer"))

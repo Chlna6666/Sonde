@@ -13,22 +13,31 @@ pub fn from_slice<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, serd
 
 /// Encode a JSON string literal, including quotes.
 pub fn write_string(buffer: &mut String, value: &str) {
+    buffer.reserve(value.len() + 2);
     buffer.push('"');
-    for character in value.chars() {
-        match character {
-            '"' => buffer.push_str("\\\""),
-            '\\' => buffer.push_str("\\\\"),
-            '\u{0008}' => buffer.push_str("\\b"),
-            '\u{000c}' => buffer.push_str("\\f"),
-            '\n' => buffer.push_str("\\n"),
-            '\r' => buffer.push_str("\\r"),
-            '\t' => buffer.push_str("\\t"),
-            character if character.is_control() => {
-                let _ = write!(buffer, "\\u{:04x}", u32::from(character));
+    let mut last = 0;
+    for (i, b) in value.bytes().enumerate() {
+        let escape = match b {
+            b'"' => "\\\"",
+            b'\\' => "\\\\",
+            0x08 => "\\b",
+            0x0c => "\\f",
+            b'\n' => "\\n",
+            b'\r' => "\\r",
+            b'\t' => "\\t",
+            0x00..=0x1f => {
+                buffer.push_str(&value[last..i]);
+                let _ = write!(buffer, "\\u{:04x}", b);
+                last = i + 1;
+                continue;
             }
-            character => buffer.push(character),
-        }
+            _ => continue,
+        };
+        buffer.push_str(&value[last..i]);
+        buffer.push_str(escape);
+        last = i + 1;
     }
+    buffer.push_str(&value[last..]);
     buffer.push('"');
 }
 
@@ -107,5 +116,16 @@ mod tests {
         let mut buffer = String::new();
         write_string(&mut buffer, r#"a"b"#);
         assert_eq!(buffer, r#""a\"b""#);
+    }
+
+    #[test]
+    fn write_string_handles_unicode_and_controls() {
+        let mut buffer = String::new();
+        write_string(&mut buffer, "hello 测\t试 \u{0000} \"world\"\\!");
+        assert_eq!(buffer, "\"hello 测\\t试 \\u0000 \\\"world\\\"\\\\!\"");
+
+        let mut empty = String::new();
+        write_string(&mut empty, "");
+        assert_eq!(empty, "\"\"");
     }
 }

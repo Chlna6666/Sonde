@@ -29,6 +29,11 @@ pub async fn serve(request: HttpRequest) -> HttpResponse {
         }
     }
 
+    if !matches!(request.method().as_str(), "GET" | "HEAD") {
+        return HttpResponse::NotFound()
+            .json(serde_json::json!({ "code": "not_found", "message": "Route not found" }));
+    }
+
     if is_source_map(path) {
         return HttpResponse::NotFound().finish();
     }
@@ -168,10 +173,10 @@ fn is_loopback_proxy_target(target: &str) -> bool {
 }
 
 fn response(path: &str, bytes: &[u8]) -> HttpResponse {
-    let cache = if path == "index.html" {
-        "no-cache"
-    } else {
+    let cache = if path.starts_with("assets/") {
         "public, max-age=31536000, immutable"
+    } else {
+        "no-cache, no-store, must-revalidate"
     };
     HttpResponse::Ok()
         .insert_header((
