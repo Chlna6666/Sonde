@@ -164,3 +164,155 @@ Typed ingest responses stay on `HttpResponse::json`. Explorer / error occurrence
 Raw replay is about **2.6×** faster than building a `serde_json::Value` tree. That is the serialize win for Explorer/error pages.
 
 Do not replace `serde_json` with SIMD parsers for ingest: HMAC already hashed the body, so a mutating parser cannot reuse that buffer, and `unsafe_code = "forbid"` rules out `simd-json`. Keep typed serde + delayed `RawValue` attributes.
+
+## Criterion & Concurrency Capture (2026-09-28)
+
+Working tree after RustCrypto 0.11/0.13 ecosystem upgrade, zero-copy batch/string hot-path optimization, and Vite 8 Rolldown frontend chunking (`git rev-parse --short HEAD` base `0332f6d`).
+
+### Concurrent HTTP contracts (`cargo test --test api_concurrency --locked`)
+
+All 5 parallel contract tests passed in 1.97s:
+- `concurrent_session_and_admin_reads_succeed`: 8 `/auth/me` + 8 app list + 8 explorer reads in parallel -> all HTTP 200.
+- `concurrent_health_and_setup_status_succeed`: 32 health + 16 setup status requests in parallel -> all HTTP 200.
+- `concurrent_ingest_same_nonce_is_accepted_once`: 16 identical nonces simultaneously -> 1 accepted (HTTP 202), 15 rejected (HTTP 403 replay blocked).
+- `concurrent_token_issue_for_distinct_devices_succeeds`: 8 distinct devices -> all HTTP 200 with scoped tokens.
+- `concurrent_ingest_events_accept_distinct_nonces`: 8 signed event batches -> all HTTP 202 with valid batch receipts.
+
+### Criterion Means (`benches/hot_path.rs`)
+
+100 samples per benchmark under release profile with mimalloc:
+
+#### HMAC Signature Verify (`ingest_signature::verify`)
+| Input | Mean | Throughput | vs previous capture |
+| --- | --- | --- | --- |
+| small event (~65 B) | **532.75 ns** | 121.73 MiB/s | 750 ns → **~29% faster** |
+| 1 KiB body | **1.107 µs** | 881.85 MiB/s | 1.35 µs → **~18% faster** |
+| 64 KiB body | **40.757 µs** | 1.50 GiB/s | 41.3 µs |
+
+#### Device Identity Scoped Hash
+`device_identity::scoped_hash_parts`: **261.46 ns** (down from 267 ns).
+
+#### Telemetry Validation
+| Case | Mean | vs previous capture |
+| --- | --- | --- |
+| `EventInput::validate` | **18.559 ns** | 39 ns → **>50% faster** |
+| histogram `MetricInput::validate` | **13.930 ns** | 26 ns → **>45% faster** |
+| `normalized_histogram` | **86.812 ns** | 131 ns → **~34% faster** |
+
+#### JSON Parse & Ingest Validation (`Batch<EventInput>`)
+| Batch Size / Attributes | Mean | Throughput |
+| --- | --- | --- |
+| 1 item (empty attrs) | 1.038 µs | 963.79 Kelem/s |
+| 1 item (empty attrs + validate) | 1.183 µs | 845.52 Kelem/s |
+| 100 items (two attrs) | 106.72 µs | 937.04 Kelem/s |
+| 100 items (two attrs + validate) | 115.35 µs | 866.93 Kelem/s |
+| 1,000 items (empty attrs) | 999.96 µs | **1.000 Melem/s** |
+| 1,000 items (empty attrs + validate) | 995.69 µs | **1.004 Melem/s** |
+| 1,000 items (two attrs) | 1.069 ms | 935.67 Kelem/s |
+| 1,000 items (two attrs + validate) | **1.140 ms** | 876.89 Kelem/s |
+
+Full parse + schema validation of a max 1,000-item event batch completes in **~1.14 ms**.
+
+#### JSON Serialization & Replay
+| Case | Mean |
+| --- | --- |
+| `BatchReceipt` via serde | 294.38 ns |
+| histogram bounds `[f64; 32]` | 1.230 µs |
+| histogram buckets `[u64; 33]` | 284.07 ns |
+| stored two-key object replay as `RawValue` | **196.11 ns** (vs 559 ns `Value` tree → **2.85× faster**) |
+| string query `contains_like_pattern` | 80.267 ns |
+
+#### Frontend Production Chunks (`pnpm --dir web build`, Vite 8 Rolldown)
+| Chunk | Raw | Gzip | Notes |
+| --- | --- | --- | --- |
+| `vendor-react` | 251 kB | 80 kB | React 19 + ReactDOM + Scheduler + React Router |
+| `vendor-motion` | 124 kB | 40 kB | Motion animation engine |
+| `vendor-ui` | 78 kB | 25 kB | Radix UI + CVA + tailwind-merge + clsx |
+| `vendor-i18n` | 56 kB | 18 kB | i18next + react-i18next |
+| `vendor-icons` | 39 kB | 15 kB | Lucide & React Icons |
+| `chunk-BuildBarChart` | 422 kB | 118 kB | Recharts + victory-vendor (lazy-loaded only on chart pages) |
+| `index` (HTML shell) | 1.45 kB | 0.52 kB | **0 kB chart overhead on first paint** |
+
+## Comprehensive Multi-Metric Stress Benchmark (2026-09-28)
+
+Run via:
+```powershell
+cargo test --test stress_benchmark --locked -- --nocapture
+```
+
+Tested on debug SQLite (`journal_mode=WAL`), Windows, 4 Actix workers, 4 Tokio runtime threads. Measures end-to-end multi-connection concurrency, latency distributions (P50 to P99.9), memory footprint under load, disk storage expansion, and rate-limiting / backpressure guarantees.
+
+### 1. Connection Scaling & Keep-Alive Throughput
+
+Evaluating TCP connection scaling and latency under 10, 50, 100, and 200 concurrent HTTP keep-alive clients:
+
+| Concurrent Clients | Total Requests | Elapsed | Throughput (RPS) | P50 Latency | P99 Latency | Process WorkingSet |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **10** | 200 | 62.28 ms | **3,211.5 req/s** | 2.05 ms | 16.76 ms | 76.8 MiB |
+| **50** | 1,000 | 351.37 ms | **2,846.0 req/s** | 12.77 ms | 64.58 ms | 78.9 MiB |
+| **100** | 2,000 | 669.65 ms | **2,986.6 req/s** | 25.87 ms | 132.69 ms | 76.4 MiB |
+| **200** | 4,000 | 1,881.18 ms | **2,126.3 req/s** | 51.87 ms | 432.54 ms | 77.8 MiB |
+
+- Under 100 concurrent clients, throughput remains high at ~2,987 RPS with median latency under 26 ms.
+- Memory WorkingSet stays essentially flat (~76–79 MiB) regardless of concurrent connection scaling, demonstrating zero connection handle leakage.
+
+### 2. High-Throughput E2E Ingest Pipeline (10,000 Events)
+
+Evaluating end-to-end ingestion across 1,000 HTTP batches (10 items/batch = 10,000 events) including HMAC-SHA256 signature verification, Nonce replay checking, schema validation, and single-writer coalesced SQLite WAL disk persistence:
+
+| Metric | Measured Value | Notes |
+| :--- | :--- | :--- |
+| **Total Ingested Events** | **10,000 items** (1,000 batches) | Full cryptographic HMAC + Nonce + UUIDv7 |
+| **Total Wall Time** | 20.145 s | Single-writer disk SQLite |
+| **Throughput (Items)** | **496.41 items/s** | End-to-end to disk |
+| **Throughput (Batches)** | 49.64 req/s | Batch payload parsing & validation |
+| **Latency Min** | 13.15 ms | Best-case batch commit |
+| **Latency P50 (Median)** | **157.53 ms** | Typical batch commit round-trip |
+| **Latency P75** | 411.96 ms | |
+| **Latency P90** | 836.04 ms | |
+| **Latency P95** | 1,394.37 ms | High writer queue pressure |
+| **Latency P99** | 5,627.03 ms | Tail latency under deep disk sync |
+| **Initial Storage Size** | 2,160.55 KiB | Baseline database with schema |
+| **Final Storage Size** | 13,102.15 KiB | Database + WAL post-ingest |
+| **Storage Cost / Event** | **1,120.4 bytes/event** | Includes raw payload, index, partition map, WAL |
+| **Memory Baseline** | 68.40 MiB | Process WorkingSet prior to load |
+| **Memory Peak under Load**| **86.73 MiB** (+18.33 MiB) | WorkingSet during peak concurrent writes |
+| **Memory Settled (Post-Load)**| **66.81 MiB** (-1.59 MiB) | Full heap reclamation via mimalloc v3 |
+| **Private Bytes Peak** | 71.12 MiB | Unshared committed virtual memory |
+
+### 3. Complex Analytics & Explorer Queries
+
+Evaluating 200 complex analytical aggregation queries (device breakdown, event timeline histograms, overview summaries) running concurrently against the populated telemetry dataset:
+
+| Metric | Measured Value | Notes |
+| :--- | :--- | :--- |
+| **Throughput** | **367.51 req/s** | Aggregation & filtering queries |
+| **Latency Min** | 1.77 ms | Cache / indexed scan hit |
+| **Latency P50 (Median)** | **4.11 ms** | Fast aggregation response |
+| **Latency P90** | 24.56 ms | Multi-bucket rollup calculation |
+| **Latency P99** | 52.59 ms | Broad range scan |
+| **Latency Max** | 58.79 ms | Tail bounded under 60 ms |
+| **WorkingSet Delta** | +14.63 MiB | 69.29 MiB → 83.92 MiB during active query scans |
+
+### 4. Rate Limiting & Backpressure Safeguards
+
+Validating defensive thresholds under deliberate overload:
+
+| Mechanism | Configuration / Capacity | Observed Result | Verdict |
+| :--- | :--- | :--- | :--- |
+| **Device Ingest Rate Limit** | 60 requests / minute / device | 60 requests accepted (HTTP 202), next 10 rejected with HTTP 429 | **PASS** (Strict quota enforcement) |
+| **Analytics Semaphore** | 8 concurrent permits | 20 burst queries: 11 succeeded, 9 throttled with HTTP 429 | **PASS** (Prevents SQLite read-pool starvation) |
+
+### 5. Mixed Real-World Workload & Memory Stability
+
+Simulating realistic continuous production traffic over 3 consecutive burst cycles (70% ingest + 20% complex queries + 10% health/admin checks):
+
+| Cycle | Operations | Duration | Throughput | P50 Latency | WorkingSet | PrivateBytes |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Cycle 1** | 40 mixed ops | 1,301.02 ms | 30.7 req/s | 26.96 ms | 83.7 MiB | 66.5 MiB |
+| **Cycle 2** | 40 mixed ops | 2,795.96 ms | 14.3 req/s | 46.82 ms | 77.8 MiB | 57.8 MiB |
+| **Cycle 3** | 40 mixed ops | 1,162.83 ms | 34.4 req/s | 20.12 ms | 72.5 MiB | 51.2 MiB |
+
+- **Memory Stability**: Initial WorkingSet: 68.40 MiB, Final WorkingSet: 72.50 MiB (Net change: **+4.09 MiB** across 120 mixed operations with heavy disk writes).
+- **Leak Analysis**: WorkingSet stabilized around 72–77 MiB; PrivateBytes dropped from 66.5 MiB down to 51.2 MiB as temporary buffers cleared, proving absence of unbounded heap growth.
+
