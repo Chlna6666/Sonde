@@ -53,30 +53,56 @@ async fn proxy_dev_request(proxy_target: &str, request: &HttpRequest) -> HttpRes
         return HttpResponse::MethodNotAllowed().finish();
     }
 
-    let client = awc::Client::default();
     let query = request.query_string();
     let target_url = if query.is_empty() {
         format!("{proxy_target}{}", request.path())
     } else {
         format!("{proxy_target}{}?{query}", request.path())
     };
-
-    let mut client_req = client.request(request.method().clone(), target_url);
+    let client = match reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return HttpResponse::BadGateway().body("Could not initialize Vite dev proxy"),
+    };
+    let mut client_req = if request.method().as_str() == "HEAD" {
+        client.head(&target_url)
+    } else {
+        client.get(&target_url)
+    };
     for (name, value) in request.headers() {
-        if is_safe_dev_request_header(name.as_str()) {
-            client_req = client_req.insert_header((name.clone(), value.clone()));
+        if !is_safe_dev_request_header(name.as_str()) {
+            continue;
         }
+        let Ok(name) = reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes()) else {
+            continue;
+        };
+        let Ok(value) = reqwest::header::HeaderValue::from_bytes(value.as_bytes()) else {
+            continue;
+        };
+        client_req = client_req.header(name, value);
     }
 
     match client_req.send().await {
-        Ok(mut res) => {
-            let mut builder = HttpResponse::build(res.status());
+        Ok(res) => {
+            let status = actix_web::http::StatusCode::from_u16(res.status().as_u16())
+                .unwrap_or(actix_web::http::StatusCode::BAD_GATEWAY);
+            let mut builder = HttpResponse::build(status);
             for (name, value) in res.headers() {
-                if is_safe_dev_response_header(name.as_str()) {
-                    builder.insert_header((name.clone(), value.clone()));
+                if !is_safe_dev_response_header(name.as_str()) {
+                    continue;
                 }
+                let Ok(name) = name.as_str().parse::<header::HeaderName>() else {
+                    continue;
+                };
+                let Ok(value) = header::HeaderValue::from_bytes(value.as_bytes()) else {
+                    continue;
+                };
+                builder.insert_header((name, value));
             }
-            match res.body().await {
+            match res.bytes().await {
                 Ok(body) => builder.body(body),
                 Err(_) => HttpResponse::BadGateway()
                     .body("Failed to read response body from Vite dev server"),
