@@ -50,7 +50,7 @@ pub async fn create_user(
     validate_assignable_global_role(user, input.role)?;
     auth::validate_identity(input.email, input.username)?;
     auth::validate_password(input.password)?;
-    let password_hash = auth::hash_password(input.password, input.pepper)?;
+    let password_hash = hash_password_off_thread(input.password, input.pepper).await?;
     let user_id = auth_store::create_user(
         &installed.database,
         input.email,
@@ -134,7 +134,7 @@ pub async fn reset_password(
     user.require("members.manage", None)?;
     ensure_target_manageable(installed, user, target_user_id).await?;
     auth::validate_password(new_password)?;
-    let password_hash = auth::hash_password(new_password, pepper)?;
+    let password_hash = hash_password_off_thread(new_password, pepper).await?;
     auth_store::update_password_hash(&installed.database, target_user_id, &password_hash).await?;
     auth_state::revoke_sessions_for_user(&installed.database, target_user_id).await?;
 
@@ -254,6 +254,14 @@ async fn ensure_target_manageable(
         return Err(AppError::Forbidden);
     }
     Ok(())
+}
+
+async fn hash_password_off_thread(password: &str, pepper: &[u8]) -> Result<String, AppError> {
+    let password = password.to_owned();
+    let pepper = pepper.to_vec();
+    tokio::task::spawn_blocking(move || auth::hash_password(&password, &pepper))
+        .await
+        .map_err(|error| AppError::internal("hash account password", error))?
 }
 
 fn require_user_mutation_applied(outcome: auth_store::UserMutationOutcome) -> Result<(), AppError> {
