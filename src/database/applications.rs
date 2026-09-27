@@ -230,6 +230,21 @@ pub async fn list_environments(
         .collect()
 }
 
+pub async fn environment_belongs_to_application(
+    database: &DatabaseConnection,
+    application_id: &str,
+    environment_id: &str,
+) -> Result<bool, DbErr> {
+    let query = Query::select()
+        .column(Alias::new("id"))
+        .from(Alias::new("environments"))
+        .and_where(Expr::col(Alias::new("id")).eq(environment_id))
+        .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
+        .limit(1)
+        .to_owned();
+    Ok(database.query_one(&query).await?.is_some())
+}
+
 pub async fn create_api_key(
     database: &DatabaseConnection,
     application_id: &str,

@@ -91,6 +91,17 @@ pub async fn create_key(
             "key name and scopes are required".into(),
         ));
     }
+    if !application_store::environment_belongs_to_application(
+        &installed.database,
+        application_id,
+        environment_id,
+    )
+    .await?
+    {
+        return Err(AppError::Validation(
+            "the selected application environment does not exist".into(),
+        ));
+    }
     let raw_key = format!("sonde_{}", auth::random_token(32));
     let prefix = raw_key.chars().take(12).collect::<String>();
     let hash = hex::encode(Sha256::digest(raw_key.as_bytes()));
@@ -190,6 +201,17 @@ pub async fn regenerate_key(
     let old_key = application_store::get_api_key(&installed.database, application_id, key_id)
         .await?
         .ok_or(AppError::NotFound)?;
+    if !application_store::environment_belongs_to_application(
+        &installed.database,
+        application_id,
+        &old_key.environment_id,
+    )
+    .await?
+    {
+        return Err(AppError::Conflict(
+            "API key references an environment outside its application".into(),
+        ));
+    }
 
     let _ = application_store::revoke_api_key(&installed.database, application_id, key_id).await?;
 

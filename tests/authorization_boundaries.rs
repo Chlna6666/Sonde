@@ -277,6 +277,48 @@ async fn last_super_admin_cannot_be_disabled_or_have_its_session_revoked() {
 }
 
 #[tokio::test]
+async fn api_key_environment_must_belong_to_the_requested_application() {
+    let fixture = fixture().await;
+    let (_other_app_id, other_environment_id) = application_store::create_application(
+        &fixture.database,
+        "Other App",
+        "other-app",
+        None,
+    )
+    .await
+    .unwrap();
+
+    let state = Arc::new(AppState::load(fixture.runtime.clone()).await.unwrap());
+    let app = test::init_service(
+        App::new()
+            .app_data(Data::new(state))
+            .configure(api::configure),
+    )
+    .await;
+
+    let create = test::TestRequest::post()
+        .uri(&format!(
+            "/api/v1/admin/applications/{}/keys",
+            fixture.app_id
+        ))
+        .cookie(session_cookie(&fixture.owner_token))
+        .insert_header(("x-csrf-token", fixture.owner_csrf.as_str()))
+        .set_json(serde_json::json!({
+            "environmentId": other_environment_id,
+            "name": "cross-app",
+            "scopes": ["telemetry.ingest"]
+        }))
+        .to_request();
+    let resp = test::call_service(&app, create).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::BAD_REQUEST);
+
+    let keys = application_store::list_api_keys(&fixture.database, &fixture.app_id)
+        .await
+        .unwrap();
+    assert!(keys.is_empty());
+}
+
+#[tokio::test]
 async fn public_application_urls_reject_non_https() {
     let fixture = fixture().await;
     let state = Arc::new(AppState::load(fixture.runtime.clone()).await.unwrap());
