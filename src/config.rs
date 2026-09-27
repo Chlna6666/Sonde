@@ -335,9 +335,7 @@ impl InstallationConfig {
         // followed. tempfile creates Unix tempfiles as 0600, so database credentials are private
         // from the first write rather than only after a chmod.
         let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-        temporary.write_all(
-            &serde_json::to_vec_pretty(self).map_err(io::Error::other)?,
-        )?;
+        temporary.write_all(&serde_json::to_vec_pretty(self).map_err(io::Error::other)?)?;
         temporary.flush()?;
         temporary.as_file().sync_all()?;
         // Same reasoning as `InstallationConfig::read`: Windows ACL tightening may be

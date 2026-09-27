@@ -496,7 +496,9 @@ impl AuthSecurity {
                 // cardinality attacks without dropping a key we just updated in this call.
                 let eviction = attempts
                     .iter()
-                    .filter(|(existing, _)| !keys.iter().any(|current| **current == existing.as_str()))
+                    .filter(|(existing, _)| {
+                        !keys.iter().any(|current| **current == existing.as_str())
+                    })
                     .min_by_key(|(_, attempt)| attempt.next_allowed_at)
                     .map(|(key, _)| key.clone());
                 if let Some(eviction) = eviction {
