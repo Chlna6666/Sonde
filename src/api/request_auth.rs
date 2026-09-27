@@ -266,16 +266,10 @@ mod tests {
         let inner_proxy = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3));
         let request = TestRequest::default()
             .peer_addr(SocketAddr::new(edge, 43123))
-            .insert_header((
-                "x-forwarded-for",
-                "192.0.2.123, 198.51.100.44, 10.0.0.3",
-            ))
+            .insert_header(("x-forwarded-for", "192.0.2.123, 198.51.100.44, 10.0.0.3"))
             .to_http_request();
 
-        assert_eq!(
-            client_ip(&request, &[edge, inner_proxy]),
-            "198.51.100.44"
-        );
+        assert_eq!(client_ip(&request, &[edge, inner_proxy]), "198.51.100.44");
     }
 
     #[test]
@@ -290,9 +284,6 @@ mod tests {
             ))
             .to_http_request();
 
-        assert_eq!(
-            client_ip(&request, &[edge, inner_proxy]),
-            "198.51.100.44"
-        );
+        assert_eq!(client_ip(&request, &[edge, inner_proxy]), "198.51.100.44");
     }
 }
