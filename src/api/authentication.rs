@@ -119,8 +119,17 @@ async fn login(
     request: HttpRequest,
     body: web::Json<LoginRequest>,
 ) -> Result<HttpResponse, AppError> {
-    super::request_auth::reject_cross_site_origin(&request)?;
     let installed = state.installed().await?;
+    let fallback_scheme = if installed.config.secure_cookie {
+        "https"
+    } else {
+        "http"
+    };
+    super::request_auth::reject_cross_site_origin(
+        &request,
+        &state.runtime.trusted_proxies,
+        fallback_scheme,
+    )?;
     let source = login_source(&request, &state.runtime.trusted_proxies);
     let identifier = body.identifier()?;
     let result = authentication::login(

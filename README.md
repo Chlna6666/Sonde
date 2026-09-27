@@ -77,7 +77,7 @@ Debug builds skip the embedded production frontend bundle. Set `SONDE_BUILD_WEB=
 | `SONDE_DATABASE_URL` | Database connection-string override | unset |
 | `SONDE_SETUP_TOKEN` | One-time token required by the installation wizard; minimum 16 characters | unset (a random token is generated and logged at every startup) |
 | `SONDE_MASTER_KEY` | 64-hex-character key encrypting stored secrets (currently TOTP shared secrets) | unset (generated as `$SONDE_DATA_DIR/sonde.master-key`) |
-| `SONDE_TRUSTED_PROXIES` | Comma-separated proxy IPs allowed to supply the client address | unset (no proxy trusted) |
+| `SONDE_TRUSTED_PROXIES` | Comma-separated reverse-proxy IPs trusted for client IP and browser-facing `Forwarded` / `X-Forwarded-Host` / `X-Forwarded-Proto` metadata | unset (no proxy trusted) |
 | `SONDE_ALLOW_INSECURE_COOKIES` | Opts out of forced `Secure` session cookies when `SONDE_BIND` is not loopback | unset (disabled) |
 | `SONDE_DEV_PROXY` | Vite development-server URL | unset |
 | `SONDE_BUILD_WEB` | Builds frontend assets during debug builds | unset |

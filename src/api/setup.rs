@@ -66,7 +66,7 @@ async fn test(
     request: HttpRequest,
     body: web::Json<TestRequest>,
 ) -> Result<HttpResponse, AppError> {
-    require_same_origin(&request)?;
+    require_same_origin(&state, &request)?;
     state.verify_setup_token(setup_token(&request)).await?;
     require_setup_budget(&state, &request).await?;
     if state.is_installed().await {
@@ -81,7 +81,7 @@ async fn complete(
     request: HttpRequest,
     body: web::Json<CompleteRequest>,
 ) -> Result<HttpResponse, AppError> {
-    require_same_origin(&request)?;
+    require_same_origin(&state, &request)?;
     state.verify_setup_token(setup_token(&request)).await?;
     require_setup_budget(&state, &request).await?;
     let _guard = state.setup_lock.lock().await;
@@ -131,21 +131,29 @@ async fn require_setup_budget(
     }
 }
 
-/// Setup is gated by the one-time setup token, not by this check; refusing a cross-origin
-/// `Origin` only stops a third-party page from driving the wizard in the operator's browser by
-/// replaying a token it observed. The shared matcher is used so a TLS-terminating proxy does
-/// not turn a correctly deployed instance into a permanent 403.
-fn require_same_origin(request: &HttpRequest) -> Result<(), AppError> {
+/// Setup is gated by the one-time setup token, not by this check. The browser origin must still
+/// match the deployment origin exactly. Trusted proxy headers may describe the public scheme/host;
+/// untrusted peers cannot redefine either value.
+fn require_same_origin(
+    state: &web::Data<Arc<AppState>>,
+    request: &HttpRequest,
+) -> Result<(), AppError> {
     let origin = request
         .headers()
         .get("origin")
         .and_then(|value| value.to_str().ok())
         .ok_or(AppError::Forbidden)?;
-    let Some((_, authority)) = origin.trim().split_once("://") else {
-        return Err(AppError::Forbidden);
+    let fallback_scheme = if state.runtime.requires_secure_cookies() {
+        "https"
+    } else {
+        "http"
     };
-    let authority = authority.trim_end_matches('/');
-    (!authority.is_empty() && super::request_auth::origin_authority_matches(request, authority))
-        .then_some(())
-        .ok_or(AppError::Forbidden)
+    super::request_auth::origin_matches_request(
+        request,
+        origin,
+        &state.runtime.trusted_proxies,
+        fallback_scheme,
+    )
+    .then_some(())
+    .ok_or(AppError::Forbidden)
 }

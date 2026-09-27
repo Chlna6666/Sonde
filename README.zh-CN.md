@@ -77,7 +77,7 @@ Debug 构建会跳过内嵌前端的生产打包。若需在 Debug 模式构建�
 | `SONDE_DATABASE_URL` | 覆盖数据库连接字符串 | 未设置 |
 | `SONDE_SETUP_TOKEN` | 初始化向导所需的一次性令牌，至少 16 个字符 | 未设置（每次启动生成随机令牌并打印到日志） |
 | `SONDE_MASTER_KEY` | 64 位十六进制主密钥，用于加密存储的机密（当前为 TOTP 共享密钥） | 未设置（生成为 `$SONDE_DATA_DIR/sonde.master-key`） |
-| `SONDE_TRUSTED_PROXIES` | 允许提供客户端地址的代理 IP，逗号分隔 | 未设置（不信任任何代理） |
+| `SONDE_TRUSTED_PROXIES` | 受信反向代理 IP，逗号分隔；仅这些 peer 可提供客户端 IP 与浏览器侧 `Forwarded` / `X-Forwarded-Host` / `X-Forwarded-Proto` 元数据 | 未设置（不信任任何代理） |
 | `SONDE_ALLOW_INSECURE_COOKIES` | 当 `SONDE_BIND` 非回环地址时，关闭强制 `Secure` 会话 Cookie | 未设置（关闭） |
 | `SONDE_DEV_PROXY` | Vite 开发服务器地址 | 未设置 |
 | `SONDE_BUILD_WEB` | 在 Debug 构建中打包前端资源 | 未设置 |
