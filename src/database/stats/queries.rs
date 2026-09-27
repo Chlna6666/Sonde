@@ -973,11 +973,7 @@ async fn compute_version_series(
         return Ok(Vec::new());
     }
 
-    let escaped_versions = top_versions
-        .iter()
-        .map(|value| format!("'{}'", value.replace('\'', "''")))
-        .collect::<Vec<_>>()
-        .join(",");
+    let version_placeholders = vec!["?"; top_versions.len()].join(",");
     let mut query = Query::select();
     query
         .expr_as(
@@ -990,9 +986,10 @@ async fn compute_version_series(
         )
         .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("cnt"))
         .from(Alias::new("events"))
-        .and_where(Expr::cust(format!(
-            "COALESCE(app_version, 'unknown') IN ({escaped_versions})"
-        )));
+        .and_where(Expr::cust_with_values(
+            format!("COALESCE(app_version, 'unknown') IN ({version_placeholders})"),
+            top_versions.iter().cloned(),
+        ));
     apply_event_scope(&mut query, application_id, environment_id, since_ts);
     query
         .group_by_col(Alias::new("bucket_time"))
