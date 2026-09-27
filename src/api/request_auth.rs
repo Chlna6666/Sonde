@@ -99,52 +99,75 @@ pub(crate) fn client_ip(request: &HttpRequest, trusted_proxies: &[IpAddr]) -> St
     let peer = request.peer_addr().map(|address| address.ip());
     if let Some(peer) = peer
         && trusted_proxies.contains(&peer)
-        && let Some(forwarded) = forwarded_client_ip(request)
+        && let Some(forwarded) = forwarded_client_ip(request, trusted_proxies)
     {
-        return forwarded;
+        return forwarded.to_string();
     }
     peer.map_or_else(|| "unknown".into(), |address| address.to_string())
 }
 
-fn forwarded_client_ip(request: &HttpRequest) -> Option<String> {
+fn forwarded_client_ip(request: &HttpRequest, trusted_proxies: &[IpAddr]) -> Option<IpAddr> {
+    let chain = forwarded_chain(request);
+    // Standard proxies append their hop to Forwarded/X-Forwarded-For. Walk from the socket
+    // peer outwards, discarding only explicitly trusted hops. Taking the first header entry
+    // instead would let a client pre-seed X-Forwarded-For with an arbitrary rate-limit identity.
+    chain
+        .iter()
+        .rev()
+        .find(|address| !trusted_proxies.contains(address))
+        .copied()
+        .or_else(|| chain.first().copied())
+}
+
+fn forwarded_chain(request: &HttpRequest) -> Vec<IpAddr> {
     if let Some(value) = request.headers().get(header::FORWARDED)
         && let Ok(raw) = value.to_str()
-        && let Some(part) = raw.split([',', ';']).find_map(|part| {
-            part.trim()
-                .strip_prefix("for=")
-                .or_else(|| part.trim().strip_prefix("For="))
-        })
-        && let Some(ip) = parse_forwarded_ip(part)
     {
-        return Some(ip);
+        let chain: Vec<IpAddr> = raw
+            .split(',')
+            .filter_map(|element| {
+                element.split(';').find_map(|parameter| {
+                    let (name, value) = parameter.trim().split_once('=')?;
+                    name.eq_ignore_ascii_case("for")
+                        .then(|| parse_forwarded_ip(value))
+                        .flatten()
+                })
+            })
+            .collect();
+        if !chain.is_empty() {
+            return chain;
+        }
     }
+
     request
         .headers()
         .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())
-        .and_then(|raw| raw.split(',').next())
-        .and_then(parse_forwarded_ip)
+        .map(|raw| raw.split(',').filter_map(parse_forwarded_ip).collect())
+        .unwrap_or_default()
 }
 
-fn parse_forwarded_ip(raw: &str) -> Option<String> {
+fn parse_forwarded_ip(raw: &str) -> Option<IpAddr> {
     let trimmed = raw.trim().trim_matches('"');
     if trimmed.is_empty() {
         return None;
     }
     if let Some(inner) = trimmed.strip_prefix('[') {
         let host = inner.split(']').next()?;
-        return host.parse::<IpAddr>().ok().map(|ip| ip.to_string());
+        return host.parse::<IpAddr>().ok();
     }
     if let Ok(ip) = trimmed.parse::<IpAddr>() {
-        return Some(ip.to_string());
+        return Some(ip);
     }
     let host = trimmed.rsplit_once(':').map_or(trimmed, |(host, _)| host);
-    host.parse::<IpAddr>().ok().map(|ip| ip.to_string())
+    host.parse::<IpAddr>().ok()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_forwarded_ip, reject_cross_site_origin};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    use super::{client_ip, parse_forwarded_ip, reject_cross_site_origin};
     use actix_web::test::TestRequest;
 
     #[test]
@@ -227,26 +250,49 @@ mod tests {
 
     #[test]
     fn forwarded_literals_parse_ipv4_and_ipv6() {
-        assert_eq!(
-            parse_forwarded_ip("203.0.113.10"),
-            Some("203.0.113.10".into())
-        );
-        assert_eq!(
-            parse_forwarded_ip("203.0.113.10:443"),
-            Some("203.0.113.10".into())
-        );
-        assert_eq!(
-            parse_forwarded_ip("[2001:db8::1]"),
-            Some("2001:db8::1".into())
-        );
-        assert_eq!(
-            parse_forwarded_ip("[2001:db8::1]:8080"),
-            Some("2001:db8::1".into())
-        );
-        assert_eq!(
-            parse_forwarded_ip("2001:db8::1"),
-            Some("2001:db8::1".into())
-        );
+        let ipv4 = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
+        let ipv6 = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+        assert_eq!(parse_forwarded_ip("203.0.113.10"), Some(ipv4));
+        assert_eq!(parse_forwarded_ip("203.0.113.10:443"), Some(ipv4));
+        assert_eq!(parse_forwarded_ip("[2001:db8::1]"), Some(ipv6));
+        assert_eq!(parse_forwarded_ip("[2001:db8::1]:8080"), Some(ipv6));
+        assert_eq!(parse_forwarded_ip("2001:db8::1"), Some(ipv6));
         assert_eq!(parse_forwarded_ip("unknown"), None);
+    }
+
+    #[test]
+    fn trusted_proxy_chain_ignores_client_supplied_leftmost_spoof() {
+        let edge = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
+        let inner_proxy = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3));
+        let request = TestRequest::default()
+            .peer_addr(SocketAddr::new(edge, 43123))
+            .insert_header((
+                "x-forwarded-for",
+                "192.0.2.123, 198.51.100.44, 10.0.0.3",
+            ))
+            .to_http_request();
+
+        assert_eq!(
+            client_ip(&request, &[edge, inner_proxy]),
+            "198.51.100.44"
+        );
+    }
+
+    #[test]
+    fn forwarded_header_chain_uses_first_untrusted_hop_from_the_right() {
+        let edge = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
+        let inner_proxy = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3));
+        let request = TestRequest::default()
+            .peer_addr(SocketAddr::new(edge, 43123))
+            .insert_header((
+                "forwarded",
+                "for=192.0.2.123;proto=https, for=198.51.100.44, for=10.0.0.3",
+            ))
+            .to_http_request();
+
+        assert_eq!(
+            client_ip(&request, &[edge, inner_proxy]),
+            "198.51.100.44"
+        );
     }
 }

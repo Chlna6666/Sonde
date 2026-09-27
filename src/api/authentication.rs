@@ -203,7 +203,9 @@ async fn setup_2fa(
     let installed = state.installed().await?;
     let user = authentication::authenticate_mutation(&installed, &request).await?;
     let setup = authentication::setup_2fa(&installed, &user).await?;
-    Ok(HttpResponse::Ok().json(setup))
+    Ok(HttpResponse::Ok()
+        .insert_header((header::CACHE_CONTROL, "no-store"))
+        .json(setup))
 }
 
 async fn enable_2fa(

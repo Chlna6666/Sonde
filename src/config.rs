@@ -164,29 +164,34 @@ fn load_or_create_master_key_file(path: &Path) -> io::Result<MasterKey> {
 }
 
 fn write_new_secret_file(path: &Path, value: &[u8; 32]) -> io::Result<()> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    // On Unix the restrictive mode is part of the atomic create itself. This avoids a window
-    // where a secret exists with permissions derived only from the process umask, and keeps the
-    // file private even when a later best-effort chmod cannot be completed.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
     use io::Write;
-    file.write_all(value)?;
-    file.sync_all()?;
-    // Windows ACL tightening can fail for service accounts without USERNAME. Creation must still
-    // be durable; Unix is already owner-only at create time and this also repairs unusual modes.
-    if let Err(error) = restrict_secret_permissions(path) {
+
+    let parent = path
+        .parent()
+        .filter(|value| !value.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    // Publish the final path only after all 32 bytes are written and durable. Creating the final
+    // path first lets a concurrent process observe an empty/partial secret between create_new()
+    // and write_all(), which can turn an otherwise harmless startup race into a false corruption
+    // failure. A same-directory tempfile also preserves atomic no-clobber semantics.
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    if let Err(error) = restrict_secret_permissions(temporary.path()) {
         tracing::warn!(
             error = %error,
-            "could not restrict permissions on a freshly written secret file"
+            "could not restrict permissions on a freshly created secret tempfile"
         );
     }
-    Ok(())
+    temporary.write_all(value)?;
+    temporary.flush()?;
+    temporary.as_file().sync_all()?;
+
+    match temporary.persist_noclobber(path) {
+        Ok(file) => {
+            file.sync_all()?;
+            Ok(())
+        }
+        Err(error) => Err(error.error),
+    }
 }
 
 /// Reads a 32-byte secret, failing loudly when the file is not exactly that size.

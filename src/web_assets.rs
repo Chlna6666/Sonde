@@ -15,6 +15,7 @@ pub async fn serve(request: HttpRequest) -> HttpResponse {
         return HttpResponse::BadRequest().finish();
     }
 
+    #[cfg(debug_assertions)]
     if let Ok(proxy_target) = std::env::var("SONDE_DEV_PROXY") {
         let proxy_target = proxy_target.trim().trim_end_matches('/');
         if !proxy_target.is_empty() {
@@ -46,7 +47,12 @@ pub async fn serve(request: HttpRequest) -> HttpResponse {
     }
 }
 
+#[cfg(debug_assertions)]
 async fn proxy_dev_request(proxy_target: &str, request: &HttpRequest) -> HttpResponse {
+    if !matches!(request.method().as_str(), "GET" | "HEAD") {
+        return HttpResponse::MethodNotAllowed().finish();
+    }
+
     let client = awc::Client::default();
     let query = request.query_string();
     let target_url = if query.is_empty() {
@@ -57,7 +63,7 @@ async fn proxy_dev_request(proxy_target: &str, request: &HttpRequest) -> HttpRes
 
     let mut client_req = client.request(request.method().clone(), target_url);
     for (name, value) in request.headers() {
-        if name != "host" && name != "content-length" {
+        if is_safe_dev_request_header(name.as_str()) {
             client_req = client_req.insert_header((name.clone(), value.clone()));
         }
     }
@@ -66,7 +72,7 @@ async fn proxy_dev_request(proxy_target: &str, request: &HttpRequest) -> HttpRes
         Ok(mut res) => {
             let mut builder = HttpResponse::build(res.status());
             for (name, value) in res.headers() {
-                if name != "content-length" {
+                if is_safe_dev_response_header(name.as_str()) {
                     builder.insert_header((name.clone(), value.clone()));
                 }
             }
@@ -81,6 +87,37 @@ async fn proxy_dev_request(proxy_target: &str, request: &HttpRequest) -> HttpRes
     }
 }
 
+#[cfg(debug_assertions)]
+fn is_safe_dev_request_header(name: &str) -> bool {
+    matches!(
+        name,
+        "accept"
+            | "accept-encoding"
+            | "accept-language"
+            | "cache-control"
+            | "if-modified-since"
+            | "if-none-match"
+            | "range"
+            | "user-agent"
+    )
+}
+
+#[cfg(debug_assertions)]
+fn is_safe_dev_response_header(name: &str) -> bool {
+    matches!(
+        name,
+        "accept-ranges"
+            | "cache-control"
+            | "content-encoding"
+            | "content-range"
+            | "content-type"
+            | "etag"
+            | "last-modified"
+            | "location"
+            | "vary"
+    )
+}
+
 /// Rejects source maps even if a stale `web/dist` still contains them.
 fn is_source_map(path: &str) -> bool {
     path.to_ascii_lowercase().ends_with(".map")
@@ -88,6 +125,7 @@ fn is_source_map(path: &str) -> bool {
 
 /// The development proxy may only ever forward to the local machine, so a stray
 /// `SONDE_DEV_PROXY` value cannot turn the server into an open forward proxy.
+#[cfg(debug_assertions)]
 fn is_loopback_proxy_target(target: &str) -> bool {
     let Ok(parsed) = url::Url::parse(target) else {
         return false;

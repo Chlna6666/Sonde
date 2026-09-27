@@ -207,6 +207,9 @@ pub async fn verify_2fa_login(
     require_second_factor_allowed(installed, &[&account_key]).await?;
 
     let (enabled, stored_secret) = auth_store::get_totp_info(&installed.database, &user_id).await?;
+    let legacy_secret = stored_secret
+        .as_deref()
+        .is_some_and(|stored| !SecretCipher::is_envelope(stored));
     let secret = decrypt_totp_secret(installed, stored_secret);
     let Some(secret) = secret else {
         return Err(AppError::Unauthorized);
@@ -224,6 +227,11 @@ pub async fn verify_2fa_login(
             );
         }
         return Err(AppError::Validation("Invalid 2FA verification code".into()));
+    }
+
+    if legacy_secret {
+        let encrypted = installed.secret_cipher.seal(&secret)?;
+        auth_store::enable_totp(&installed.database, &user_id, &encrypted).await?;
     }
 
     let credential = auth_store::user_by_id(&installed.database, &user_id)
@@ -489,10 +497,10 @@ async fn verify_account_password(
 
 /// Decrypts a stored TOTP secret, transparently accepting legacy plaintext values.
 ///
-/// Secrets written before AEAD encryption existed have no envelope prefix and are returned
-/// as-is; they become encrypted the next time the user re-enrolls. If an envelope exists but
-/// cannot be opened (corrupted row, or the master key was replaced), the secret is treated as
-/// absent and the user can re-enable 2FA — failing closed rather than failing login.
+/// Secrets written before AEAD encryption existed have no envelope prefix and are accepted for
+/// one successful verification; the sign-in path then rewrites them as an encrypted envelope.
+/// If an envelope exists but cannot be opened (corrupted row, or the master key was replaced),
+/// verification fails closed instead of silently bypassing the second factor.
 fn decrypt_totp_secret(installed: &InstalledState, stored: Option<String>) -> Option<String> {
     let stored = stored?;
     if !SecretCipher::is_envelope(&stored) {
