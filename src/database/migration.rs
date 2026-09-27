@@ -22,9 +22,9 @@ mod metric_histogram_repair;
 mod metric_histograms;
 mod rollup_generation;
 mod tables;
+mod user_identity_uniqueness;
 mod user_rollup_chunks;
 mod user_rollups;
-mod user_identity_uniqueness;
 
 use alert_delivery_queue::AlertDeliveryQueue;
 use auth_shared_state::SharedAuthState;
@@ -51,9 +51,9 @@ use tables::{
     create_alert_tables, create_application_tables, create_identity_tables, create_import_tables,
     create_telemetry_tables,
 };
+use user_identity_uniqueness::UserIdentityUniqueness;
 use user_rollup_chunks::UserRollupChunks;
 use user_rollups::UserRollups;
-use user_identity_uniqueness::UserIdentityUniqueness;
 
 pub struct Migrator;
 

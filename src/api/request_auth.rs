@@ -81,7 +81,8 @@ pub(crate) fn origin_matches_request(
     } else {
         fallback_scheme.to_ascii_lowercase()
     };
-    if !matches!(scheme.as_str(), "http" | "https") || !origin.scheme().eq_ignore_ascii_case(&scheme)
+    if !matches!(scheme.as_str(), "http" | "https")
+        || !origin.scheme().eq_ignore_ascii_case(&scheme)
     {
         return false;
     }
@@ -110,14 +111,11 @@ pub(crate) fn origin_matches_request(
 
 fn forwarded_parameter(request: &HttpRequest, name: &str) -> Option<String> {
     let raw = request.headers().get(header::FORWARDED)?.to_str().ok()?;
-    raw.split(',')
-        .next()?
-        .split(';')
-        .find_map(|parameter| {
-            let (key, value) = parameter.trim().split_once('=')?;
-            key.eq_ignore_ascii_case(name)
-                .then(|| value.trim().trim_matches('"').to_owned())
-        })
+    raw.split(',').next()?.split(';').find_map(|parameter| {
+        let (key, value) = parameter.trim().split_once('=')?;
+        key.eq_ignore_ascii_case(name)
+            .then(|| value.trim().trim_matches('"').to_owned())
+    })
 }
 
 fn first_header_value(request: &HttpRequest, name: &str) -> Option<String> {

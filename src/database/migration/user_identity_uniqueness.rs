@@ -15,14 +15,7 @@ impl MigrationTrait for UserIdentityUniqueness {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // Authentication treats username as a single exact identifier. Enforce that invariant in
         // the database so concurrent user creation/update cannot produce an ambiguous account.
-        create_index(
-            manager,
-            "uq_users_username",
-            "users",
-            &["username"],
-            true,
-        )
-        .await
+        create_index(manager, "uq_users_username", "users", &["username"], true).await
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
