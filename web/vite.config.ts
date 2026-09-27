@@ -20,32 +20,44 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes("locales/zh-CN.json") || id.includes("locales\\zh-CN.json")) {
+          const normalizedId = id.replace(/\\/g, "/");
+
+          if (normalizedId.includes("locales/zh-CN.json")) {
             return "locale-zh-CN";
           }
-          if (id.includes("locales/en.json") || id.includes("locales\\en.json")) {
+          if (normalizedId.includes("locales/en.json")) {
             return "locale-en";
           }
           if (
-            id.includes("node_modules/react/") ||
-            id.includes("node_modules/react-dom/") ||
-            id.includes("node_modules/react-router-dom/")
+            normalizedId.includes("node_modules/react/") ||
+            normalizedId.includes("node_modules/react-dom/") ||
+            normalizedId.includes("node_modules/react-router/") ||
+            normalizedId.includes("node_modules/react-router-dom/") ||
+            normalizedId.includes("node_modules/scheduler/")
           ) {
             return "vendor-react";
           }
           if (
-            id.includes("node_modules/i18next/") ||
-            id.includes("node_modules/react-i18next/")
+            normalizedId.includes("node_modules/i18next/") ||
+            normalizedId.includes("node_modules/react-i18next/")
           ) {
             return "vendor-i18n";
           }
-          if (id.includes("node_modules/lucide-react/")) {
+          if (
+            normalizedId.includes("node_modules/lucide-react/") ||
+            normalizedId.includes("node_modules/react-icons/")
+          ) {
             return "vendor-icons";
           }
-          if (id.includes("node_modules/recharts/") || id.includes("node_modules/victory-vendor/")) {
-            return "vendor-charts";
+          if (
+            normalizedId.includes("node_modules/@radix-ui/") ||
+            normalizedId.includes("node_modules/class-variance-authority/") ||
+            normalizedId.includes("node_modules/tailwind-merge/") ||
+            normalizedId.includes("node_modules/clsx/")
+          ) {
+            return "vendor-ui";
           }
-          if (id.includes("node_modules/motion/")) {
+          if (normalizedId.includes("node_modules/motion/")) {
             return "vendor-motion";
           }
         },

@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Modal } from "../components/Modal";
-import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input, EmptyState } from "../components/ui";
+import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input, EmptyState, Select } from "../components/ui";
 import { api } from "../lib/api";
 
 type UserSummary = {
@@ -494,21 +494,24 @@ function CreateUserModal({
           </div>
         </label>
 
-        <label className="field">
+        <div className="field">
           <span>{t("access.role")}</span>
-          <select
+          <Select
+            label={t("access.role")}
             value={selectedRole}
-            onChange={(e) => setSelectedRole(e.target.value)}
-          >
-            <option value="User">{t("access.user")}</option>
-            {canAssignPrivileged ? (
-              <>
-                <option value="Admin">{t("access.admin")}</option>
-                <option value="Super Admin">{t("access.superAdmin")}</option>
-              </>
-            ) : null}
-          </select>
-        </label>
+            onChange={setSelectedRole}
+            fullWidth
+            options={[
+              { value: "User", label: t("access.user") },
+              ...(canAssignPrivileged
+                ? [
+                    { value: "Admin", label: t("access.admin") },
+                    { value: "Super Admin", label: t("access.superAdmin") },
+                  ]
+                : []),
+            ]}
+          />
+        </div>
 
         {selectedRole === "User" && applications.length > 0 ? (
           <div>
@@ -624,17 +627,20 @@ function EditUserModal({
         </label>
 
         {canAssignPrivileged ? (
-          <label className="field">
+          <div className="field">
             <span>{t("access.role")}</span>
-            <select
+            <Select
+              label={t("access.role")}
               value={selectedRole}
-              onChange={(e) => setSelectedRole(e.target.value)}
-            >
-              <option value="User">{t("access.user")}</option>
-              <option value="Admin">{t("access.admin")}</option>
-              <option value="Super Admin">{t("access.superAdmin")}</option>
-            </select>
-          </label>
+              onChange={setSelectedRole}
+              fullWidth
+              options={[
+                { value: "User", label: t("access.user") },
+                { value: "Admin", label: t("access.admin") },
+                { value: "Super Admin", label: t("access.superAdmin") },
+              ]}
+            />
+          </div>
         ) : null}
 
         <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", fontSize: "0.78rem" }}>

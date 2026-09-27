@@ -119,6 +119,9 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
         : location.pathname.startsWith(item.to)
     ) ?? navigation[0];
 
+  const rawEyebrow = t(currentNav.eyebrow);
+  const category = rawEyebrow.includes(" / ") ? rawEyebrow.split(" / ")[0] : rawEyebrow;
+
   const logout = async () => {
     await api<void>("/api/v1/auth/logout", { method: "POST" }).catch(() => undefined);
     onLogout();
@@ -243,18 +246,23 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
               icon={<Menu size={16} />}
             />
 
-            <div className="flex items-center gap-2 min-w-0">
-              <span className={`p-1 rounded-[var(--radius-sm)] ${currentNav.colorClass} hidden sm:inline-flex`}>
+            <nav aria-label="Breadcrumb" className="flex items-center gap-2.5 min-w-0">
+              <span
+                className={`icon-squircle h-7 w-7 rounded-[var(--radius-md)] ${currentNav.colorClass} border border-[var(--border-soft)] shadow-xs hidden sm:inline-flex flex-shrink-0`}
+              >
                 <currentNav.Icon size={14} />
               </span>
-              <span className="eyebrow hidden md:inline truncate">
-                {t(currentNav.eyebrow)}
-              </span>
-              <ChevronRight size={13} className="text-[var(--faint)] hidden md:inline" />
-              <h2 className="text-sm sm:text-base font-bold tracking-tight text-[var(--text)] truncate m-0">
-                {t(currentNav.title)}
-              </h2>
-            </div>
+
+              <ol className="flex items-center gap-1.5 min-w-0 text-xs sm:text-sm list-none m-0 p-0">
+                <li className="hidden sm:inline-flex items-center gap-1.5 text-[var(--muted)] font-medium truncate">
+                  <span>{category}</span>
+                  <ChevronRight size={12} className="text-[var(--muted)]/40 flex-shrink-0" aria-hidden="true" />
+                </li>
+                <li className="font-semibold text-[var(--text)] tracking-tight truncate">
+                  <span aria-current="page">{t(currentNav.title)}</span>
+                </li>
+              </ol>
+            </nav>
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">

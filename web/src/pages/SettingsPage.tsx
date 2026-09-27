@@ -19,7 +19,7 @@ import { useTranslation } from "react-i18next";
 import QRCode from "qrcode";
 import { api } from "../lib/api";
 import type { User } from "../App";
-import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input, EmptyState } from "../components/ui";
+import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input, EmptyState, Select } from "../components/ui";
 
 type SystemSettings = {
   timezone: string;
@@ -456,21 +456,29 @@ export function SettingsPage() {
 
         <form onSubmit={handleSaveSettings} className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <label className="flex flex-col gap-1.5 text-xs text-[var(--muted)]">
+            <div className="flex flex-col gap-1.5 text-xs text-[var(--muted)]">
               <span className="font-semibold text-[var(--text)]">{t("settings.ianaTimezone")}</span>
-              <select value={selectedTz} onChange={(event) => setSelectedTz(event.target.value)} className="h-9 px-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--input-bg)] text-xs text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--focus)]">
-                {POPULAR_TIMEZONES.map((timezone) => (
-                  <option key={timezone.value} value={timezone.value}>{timezone.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1.5 text-xs text-[var(--muted)]">
+              <Select
+                label={t("settings.ianaTimezone")}
+                value={selectedTz}
+                onChange={setSelectedTz}
+                fullWidth
+                options={POPULAR_TIMEZONES}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5 text-xs text-[var(--muted)]">
               <span className="font-semibold text-[var(--text)]">{t("settings.defaultLanguage")}</span>
-              <select value={selectedLocale} onChange={(event) => setSelectedLocale(event.target.value)} className="h-9 px-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--input-bg)] text-xs text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--focus)]">
-                <option value="zh-CN">简体中文 (Simplified Chinese)</option>
-                <option value="en">English (US)</option>
-              </select>
-            </label>
+              <Select
+                label={t("settings.defaultLanguage")}
+                value={selectedLocale}
+                onChange={setSelectedLocale}
+                fullWidth
+                options={[
+                  { value: "zh-CN", label: "简体中文 (Simplified Chinese)" },
+                  { value: "en", label: "English (US)" },
+                ]}
+              />
+            </div>
           </div>
           <div className="flex justify-end pt-2">
             <Button

@@ -28,7 +28,7 @@ import { MultiLineChart, type VersionSeriesData } from "../components/MultiLineC
 import { BuildBarChart } from "../components/BuildBarChart";
 import { ActivityStatsPanel, type ActivityStats } from "../components/ActivityStatsPanel";
 import { PlatformIcon } from "../components/PlatformIcon";
-import { Button, Card, Badge, EmptyState, Input } from "../components/ui";
+import { Button, Card, Badge, EmptyState, Input, Select } from "../components/ui";
 import { api } from "../lib/api";
 
 type Application = {
@@ -455,6 +455,7 @@ function ManageAppModal({ application, onClose, onExport }: {
   const [creatingKey, setCreatingKey] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState("");
   const [selectedRole, setSelectedRole] = useState("Manager");
+  const [retentionDays, setRetentionDays] = useState<number>(application.retentionDays);
   const [isPublic, setIsPublic] = useState(application.isPublic ?? false);
   const [description, setDescription] = useState(application.description ?? "");
   const [githubUrl, setGithubUrl] = useState(application.githubUrl ?? "");
@@ -703,7 +704,16 @@ function ManageAppModal({ application, onClose, onExport }: {
           {creatingKey ? (
             <form className="inline-create" onSubmit={handleCreateKey}>
               <label className="field"><span>{t("apps.keyName")}</span><input value={newKeyName} onChange={(event) => setNewKeyName(event.target.value)} required /></label>
-              <label className="field"><span>{t("apps.environment")}</span><select value={newKeyEnvId} onChange={(event) => setNewKeyEnvId(event.target.value)} required>{environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}</select></label>
+              <div className="field">
+                <span>{t("apps.environment")}</span>
+                <Select
+                  label={t("apps.environment")}
+                  value={newKeyEnvId}
+                  onChange={setNewKeyEnvId}
+                  fullWidth
+                  options={environments.map((environment) => ({ value: environment.id, label: environment.name }))}
+                />
+              </div>
               <div className="p-3 rounded-xl bg-[var(--input-bg)] border border-[var(--border-soft)] text-xs text-[var(--muted)]">{t("apps.ingestScopeFixed")}</div>
               <div className="flex gap-2"><button className="primary-button compact">{t("common.create")}</button><button type="button" className="secondary-button compact" onClick={() => setCreatingKey(false)}>{t("common.cancel")}</button></div>
             </form>
@@ -733,8 +743,31 @@ function ManageAppModal({ application, onClose, onExport }: {
       {activeTab === "members" ? (
         <div className="flex flex-col gap-6">
           <form className="inline-create" onSubmit={handleAddMember}>
-            <label className="field"><span>{t("access.username")}</span><select value={selectedUserId} onChange={(event) => setSelectedUserId(event.target.value)} required><option value="">{t("apps.selectMember")}</option>{allUsers.map((user) => <option key={user.id} value={user.id}>{user.username} ({user.email})</option>)}</select></label>
-            <label className="field"><span>{t("apps.memberRole")}</span><select value={selectedRole} onChange={(event) => setSelectedRole(event.target.value)}><option value="Manager">{t("apps.manager")}</option><option value="Analyst">{t("apps.analyst")}</option><option value="Viewer">{t("apps.viewer")}</option></select></label>
+            <div className="field">
+              <span>{t("access.username")}</span>
+              <Select
+                label={t("access.username")}
+                value={selectedUserId}
+                onChange={setSelectedUserId}
+                placeholder={t("apps.selectMember")}
+                fullWidth
+                options={allUsers.map((user) => ({ value: user.id, label: `${user.username} (${user.email})` }))}
+              />
+            </div>
+            <div className="field">
+              <span>{t("apps.memberRole")}</span>
+              <Select
+                label={t("apps.memberRole")}
+                value={selectedRole}
+                onChange={setSelectedRole}
+                fullWidth
+                options={[
+                  { value: "Manager", label: t("apps.manager") },
+                  { value: "Analyst", label: t("apps.analyst") },
+                  { value: "Viewer", label: t("apps.viewer") },
+                ]}
+              />
+            </div>
             <div><button className="primary-button compact"><UserPlus size={15} />{t("apps.grantMember")}</button></div>
           </form>
           <table className="keys-table"><thead><tr><th>{t("access.username")}</th><th>{t("access.email")}</th><th>{t("apps.memberRole")}</th><th /></tr></thead><tbody>
@@ -759,17 +792,24 @@ function ManageAppModal({ application, onClose, onExport }: {
           <form className="flex flex-col gap-4" onSubmit={handleUpdateSettings}>
             <Field name="name" label={t("apps.name")} defaultValue={application.name} />
             <Field name="slug" label={t("apps.slug")} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" defaultValue={application.slug} />
-            <label className="field">
+            <div className="field">
               <span>{t("apps.retention")}</span>
-              <select name="retentionDays" defaultValue={application.retentionDays}>
-                <option value={30}>{t("apps.retention30")}</option>
-                <option value={90}>{t("apps.retention90")}</option>
-                <option value={180}>{t("apps.retention180")}</option>
-                <option value={365}>{t("apps.retention365")}</option>
-                <option value={730}>{t("apps.retention730")}</option>
-                <option value={3650}>{t("apps.retention3650")}</option>
-              </select>
-            </label>
+              <Select
+                name="retentionDays"
+                label={t("apps.retention")}
+                value={retentionDays}
+                onChange={setRetentionDays}
+                fullWidth
+                options={[
+                  { value: 30, label: t("apps.retention30") },
+                  { value: 90, label: t("apps.retention90") },
+                  { value: 180, label: t("apps.retention180") },
+                  { value: 365, label: t("apps.retention365") },
+                  { value: 730, label: t("apps.retention730") },
+                  { value: 3650, label: t("apps.retention3650") },
+                ]}
+              />
+            </div>
             <button className="primary-button">{t("apps.saveSettings")}</button>
           </form>
           <div className="border-t border-[var(--border-soft)] pt-5 space-y-3">

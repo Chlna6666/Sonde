@@ -129,7 +129,7 @@ export function DashboardPage() {
                 {active ? (
                   <motion.div
                     layoutId="dashboard-time-pill"
-                    transition={{ type: "spring", stiffness: 450, damping: 32 }}
+                    transition={{ type: "spring", stiffness: 400, damping: 35 }}
                     className="segmented-control-pill"
                   />
                 ) : null}

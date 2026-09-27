@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
   AppWindow,
-  Github,
   Globe,
   Radio,
   Activity,
@@ -11,6 +10,7 @@ import {
   Gauge,
   ArrowUpRight,
 } from "lucide-react";
+import { SiGithub as Github } from "react-icons/si";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
 import { api } from "../lib/api";
