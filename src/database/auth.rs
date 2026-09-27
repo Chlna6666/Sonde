@@ -1,13 +1,13 @@
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DbErr, QueryResult, TransactionTrait,
-    sea_query::{Alias, Expr, ExprTrait, Query, Value},
+    ConnectionTrait, DatabaseConnection, DbBackend, DbErr, QueryResult, TransactionTrait,
+    sea_query::{Alias, Expr, ExprTrait, LockType, Query, Value},
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::permission::{
     ADMIN_PERMISSIONS, ANALYST_PERMISSIONS, MANAGER_PERMISSIONS, OWNER_PERMISSIONS,
-    PermissionGrant, USER_PERMISSIONS, VIEWER_PERMISSIONS,
+    PermissionGrant, SUPER_ADMIN_ROLE, USER_PERMISSIONS, VIEWER_PERMISSIONS,
 };
 
 use super::query::insert;
@@ -45,6 +45,13 @@ pub struct RoleSummary {
     pub name: String,
     pub builtin: bool,
     pub permissions: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UserMutationOutcome {
+    Applied,
+    NotFound,
+    WouldRemoveLastActiveOwner,
 }
 
 pub async fn create_super_admin(
@@ -525,11 +532,24 @@ pub async fn update_user(
     locale: &str,
     active: bool,
     role_name: Option<&str>,
-) -> Result<(), DbErr> {
+) -> Result<UserMutationOutcome, DbErr> {
     let transaction = database.begin().await?;
+    lock_owner_mutations(&transaction, database.get_database_backend()).await?;
+
+    let Some(current) = load_global_user_state(&transaction, user_id).await? else {
+        transaction.rollback().await?;
+        return Ok(UserMutationOutcome::NotFound);
+    };
+    let removes_active_owner = current.active
+        && current.role == SUPER_ADMIN_ROLE
+        && (!active || role_name.is_some_and(|role| role != SUPER_ADMIN_ROLE));
+    if removes_active_owner && active_super_admin_count(&transaction).await? <= 1 {
+        transaction.rollback().await?;
+        return Ok(UserMutationOutcome::WouldRemoveLastActiveOwner);
+    }
+
     let norm_email = email.trim().to_lowercase();
     let norm_username = username.trim();
-
     let update = Query::update()
         .table(Alias::new("users"))
         .value(Alias::new("email"), norm_email)
@@ -548,6 +568,7 @@ pub async fn update_user(
             .limit(1)
             .to_owned();
         let Some(row) = transaction.query_one(&role_query).await? else {
+            transaction.rollback().await?;
             return Err(DbErr::Custom(format!("Role '{role}' not found")));
         };
         let role_id: String = row.try_get("", "id")?;
@@ -574,11 +595,29 @@ pub async fn update_user(
         .await?;
     }
 
-    transaction.commit().await
+    transaction.commit().await?;
+    Ok(UserMutationOutcome::Applied)
 }
 
-pub async fn delete_user(database: &DatabaseConnection, user_id: &str) -> Result<(), DbErr> {
+pub async fn delete_user(
+    database: &DatabaseConnection,
+    user_id: &str,
+) -> Result<UserMutationOutcome, DbErr> {
     let transaction = database.begin().await?;
+    lock_owner_mutations(&transaction, database.get_database_backend()).await?;
+
+    let Some(current) = load_global_user_state(&transaction, user_id).await? else {
+        transaction.rollback().await?;
+        return Ok(UserMutationOutcome::NotFound);
+    };
+    if current.active
+        && current.role == SUPER_ADMIN_ROLE
+        && active_super_admin_count(&transaction).await? <= 1
+    {
+        transaction.rollback().await?;
+        return Ok(UserMutationOutcome::WouldRemoveLastActiveOwner);
+    }
+
     let delete_bindings = Query::delete()
         .from_table(Alias::new("role_bindings"))
         .and_where(Expr::col(Alias::new("user_id")).eq(user_id))
@@ -591,7 +630,99 @@ pub async fn delete_user(database: &DatabaseConnection, user_id: &str) -> Result
         .to_owned();
     transaction.execute(&delete_user).await?;
 
-    transaction.commit().await
+    transaction.commit().await?;
+    Ok(UserMutationOutcome::Applied)
+}
+
+struct GlobalUserState {
+    active: bool,
+    role: String,
+}
+
+async fn lock_owner_mutations(
+    database: &impl ConnectionTrait,
+    backend: DbBackend,
+) -> Result<(), DbErr> {
+    if backend == DbBackend::Sqlite {
+        // SQLite transactions start deferred. Touch the installation sentinel to acquire the
+        // write lock before counting owners, serializing concurrent owner demotions/deletions.
+        let touch = Query::update()
+            .table(Alias::new("system_state"))
+            .value(Alias::new("value"), Expr::col(Alias::new("value")))
+            .and_where(Expr::col(Alias::new("key")).eq("installed"))
+            .to_owned();
+        database.execute(&touch).await?;
+        return Ok(());
+    }
+
+    let mut query = Query::select();
+    query
+        .column(Alias::new("key"))
+        .from(Alias::new("system_state"))
+        .and_where(Expr::col(Alias::new("key")).eq("installed"))
+        .limit(1)
+        .lock(LockType::Update);
+    let _ = database.query_one(&query.to_owned()).await?;
+    Ok(())
+}
+
+async fn load_global_user_state(
+    database: &impl ConnectionTrait,
+    user_id: &str,
+) -> Result<Option<GlobalUserState>, DbErr> {
+    let query = Query::select()
+        .column((Alias::new("users"), Alias::new("active")))
+        .column((Alias::new("roles"), Alias::new("name")))
+        .from(Alias::new("users"))
+        .inner_join(
+            Alias::new("role_bindings"),
+            Expr::col((Alias::new("users"), Alias::new("id")))
+                .equals((Alias::new("role_bindings"), Alias::new("user_id"))),
+        )
+        .inner_join(
+            Alias::new("roles"),
+            Expr::col((Alias::new("role_bindings"), Alias::new("role_id")))
+                .equals((Alias::new("roles"), Alias::new("id"))),
+        )
+        .and_where(Expr::col((Alias::new("users"), Alias::new("id"))).eq(user_id))
+        .and_where(Expr::col((Alias::new("role_bindings"), Alias::new("application_id"))).is_null())
+        .limit(1)
+        .to_owned();
+    database
+        .query_one(&query)
+        .await?
+        .map(|row| {
+            Ok(GlobalUserState {
+                active: row.try_get("", "active")?,
+                role: row.try_get("", "name")?,
+            })
+        })
+        .transpose()
+}
+
+async fn active_super_admin_count(database: &impl ConnectionTrait) -> Result<i64, DbErr> {
+    let query = Query::select()
+        .expr(Expr::col((Alias::new("users"), Alias::new("id"))).count())
+        .from(Alias::new("users"))
+        .inner_join(
+            Alias::new("role_bindings"),
+            Expr::col((Alias::new("users"), Alias::new("id")))
+                .equals((Alias::new("role_bindings"), Alias::new("user_id"))),
+        )
+        .inner_join(
+            Alias::new("roles"),
+            Expr::col((Alias::new("role_bindings"), Alias::new("role_id")))
+                .equals((Alias::new("roles"), Alias::new("id"))),
+        )
+        .and_where(Expr::col((Alias::new("users"), Alias::new("active")).eq(true))
+        .and_where(Expr::col((Alias::new("role_bindings"), Alias::new("application_id"))).is_null())
+        .and_where(Expr::col((Alias::new("roles"), Alias::new("name"))).eq(SUPER_ADMIN_ROLE))
+        .to_owned();
+    Ok(database
+        .query_one(&query)
+        .await?
+        .and_then(|row| row.try_get("", "count").ok())
+        .unwrap_or(0))
 }
 
 pub async fn list_roles(database: &DatabaseConnection) -> Result<Vec<RoleSummary>, DbErr> {
