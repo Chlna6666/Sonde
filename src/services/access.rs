@@ -96,6 +96,7 @@ pub async fn update_user(
     input: UpdateUserInput<'_>,
 ) -> Result<(), AppError> {
     user.require("members.manage", None)?;
+    ensure_target_manageable(installed, user, target_user_id).await?;
     if let Some(role) = input.role {
         validate_assignable_global_role(user, role)?;
     }
@@ -138,6 +139,7 @@ pub async fn reset_password(
     pepper: &[u8],
 ) -> Result<(), AppError> {
     user.require("members.manage", None)?;
+    ensure_target_manageable(installed, user, target_user_id).await?;
     auth::validate_password(new_password)?;
     let password_hash = auth::hash_password(new_password, pepper)?;
     auth_store::update_password_hash(&installed.database, target_user_id, &password_hash).await?;
@@ -166,6 +168,7 @@ pub async fn delete_user(
             "cannot delete current user account".into(),
         ));
     }
+    ensure_target_manageable(installed, user, target_user_id).await?;
     auth_state::revoke_sessions_for_user(&installed.database, target_user_id).await?;
     auth_store::delete_user(&installed.database, target_user_id).await?;
 
@@ -206,6 +209,7 @@ pub async fn set_user_assigned_applications(
     role: &str,
 ) -> Result<(), AppError> {
     user.require("members.manage", None)?;
+    ensure_target_manageable(installed, user, target_user_id).await?;
     if !permission::is_assignable_application_role(role) {
         return Err(AppError::Validation(
             "assigned applications must use Manager, Analyst, or Viewer".into(),
@@ -228,6 +232,31 @@ pub async fn set_user_assigned_applications(
     )
     .await?;
 
+    Ok(())
+}
+
+async fn ensure_target_manageable(
+    installed: &InstalledState,
+    actor: &AuthenticatedUser,
+    target_user_id: &str,
+) -> Result<(), AppError> {
+    let credential = auth_store::user_by_id(&installed.database, target_user_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let roles = auth_store::role_names_for_user(&installed.database, &credential.id).await?;
+    let target_is_owner = roles.iter().any(|role| role == permission::SUPER_ADMIN_ROLE);
+    let target_is_admin = roles.iter().any(|role| role == permission::ADMIN_ROLE);
+
+    // members.manage is intentionally not sufficient to take over a more privileged account.
+    // Without this boundary an Admin could reset a Super Admin password and immediately gain
+    // the wildcard owner role. Owners may manage any account; an Admin may manage itself and
+    // ordinary users, but not another privileged account.
+    if target_is_owner && !actor.is_unscoped_owner() {
+        return Err(AppError::Forbidden);
+    }
+    if target_is_admin && !actor.is_unscoped_owner() && actor.id != target_user_id {
+        return Err(AppError::Forbidden);
+    }
     Ok(())
 }
 
