@@ -10,6 +10,7 @@
 | Frontend | `web/` Vitest | React components |
 | Microbenchmarks | `benches/hot_path.rs` | Public API, Criterion |
 | Concurrent HTTP | `tests/api_concurrency.rs` | Loopback Actix server + `reqwest` |
+| Production browser smoke | `tests/e2e_smoke.py` | Hardened Docker image + Chromium |
 
 Do not enlarge public APIs only to make integration tests reach private helpers. Keep those tests next to the implementation.
 
@@ -65,3 +66,28 @@ pnpm build
 ```
 
 Pinned toolchain: Node 22 and pnpm 10.29.3 (`web/package.json` `packageManager` and CI).
+
+
+## Production browser smoke
+
+CI builds the final multi-stage Docker image, validates `docker-compose.yml`, starts the image with a read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`, and the same bounded `/tmp` tmpfs used by the reference Compose deployment. The browser smoke then verifies the critical installation path against the real embedded frontend:
+
+1. the live endpoint becomes reachable;
+2. the Setup Token is required and accepted;
+3. the initial administrator can be created;
+4. the administrator can sign in;
+5. the telemetry overview renders without browser-console errors or HTTP 5xx responses.
+
+The Python browser dependency is pinned in `tests/requirements-e2e.txt`.
+
+For a manual run, start Sonde on port 8091 with a known setup token, then run:
+
+```bash
+python3 -m pip install -r tests/requirements-e2e.txt
+python3 -m playwright install chromium
+SONDE_E2E_URL=http://127.0.0.1:8091 \
+SONDE_E2E_SETUP_TOKEN=replace-with-test-token \
+python3 tests/e2e_smoke.py
+```
+
+Use only disposable test data. The smoke test initializes the target instance.
