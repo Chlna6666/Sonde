@@ -2,7 +2,7 @@ use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbErr,
     sea_query::{Alias, Expr, ExprTrait, Query},
 };
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::database::{
     auth_state, first_seen, log_error_rollup, rollups, telemetry::TelemetryScope,
@@ -317,16 +317,4 @@ async fn delete_matching_ids(
     }
 
     Ok(deleted)
-}
-
-pub fn spawn_retention_worker(database: DatabaseConnection) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(4 * 3600));
-        loop {
-            interval.tick().await;
-            if let Err(err) = run_retention_sweep(&database).await {
-                warn!(error = %err, "retention sweep worker encountered an error");
-            }
-        }
-    });
 }
