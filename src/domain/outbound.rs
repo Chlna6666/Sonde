@@ -87,15 +87,22 @@ pub fn is_public_ip(address: IpAddr) -> bool {
 
 #[must_use]
 pub fn is_public_ipv4(address: Ipv4Addr) -> bool {
-    let [a, b, _, _] = address.octets();
+    let [a, b, c, d] = address.octets();
     !(address.is_unspecified()
         || address.is_loopback()
         || address.is_broadcast()
         || address.is_link_local()
         || address.is_multicast()
+        || address.is_documentation()
+        // IANA special-purpose ranges that are not globally reachable. SSRF checks must be
+        // stricter than "not RFC1918": these ranges can still acquire local or protocol-specific
+        // meaning on a host/network and therefore are not valid webhook destinations.
+        || a == 0
         || a == 10
         || (a == 100 && (64..=127).contains(&b))
         || (a == 172 && (16..=31).contains(&b))
+        || (a == 192 && b == 0 && c == 0 && d != 9 && d != 10)
+        || (a == 192 && b == 88 && c == 99)
         || (a == 192 && b == 168)
         || (a == 198 && (18..=19).contains(&b))
         || a >= 224)
@@ -114,6 +121,9 @@ pub fn is_public_ipv6(address: Ipv6Addr) -> bool {
         || is_ipv6_documentation(address)
         || is_ipv6_discard(address)
         || is_ipv6_nat64(address)
+        || is_ipv6_benchmark(address)
+        || is_ipv6_deprecated_site_local(address)
+        || is_ipv6_segment_routing_local(address)
         || is_ipv6_teredo_or_6to4(address))
 }
 
@@ -132,6 +142,19 @@ fn is_ipv6_nat64(address: Ipv6Addr) -> bool {
     segments[0] == 0x64 && segments[1] == 0xff9b
 }
 
+fn is_ipv6_benchmark(address: Ipv6Addr) -> bool {
+    let segments = address.segments();
+    segments[0] == 0x2001 && segments[1] == 0x0002 && segments[2] == 0
+}
+
+fn is_ipv6_deprecated_site_local(address: Ipv6Addr) -> bool {
+    (address.segments()[0] & 0xffc0) == 0xfec0
+}
+
+fn is_ipv6_segment_routing_local(address: Ipv6Addr) -> bool {
+    address.segments()[0] == 0x5f00
+}
+
 fn is_ipv6_teredo_or_6to4(address: Ipv6Addr) -> bool {
     let segments = address.segments();
     (segments[0] == 0x2001 && segments[1] == 0) || segments[0] == 0x2002
@@ -148,9 +171,23 @@ mod tests {
         assert!(!is_public_ipv4(Ipv4Addr::new(127, 0, 0, 1)));
         assert!(!is_public_ipv4(Ipv4Addr::new(10, 0, 0, 1)));
         assert!(!is_public_ipv4(Ipv4Addr::new(169, 254, 0, 1)));
+        assert!(!is_public_ipv4(Ipv4Addr::new(0, 0, 0, 1)));
+        assert!(!is_public_ipv4(Ipv4Addr::new(192, 0, 0, 170)));
+        assert!(!is_public_ipv4(Ipv4Addr::new(192, 0, 2, 1)));
+        assert!(!is_public_ipv4(Ipv4Addr::new(192, 88, 99, 1)));
+        assert!(!is_public_ipv4(Ipv4Addr::new(198, 51, 100, 1)));
+        assert!(!is_public_ipv4(Ipv4Addr::new(203, 0, 113, 1)));
+        assert!(is_public_ipv4(Ipv4Addr::new(8, 8, 8, 8)));
+        // IANA protocol anycast exceptions inside 192.0.0.0/24 remain globally reachable.
+        assert!(is_public_ipv4(Ipv4Addr::new(192, 0, 0, 9)));
+        assert!(is_public_ipv4(Ipv4Addr::new(192, 0, 0, 10)));
         assert!(!is_public_ipv6(Ipv6Addr::LOCALHOST));
         assert!(!is_public_ipv6("::ffff:127.0.0.1".parse().expect("mapped")));
         assert!(!is_public_ipv6("64:ff9b::7f00:1".parse().expect("nat64")));
+        assert!(!is_public_ipv6("2001:2::1".parse().expect("benchmark")));
+        assert!(!is_public_ipv6("fec0::1".parse().expect("site-local")));
+        assert!(!is_public_ipv6("5f00::1".parse().expect("sr-local")));
+        assert!(is_public_ipv6("2606:4700:4700::1111".parse().expect("global")));
         assert!(validate_outbound_url("http://127.0.0.1/hook").is_err());
         assert!(validate_outbound_url("http://localhost/hook").is_err());
         assert!(validate_outbound_url("http://metadata.google.internal/").is_err());
