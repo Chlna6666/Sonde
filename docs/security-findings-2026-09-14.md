@@ -1,5 +1,8 @@
 # Sonde 代码安全审计报告（2026-09-14）
 
+> **历史审计快照。** 本文记录 2026-09-14 当时的发现与证据，不代表当前 `main` 状态。多项问题已在后续提交中关闭；当前安全基线与剩余风险请以 `docs/security-audit-2026-09-27.md` 为准。
+
+
 范围：`src/`（Rust / actix-web 后端，134 个文件）、`web/src`（React 19 + TypeScript）、`Dockerfile`、`docker-compose.yml`、`.github/workflows/ci.yml`、依赖清单（`Cargo.lock`、`web/pnpm-lock.yaml`）。
 方法：静态代码审计（人工走查 + 模式检索）+ 依赖组件审计（工具扫描）+ 配置合规核对。动态运行时审计（DAST）未在本轮执行，见文末"未覆盖项"。
 
