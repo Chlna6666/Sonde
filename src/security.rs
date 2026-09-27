@@ -18,6 +18,8 @@ const IP_INGEST_ITEMS_PER_MINUTE: u64 = 10_000;
 const DEVICE_INGEST_REQUESTS_PER_MINUTE: u64 = 60;
 const DEVICE_INGEST_BYTES_PER_MINUTE: u64 = 2 * 1024 * 1024;
 const DEVICE_INGEST_ITEMS_PER_MINUTE: u64 = 2_000;
+const MAX_AUTH_ATTEMPT_ENTRIES: usize = 20_000;
+const MAX_AUTH_CHALLENGE_ENTRIES: usize = 20_000;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -283,17 +285,24 @@ async fn charge_rate(
 ) -> bool {
     let now = chrono::Utc::now().timestamp_millis();
     let mut buckets = buckets.lock().await;
-    if buckets.len() > max_entries {
-        buckets.retain(|_, bucket| now.saturating_sub(bucket.window_start) < window_ms);
-    }
     if let Some(bucket) = buckets.get_mut(key) {
-        bucket.charge(now, cost, limit, window_ms)
-    } else if cost <= limit {
-        buckets.insert(key.to_owned(), RateBucket::new(now, cost));
-        true
-    } else {
-        false
+        return bucket.charge(now, cost, limit, window_ms);
     }
+    if cost > limit || max_entries == 0 {
+        return false;
+    }
+    // Cardinality is attacker-controlled for IP/device/setup keys. The old cleanup only ran once
+    // the map was already over the limit and still inserted when every entry was live, so a flood
+    // of unique keys could grow memory without bound. Expire stale entries first, then fail closed
+    // for unseen keys while the fixed-capacity window is saturated.
+    if buckets.len() >= max_entries {
+        buckets.retain(|_, bucket| now.saturating_sub(bucket.window_start) < window_ms);
+        if buckets.len() >= max_entries {
+            return false;
+        }
+    }
+    buckets.insert(key.to_owned(), RateBucket::new(now, cost));
+    true
 }
 
 async fn charge_device_rate(
@@ -476,11 +485,24 @@ impl AuthSecurity {
 
     async fn bump_attempts(&self, keys: &[&str], now: i64) -> u64 {
         let mut attempts = self.attempts.lock().await;
-        if attempts.len() > 20_000 {
-            attempts.retain(|_, a| a.next_allowed_at > now - 86_400_000);
+        if attempts.len() >= MAX_AUTH_ATTEMPT_ENTRIES {
+            attempts.retain(|_, attempt| attempt.next_allowed_at > now - 86_400_000);
         }
         let mut cooldown_seconds = 0_u64;
         for key in keys {
+            if !attempts.contains_key(*key) && attempts.len() >= MAX_AUTH_ATTEMPT_ENTRIES {
+                // Preserve the keys involved in the current authentication attempt and evict the
+                // least-recently relevant rate state. This bounds memory under username/source
+                // cardinality attacks without dropping a key we just updated in this call.
+                let eviction = attempts
+                    .iter()
+                    .filter(|(existing, _)| !keys.iter().any(|current| **current == existing.as_str()))
+                    .min_by_key(|(_, attempt)| attempt.next_allowed_at)
+                    .map(|(key, _)| key.clone());
+                if let Some(eviction) = eviction {
+                    attempts.remove(&eviction);
+                }
+            }
             let attempt = attempts.entry((*key).to_owned()).or_default();
             attempt.failures = attempt.failures.saturating_add(1);
             let delay_seconds = attempt
@@ -502,8 +524,19 @@ impl AuthSecurity {
     async fn issue_challenge(&self, account_key: &str, source_key: &str, now: i64) -> LoginGate {
         let challenge_id = auth::random_token(18);
         let mut challenges = self.challenges.lock().await;
-        if challenges.len() > 20_000 {
-            challenges.retain(|_, c| c.expires_at > now);
+        if challenges.len() >= MAX_AUTH_CHALLENGE_ENTRIES {
+            challenges.retain(|_, challenge| challenge.expires_at > now);
+        }
+        if challenges.len() >= MAX_AUTH_CHALLENGE_ENTRIES {
+            // Every challenge has a short fixed TTL. Evicting the earliest expiry gives bounded
+            // overload behavior instead of allowing unauthenticated requests to grow this map.
+            let eviction = challenges
+                .iter()
+                .min_by_key(|(_, challenge)| challenge.expires_at)
+                .map(|(key, _)| key.clone());
+            if let Some(eviction) = eviction {
+                challenges.remove(&eviction);
+            }
         }
         challenges.insert(
             challenge_id.clone(),
@@ -798,6 +831,25 @@ pub mod tests {
             assert!(throttle.charge("203.0.113.7", 16).await);
             assert!(!throttle.charge("203.0.113.7", 16).await);
             assert!(throttle.charge("198.51.100.9", 16).await);
+        });
+    }
+
+    #[test]
+    fn rate_bucket_cardinality_is_a_hard_limit() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let buckets = Mutex::new(HashMap::new());
+            assert!(charge_rate(&buckets, "one", 1, 10, 60_000, 2).await);
+            assert!(charge_rate(&buckets, "two", 1, 10, 60_000, 2).await);
+            assert!(!charge_rate(&buckets, "three", 1, 10, 60_000, 2).await);
+            assert_eq!(buckets.lock().await.len(), 2);
+
+            // Existing keys continue to consume their own budget while new cardinality is rejected.
+            assert!(charge_rate(&buckets, "one", 1, 10, 60_000, 2).await);
+            assert_eq!(buckets.lock().await.len(), 2);
         });
     }
 

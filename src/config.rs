@@ -164,15 +164,22 @@ fn load_or_create_master_key_file(path: &Path) -> io::Result<MasterKey> {
 }
 
 fn write_new_secret_file(path: &Path, value: &[u8; 32]) -> io::Result<()> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    // On Unix the restrictive mode is part of the atomic create itself. This avoids a window
+    // where a secret exists with permissions derived only from the process umask, and keeps the
+    // file private even when a later best-effort chmod cannot be completed.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
     use io::Write;
     file.write_all(value)?;
     file.sync_all()?;
-    // Tightening permissions is best effort and must never block startup: on Windows it shells
-    // out to `icacls`, which needs `USERNAME` that service accounts frequently do not have.
+    // Windows ACL tightening can fail for service accounts without USERNAME. Creation must still
+    // be durable; Unix is already owner-only at create time and this also repairs unusual modes.
     if let Err(error) = restrict_secret_permissions(path) {
         tracing::warn!(
             error = %error,
@@ -318,20 +325,31 @@ impl InstallationConfig {
     }
 
     pub fn write_atomic(&self, path: &Path) -> io::Result<()> {
-        let temporary = path.with_extension("json.tmp");
-        fs::write(
-            &temporary,
-            serde_json::to_vec_pretty(self).map_err(io::Error::other)?,
+        use io::Write;
+
+        let parent = path
+            .parent()
+            .filter(|value| !value.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        // A unique same-directory tempfile prevents a stale/symlinked fixed .tmp path from being
+        // followed. tempfile creates Unix tempfiles as 0600, so database credentials are private
+        // from the first write rather than only after a chmod.
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        temporary.write_all(
+            &serde_json::to_vec_pretty(self).map_err(io::Error::other)?,
         )?;
-        // Same reasoning as `InstallationConfig::read`: a missing `USERNAME` or an exotic
-        // filesystem must not turn installation into a hard failure while the database has
-        // already been marked as initialized.
-        if let Err(error) = restrict_secret_permissions(&temporary) {
+        temporary.flush()?;
+        temporary.as_file().sync_all()?;
+        // Same reasoning as `InstallationConfig::read`: Windows ACL tightening may be
+        // unavailable for service accounts. The temporary file remains atomic and, on Unix,
+        // was already created owner-only.
+        if let Err(error) = restrict_secret_permissions(temporary.path()) {
             tracing::warn!(
                 error = %error,
                 "could not restrict installation config permissions; the file carries database credentials"
             );
         }
-        fs::rename(temporary, path)
+        temporary.persist(path).map_err(|error| error.error)?;
+        Ok(())
     }
 }
