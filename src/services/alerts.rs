@@ -864,6 +864,10 @@ async fn validated_http_client(raw: &str) -> Result<reqwest::Client, String> {
     let (host, addresses) = validated_destination(raw).await?;
     let mut builder = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
+        // A pinned address is only effective if the client does not hand the hostname back to a
+        // proxy: reqwest reads `HTTP(S)_PROXY` from the environment by default, and a proxy
+        // resolves the name itself, reintroducing the rebinding window the pin just closed.
+        .no_proxy()
         .redirect(Policy::none());
     for address in addresses {
         builder = builder.resolve(&host, address);

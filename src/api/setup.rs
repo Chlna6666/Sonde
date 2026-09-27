@@ -131,15 +131,21 @@ async fn require_setup_budget(
     }
 }
 
+/// Setup is gated by the one-time setup token, not by this check; refusing a cross-origin
+/// `Origin` only stops a third-party page from driving the wizard in the operator's browser by
+/// replaying a token it observed. The shared matcher is used so a TLS-terminating proxy does
+/// not turn a correctly deployed instance into a permanent 403.
 fn require_same_origin(request: &HttpRequest) -> Result<(), AppError> {
     let origin = request
         .headers()
         .get("origin")
         .and_then(|value| value.to_str().ok())
         .ok_or(AppError::Forbidden)?;
-    let connection = request.connection_info();
-    let expected = format!("{}://{}", connection.scheme(), connection.host());
-    (origin.trim_end_matches('/') == expected)
+    let Some((_, authority)) = origin.trim().split_once("://") else {
+        return Err(AppError::Forbidden);
+    };
+    let authority = authority.trim_end_matches('/');
+    (!authority.is_empty() && super::request_auth::origin_authority_matches(request, authority))
         .then_some(())
         .ok_or(AppError::Forbidden)
 }
