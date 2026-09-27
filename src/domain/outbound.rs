@@ -187,7 +187,9 @@ mod tests {
         assert!(!is_public_ipv6("2001:2::1".parse().expect("benchmark")));
         assert!(!is_public_ipv6("fec0::1".parse().expect("site-local")));
         assert!(!is_public_ipv6("5f00::1".parse().expect("sr-local")));
-        assert!(is_public_ipv6("2606:4700:4700::1111".parse().expect("global")));
+        assert!(is_public_ipv6(
+            "2606:4700:4700::1111".parse().expect("global")
+        ));
         assert!(validate_outbound_url("http://127.0.0.1/hook").is_err());
         assert!(validate_outbound_url("http://localhost/hook").is_err());
         assert!(validate_outbound_url("http://metadata.google.internal/").is_err());

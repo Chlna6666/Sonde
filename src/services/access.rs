@@ -246,7 +246,9 @@ async fn ensure_target_manageable(
         .await?
         .ok_or(AppError::NotFound)?;
     let roles = auth_store::role_names_for_user(&installed.database, &credential.id).await?;
-    let target_is_owner = roles.iter().any(|role| role == permission::SUPER_ADMIN_ROLE);
+    let target_is_owner = roles
+        .iter()
+        .any(|role| role == permission::SUPER_ADMIN_ROLE);
     let target_is_admin = roles.iter().any(|role| role == permission::ADMIN_ROLE);
 
     // members.manage is intentionally not sufficient to take over a more privileged account.
@@ -262,9 +264,7 @@ async fn ensure_target_manageable(
     Ok(())
 }
 
-fn require_user_mutation_applied(
-    outcome: auth_store::UserMutationOutcome,
-) -> Result<(), AppError> {
+fn require_user_mutation_applied(outcome: auth_store::UserMutationOutcome) -> Result<(), AppError> {
     match outcome {
         auth_store::UserMutationOutcome::Applied => Ok(()),
         auth_store::UserMutationOutcome::NotFound => Err(AppError::NotFound),
