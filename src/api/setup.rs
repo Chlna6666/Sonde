@@ -14,6 +14,7 @@ use crate::{
 struct SetupStatus {
     installed: bool,
     database_types: &'static [&'static str],
+    version: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -52,11 +53,13 @@ async fn status(state: web::Data<Arc<AppState>>) -> HttpResponse {
         HttpResponse::Ok().json(SetupStatus {
             installed: true,
             database_types: &[],
+            version: crate::VERSION,
         })
     } else {
         HttpResponse::Ok().json(SetupStatus {
             installed: false,
             database_types: &["sqlite", "postgresql", "mysql"],
+            version: crate::VERSION,
         })
     }
 }
@@ -66,12 +69,12 @@ async fn test(
     request: HttpRequest,
     body: web::Json<TestRequest>,
 ) -> Result<HttpResponse, AppError> {
-    require_same_origin(&state, &request)?;
-    state.verify_setup_token(setup_token(&request)).await?;
-    require_setup_budget(&state, &request).await?;
     if state.is_installed().await {
         return Err(AppError::NotFound);
     }
+    require_same_origin(&state, &request)?;
+    state.verify_setup_code(setup_code(&request)).await?;
+    require_setup_budget(&state, &request).await?;
     setup::test_connection(&state, &body.database_type, body.database_url.as_deref()).await?;
     Ok(HttpResponse::Ok().json(serde_json::json!({ "ok": true })))
 }
@@ -81,8 +84,11 @@ async fn complete(
     request: HttpRequest,
     body: web::Json<CompleteRequest>,
 ) -> Result<HttpResponse, AppError> {
+    if state.is_installed().await {
+        return Err(AppError::NotFound);
+    }
     require_same_origin(&state, &request)?;
-    state.verify_setup_token(setup_token(&request)).await?;
+    state.verify_setup_code(setup_code(&request)).await?;
     require_setup_budget(&state, &request).await?;
     let _guard = state.setup_lock.lock().await;
     if state.is_installed().await {
@@ -102,16 +108,16 @@ async fn complete(
         },
     )
     .await?;
-    // The wizard is done: the token must not be replayable even if the state flip races.
-    state.consume_setup_token().await;
+    // The wizard is done: the verification code must not be replayable even if the state flip races.
+    state.consume_setup_code().await;
     Ok(HttpResponse::Created().json(serde_json::json!({ "installed": true })))
 }
 
-/// Reads the one-time setup token from the dedicated header.
-fn setup_token(request: &HttpRequest) -> Option<&str> {
+/// Reads the one-time setup verification code from the dedicated header.
+fn setup_code(request: &HttpRequest) -> Option<&str> {
     request
         .headers()
-        .get("x-sonde-setup-token")
+        .get("x-sonde-setup-code")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())

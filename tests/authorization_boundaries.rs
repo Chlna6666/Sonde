@@ -45,15 +45,18 @@ async fn fixture() -> Fixture {
     .unwrap();
 
     let pepper = [42_u8; 32];
+    let log_dir = data_dir.join("logs");
     let runtime = RuntimeConfig {
         bind: "127.0.0.1:8080".into(),
         data_dir,
         config_path,
+        log_dir,
+        log_retention_days: 14,
+        audit_log_retention_days: 180,
         database_url_override: None,
         password_pepper: PasswordPepper::new(pepper),
         trusted_proxies: Vec::new(),
         allow_insecure_cookies: true,
-        setup_token: None,
         master_key: MasterKey::from_bytes([9_u8; 32]),
     };
 
@@ -418,4 +421,224 @@ async fn login_challenge_does_not_echo_a_prompt() {
             .as_str()
             .is_some_and(|id| !id.is_empty())
     );
+}
+
+#[tokio::test]
+async fn public_version_endpoint_reports_current_version() {
+    let fixture = fixture().await;
+    let state = Arc::new(AppState::load(fixture.runtime.clone()).await.unwrap());
+    let app = test::init_service(
+        App::new()
+            .app_data(Data::new(state))
+            .configure(api::configure),
+    )
+    .await;
+    let req = test::TestRequest::get().uri("/api/v1/version").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["version"], sonde::VERSION);
+}
+
+#[tokio::test]
+async fn system_settings_reports_version_and_backend() {
+    let fixture = fixture().await;
+    let state = Arc::new(AppState::load(fixture.runtime.clone()).await.unwrap());
+    let app = test::init_service(
+        App::new()
+            .app_data(Data::new(state))
+            .configure(api::configure),
+    )
+    .await;
+    let req = test::TestRequest::get()
+        .uri("/api/v1/admin/system/settings")
+        .cookie(session_cookie(&fixture.owner_token))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["version"], sonde::VERSION);
+    assert_eq!(body["databaseBackend"], "SQLite (WAL)");
+}
+
+#[tokio::test]
+async fn setup_status_reports_version() {
+    let fixture = fixture().await;
+    let state = Arc::new(AppState::load(fixture.runtime.clone()).await.unwrap());
+    let app = test::init_service(
+        App::new()
+            .app_data(Data::new(state))
+            .configure(api::configure),
+    )
+    .await;
+    let req = test::TestRequest::get()
+        .uri("/api/v1/setup/status")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["version"], sonde::VERSION);
+}
+
+#[tokio::test]
+async fn installed_instance_has_no_setup_code_and_rejects_setup_mutations_with_404() {
+    let fixture = fixture().await;
+    let state = Arc::new(AppState::load(fixture.runtime.clone()).await.unwrap());
+    assert!(state.is_installed().await);
+    // Crucial: installed instances do NOT generate or retain a setup code
+    assert_eq!(state.setup_code_for_test().await, None);
+
+    let app = test::init_service(
+        App::new()
+            .app_data(Data::new(state))
+            .configure(api::configure),
+    )
+    .await;
+
+    // Both /test and /complete return 404 Not Found
+    let req = test::TestRequest::post()
+        .uri("/api/v1/setup/test")
+        .insert_header(("x-sonde-setup-code", "some-code"))
+        .set_json(serde_json::json!({ "databaseType": "sqlite" }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::NOT_FOUND);
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/setup/complete")
+        .insert_header(("x-sonde-setup-code", "some-code"))
+        .set_json(serde_json::json!({
+            "databaseType": "sqlite",
+            "locale": "en",
+            "timezone": "UTC",
+            "email": "hacker@example.com",
+            "username": "hacker",
+            "password": "SuperSecretPassphrase123!",
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::NOT_FOUND);
+}
+
+async fn uninstalled_runtime() -> (tempfile::TempDir, RuntimeConfig) {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let data_dir = temp_dir.path().to_path_buf();
+    let config_path = data_dir.join("sonde.json");
+    let pepper = [42_u8; 32];
+    let log_dir = data_dir.join("logs");
+    let runtime = RuntimeConfig {
+        bind: "127.0.0.1:8080".into(),
+        data_dir,
+        config_path,
+        log_dir,
+        log_retention_days: 14,
+        audit_log_retention_days: 180,
+        database_url_override: None,
+        password_pepper: PasswordPepper::new(pepper),
+        trusted_proxies: Vec::new(),
+        allow_insecure_cookies: true,
+        master_key: MasterKey::from_bytes([9_u8; 32]),
+    };
+    (temp_dir, runtime)
+}
+
+#[tokio::test]
+async fn uninstalled_instance_generates_setup_code_and_completes_setup() {
+    let (_temp_dir, runtime) = uninstalled_runtime().await;
+    let state = Arc::new(AppState::load(runtime).await.unwrap());
+    assert!(!state.is_installed().await);
+
+    let setup_code = state.setup_code_for_test().await.unwrap();
+    assert_eq!(setup_code.len(), 9);
+    assert_eq!(&setup_code[4..5], "-");
+
+    let app = test::init_service(
+        App::new()
+            .app_data(Data::new(state.clone()))
+            .configure(api::configure),
+    )
+    .await;
+
+    // Status reports not installed
+    let req = test::TestRequest::get()
+        .uri("/api/v1/setup/status")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["installed"], false);
+
+    // Test connection with wrong code fails
+    let req = test::TestRequest::post()
+        .uri("/api/v1/setup/test")
+        .insert_header(("host", "127.0.0.1:8080"))
+        .insert_header(("origin", "http://127.0.0.1:8080"))
+        .insert_header(("x-sonde-setup-code", "WRONG-CODE"))
+        .set_json(serde_json::json!({ "databaseType": "sqlite" }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+
+    // Test connection with case-insensitive / stripped code succeeds
+    let normalized = setup_code.to_lowercase().replace('-', "");
+    let req = test::TestRequest::post()
+        .uri("/api/v1/setup/test")
+        .insert_header(("host", "127.0.0.1:8080"))
+        .insert_header(("origin", "http://127.0.0.1:8080"))
+        .insert_header(("x-sonde-setup-code", normalized.as_str()))
+        .set_json(serde_json::json!({ "databaseType": "sqlite" }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+    // Complete setup
+    let req = test::TestRequest::post()
+        .uri("/api/v1/setup/complete")
+        .insert_header(("host", "127.0.0.1:8080"))
+        .insert_header(("origin", "http://127.0.0.1:8080"))
+        .insert_header(("x-sonde-setup-code", setup_code.as_str()))
+        .set_json(serde_json::json!({
+            "databaseType": "sqlite",
+            "locale": "en",
+            "timezone": "UTC",
+            "email": "freshadmin@example.com",
+            "username": "freshadmin",
+            "password": "SuperSecretPassphrase123!",
+            "secureCookie": false,
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
+
+    // State is now installed and setup code is consumed
+    assert!(state.is_installed().await);
+    assert_eq!(state.setup_code_for_test().await, None);
+
+    // Subsequent calls to /setup/complete and /setup/test now return 404 Not Found!
+    let req = test::TestRequest::post()
+        .uri("/api/v1/setup/complete")
+        .insert_header(("host", "127.0.0.1:8080"))
+        .insert_header(("origin", "http://127.0.0.1:8080"))
+        .insert_header(("x-sonde-setup-code", setup_code.as_str()))
+        .set_json(serde_json::json!({
+            "databaseType": "sqlite",
+            "locale": "en",
+            "timezone": "UTC",
+            "email": "another@example.com",
+            "username": "another",
+            "password": "SuperSecretPassphrase123!",
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::NOT_FOUND);
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/setup/test")
+        .insert_header(("host", "127.0.0.1:8080"))
+        .insert_header(("origin", "http://127.0.0.1:8080"))
+        .insert_header(("x-sonde-setup-code", setup_code.as_str()))
+        .set_json(serde_json::json!({ "databaseType": "sqlite" }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::NOT_FOUND);
 }

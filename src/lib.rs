@@ -21,6 +21,9 @@ pub mod state;
 pub mod totp;
 pub mod web_assets;
 
+pub const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+pub const SEMVER: &str = env!("CARGO_PKG_VERSION");
+
 use std::{io, sync::Arc};
 
 use actix_web::{App, HttpServer, middleware, web};

@@ -31,19 +31,18 @@ docker compose up -d --build
 
 Open <http://127.0.0.1:8080> and complete the initialization wizard. Docker persists application data in the `sonde_data` volume. The reference Compose file is deliberately loopback-only and enables non-Secure cookies for this local HTTP quick start; do not expose that configuration on a LAN or the internet.
 
-### First-run setup token
+### First-run setup verification code
 
-The wizard (`/api/v1/setup/*`) runs before any account exists, so it requires a one-time setup token sent in the `X-Sonde-Setup-Token` header. The token is invalidated as soon as installation completes.
+The wizard (`/api/v1/setup/*`) runs before any account exists, so it requires a one-time verification code sent in the `X-Sonde-Setup-Code` header (formatted as `XXXX-XXXX`).
 
-- **Set `SONDE_SETUP_TOKEN` (16+ characters) before the first start.** That is the recommended path.
-- If you do not set it, Sonde generates a random token at startup and logs it once:
+- When Sonde starts in an uninstalled state, it generates a high-entropy random verification code and prints it prominently in the server console and log files:
 
   ```bash
-  docker compose logs sonde 2>&1 | grep -i token
+  docker compose logs sonde
   ```
 
-  A new token is generated on **every** restart, so restarting the container mid-installation invalidates the token you already copied and the wizard starts answering 401.
-- Never leave port 8080 reachable from untrusted networks while the instance is still uninstalled.
+- Once installation completes, the setup code is permanently invalidated and destroyed from memory. Subsequent requests to setup endpoints return `404 Not Found`.
+- Never leave port 8080 reachable from untrusted networks while the instance is uninstalled.
 
 ## Local development
 
@@ -75,7 +74,6 @@ Debug builds skip the embedded production frontend bundle. Set `SONDE_BUILD_WEB=
 | `SONDE_CONFIG_PATH` | Overrides the generated configuration file location | `$SONDE_DATA_DIR/sonde.json` |
 | `SONDE_PEPPER_PATH` | Overrides the generated password-pepper file location | `$SONDE_DATA_DIR/sonde.password-pepper` |
 | `SONDE_DATABASE_URL` | Database connection-string override | unset |
-| `SONDE_SETUP_TOKEN` | One-time token required by the installation wizard; minimum 16 characters | unset (a random token is generated and logged at every startup) |
 | `SONDE_MASTER_KEY` | 64-hex-character key encrypting stored secrets (currently TOTP shared secrets) | unset (generated as `$SONDE_DATA_DIR/sonde.master-key`) |
 | `SONDE_TRUSTED_PROXIES` | Comma-separated reverse-proxy IPs trusted for client IP and browser-facing `Forwarded` / `X-Forwarded-Host` / `X-Forwarded-Proto` metadata | unset (no proxy trusted) |
 | `SONDE_ALLOW_INSECURE_COOKIES` | Opts out of forced `Secure` session cookies when `SONDE_BIND` is not loopback | unset (disabled) |

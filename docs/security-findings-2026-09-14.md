@@ -337,11 +337,11 @@ cargo update -p actix-http        # 修复 SEC-19（实测升至 3.13.5）
 
 - **问题**：`/api/v1/setup/test` 与 `/api/v1/setup/complete` 在未安装状态下无任何身份认证（仅同源校验 + 限速），而 `Origin`/`Host` 头可由任意 HTTP 客户端伪造。公网暴露的新实例会被攻击者抢先完成初始化并创建其自己的 Super Admin——一次请求即可接管。首轮审计将其误评为"同源校验已覆盖"。
 - **修复**（`src/config.rs`、`src/state.rs`、`src/api/setup.rs`、`src/services/setup.rs`、`web/src/pages/SetupPage.tsx`）：
-  1. 新增 `SONDE_SETUP_TOKEN`（≥16 字符，配置过短则拒绝启动）；
-  2. 未配置时**启动自动生成 32 字节随机 token 并打印到启动日志**（类似 Grafana 初始口令的交付方式），保护永远开启、零配置；
-  3. `/setup/test` 与 `/setup/complete` 必须携带 `X-Sonde-Setup-Token` 头，服务端恒定时间比较（`auth::constant_time_eq`）；
-  4. 初始化完成后 token 立即作废（`consume_setup_token`），不可重放；
-  5. SetupPage 新增"初始化令牌"输入项（en/zh 文案随附），随请求头发送；缺失/错误返回 401 并给出明确提示。
+  1. 一次性安装验证码机制（启动时仅在未初始化状态下生成 8 位随机 setup_code 并打印到终端日志，如 `8F4K-9W2M`）；
+  2. 保护永远开启、零配置，无需环境变量；
+  3. `/setup/test` 与 `/setup/complete` 必须携带 `X-Sonde-Setup-Code` 头，服务端恒定时间比较（`auth::constant_time_eq_setup_code`）；
+  4. 初始化完成后验证码立即永久作废（`consume_setup_code`），后续请求返回 404，不可重放；
+  5. SetupPage 提供"验证码"输入项，随请求头发送；缺失/错误返回 401。
 - **保留决策**：compose 默认端口映射保持 `8080:8080` 不强制改为 loopback——在 token 强制生效后，公网暴露的未安装实例已无法被初始化或探测；loopback 绑定与 TLS 反代仍是推荐部署形态（compose 注释已说明）。
 
 ### SEC-22（Medium/High）　`sqlite:///abs/path` 路径校验与实际打开路径不一致 → 已修复

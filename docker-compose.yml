@@ -13,10 +13,9 @@ services:
     # pinned to host loopback. For a TLS reverse proxy set SONDE_ALLOW_INSECURE_COOKIES=0 (or use
     # the image directly without the opt-out). Never combine the opt-out with a non-loopback host
     # publish.
-    #
-    # First-run initialization requires a one-time setup token: set SONDE_SETUP_TOKEN, or read
-    # the token Sonde generates and logs at startup. Never leave port 8080 reachable from the
-    # internet while the instance is still uninstalled.
+    # First-run initialization requires a one-time verification code: read the code Sonde
+    # generates and logs at startup (`docker compose logs sonde`). Never leave port 8080 reachable
+    # from the internet while the instance is still uninstalled.
     ports:
       - "127.0.0.1:8080:8080"
     environment:

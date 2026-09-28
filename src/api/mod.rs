@@ -27,6 +27,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
     config
         .route("/health/live", web::get().to(|| async { "ok" }))
         .route("/health/ready", web::get().to(readiness))
+        .route("/api/v1/version", web::get().to(version))
         .configure(setup::configure)
         .configure(authentication::configure)
         .configure(access::configure)
@@ -50,4 +51,10 @@ async fn readiness(state: web::Data<Arc<AppState>>) -> HttpResponse {
         Ok(()) => HttpResponse::Ok().body("ok"),
         Err(_) => HttpResponse::ServiceUnavailable().body("database unavailable"),
     }
+}
+
+async fn version() -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "version": crate::VERSION,
+    }))
 }

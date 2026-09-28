@@ -31,18 +31,17 @@ docker compose up -d --build
 
 访问 <http://127.0.0.1:8080> 并完成初始化向导。Docker 会将运行数据持久化到 `sonde_data` 卷中。
 
-### 首次安装令牌（Setup Token）
+### 首次安装验证码（Setup Code）
 
-初始化向导（`/api/v1/setup/*`）在任何账号存在之前运行，因此必须在请求头 `X-Sonde-Setup-Token` 中携带一次性安装令牌；安装完成后令牌立即作废。
+初始化向导（`/api/v1/setup/*`）在任何账号存在之前运行，因此必须在请求头 `X-Sonde-Setup-Code` 中携带 8 位一次性安装验证码（如 `8F4K-9W2M`）。
 
-- **首次启动前先设置 `SONDE_SETUP_TOKEN`（至少 16 个字符）**，这是推荐做法。
-- 若未设置，Sonde 会在每次启动时生成一个随机令牌并打印到启动日志一次：
+- 当 Sonde 实例尚未初始化时，启动时会自动生成一个高熵随机验证码并显式打印到终端控制台与日志文件中：
 
   ```bash
-  docker compose logs sonde 2>&1 | grep -i token
+  docker compose logs sonde
   ```
 
-  注意：**每次重启都会重新生成令牌**。安装过程中若重启容器，之前复制的令牌即失效，向导会开始返回 401。
+- 一旦初始化完成，该验证码将立即从内存中永久销毁失效；随后向导接口将全部返回 `404 Not Found`，彻底杜绝重放与未授权重复访问。
 - 实例尚未完成安装时，切勿将 8080 端口暴露到不受信任的网络。
 
 ## 本地开发
@@ -75,7 +74,6 @@ Debug 构建会跳过内嵌前端的生产打包。若需在 Debug 模式构建�
 | `SONDE_CONFIG_PATH` | 覆盖生成的配置文件位置 | `$SONDE_DATA_DIR/sonde.json` |
 | `SONDE_PEPPER_PATH` | 覆盖生成的密码 Pepper 文件位置 | `$SONDE_DATA_DIR/sonde.password-pepper` |
 | `SONDE_DATABASE_URL` | 覆盖数据库连接字符串 | 未设置 |
-| `SONDE_SETUP_TOKEN` | 初始化向导所需的一次性令牌，至少 16 个字符 | 未设置（每次启动生成随机令牌并打印到日志） |
 | `SONDE_MASTER_KEY` | 64 位十六进制主密钥，用于加密存储的机密（当前为 TOTP 共享密钥） | 未设置（生成为 `$SONDE_DATA_DIR/sonde.master-key`） |
 | `SONDE_TRUSTED_PROXIES` | 受信反向代理 IP，逗号分隔；仅这些 peer 可提供客户端 IP 与浏览器侧 `Forwarded` / `X-Forwarded-Host` / `X-Forwarded-Proto` 元数据 | 未设置（不信任任何代理） |
 | `SONDE_ALLOW_INSECURE_COOKIES` | 当 `SONDE_BIND` 非回环地址时，关闭强制 `Secure` 会话 Cookie | 未设置（关闭） |

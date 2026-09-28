@@ -5,13 +5,13 @@ from playwright.sync_api import sync_playwright
 
 
 BASE_URL = os.environ.get("SONDE_E2E_URL", "http://127.0.0.1:8091").rstrip("/")
-SETUP_TOKEN = os.environ.get("SONDE_E2E_SETUP_TOKEN", "")
+SETUP_CODE = os.environ.get("SONDE_E2E_SETUP_CODE", "")
 ADMIN_EMAIL = "owner@sonde.test"
 ADMIN_USERNAME = "Sonde Admin"
 ADMIN_PASSWORD = "Orbit-lantern-27-river"
 
-if not SETUP_TOKEN:
-    raise RuntimeError("SONDE_E2E_SETUP_TOKEN is required")
+if not SETUP_CODE:
+    raise RuntimeError("SONDE_E2E_SETUP_CODE is required")
 
 OUTPUT = Path("target/e2e-artifacts")
 OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -40,7 +40,7 @@ with sync_playwright() as playwright:
     page.get_by_role("heading", name="Welcome to Sonde Setup", level=1).wait_for()
     page.screenshot(path=OUTPUT / "01-setup.png", full_page=True)
 
-    page.get_by_label("Setup Token").fill(SETUP_TOKEN)
+    page.get_by_label("Setup Verification Code").fill(SETUP_CODE)
     page.get_by_label("Administrator Email").fill(ADMIN_EMAIL)
     page.get_by_label("Administrator Username").fill(ADMIN_USERNAME)
     page.get_by_label("Administrator Password").fill(ADMIN_PASSWORD)

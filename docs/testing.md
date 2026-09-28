@@ -80,13 +80,13 @@ CI builds the final multi-stage Docker image, validates `docker-compose.yml`, st
 
 The Python browser dependency is pinned in `tests/requirements-e2e.txt`.
 
-For a manual run, start Sonde on port 8091 with a known setup token, then run:
+For a manual run, start Sonde on port 8091 and copy the setup verification code from its startup logs, then run:
 
 ```bash
 python3 -m pip install -r tests/requirements-e2e.txt
 python3 -m playwright install chromium
 SONDE_E2E_URL=http://127.0.0.1:8091 \
-SONDE_E2E_SETUP_TOKEN=replace-with-test-token \
+SONDE_E2E_SETUP_CODE=XXXX-XXXX \
 python3 tests/e2e_smoke.py
 ```
 

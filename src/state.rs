@@ -59,7 +59,7 @@ pub struct AppState {
     pub runtime: RuntimeConfig,
     installed: RwLock<Option<Arc<InstalledState>>>,
     pub setup_lock: Mutex<()>,
-    setup_token: RwLock<Option<String>>,
+    setup_code: RwLock<Option<String>>,
     pub live_updates: broadcast::Sender<LiveUpdate>,
     ingest_gate: Arc<Semaphore>,
     analytics_gate: Arc<Semaphore>,
@@ -73,24 +73,37 @@ impl AppState {
             crate::bootstrap::spawn_background_workers(installed);
         }
 
-        let (setup_token, setup_token_generated) = match runtime.setup_token.clone() {
-            Some(token) => (Some(token), false),
-            None => (Some(crate::auth::random_token(32)), true),
-        };
-        if setup_token_generated {
-            warn!(
-                "no SONDE_SETUP_TOKEN configured; a one-time setup token was generated and is \
-                 required by /api/v1/setup/*: {}",
-                setup_token.as_deref().unwrap_or_default()
+        let setup_code = if installed.is_none() {
+            let code = crate::auth::random_setup_code();
+            eprintln!(
+                "\n\
+                ╔════════════════════════════════════════════════════════════════════════════╗\n\
+                ║                   ⚡ SONDE INITIAL SETUP VERIFICATION CODE ⚡              ║\n\
+                ╠════════════════════════════════════════════════════════════════════════════╣\n\
+                ║                                                                            ║\n\
+                ║   Verification Code:  {:<50}   ║\n\
+                ║                                                                            ║\n\
+                ║   Open the Sonde setup page in your browser and enter this code to         ║\n\
+                ║   complete initial administrator and storage configuration.                ║\n\
+                ║   This code will be permanently invalidated once setup is completed.       ║\n\
+                ╚════════════════════════════════════════════════════════════════════════════╝\n",
+                code
             );
-        }
+            warn!(
+                "one-time setup verification code generated for initial commissioning: {}",
+                code
+            );
+            Some(code)
+        } else {
+            None
+        };
 
         let (live_updates, _) = broadcast::channel(256);
         Ok(Self {
             runtime,
             installed: RwLock::new(installed),
             setup_lock: Mutex::new(()),
-            setup_token: RwLock::new(setup_token),
+            setup_code: RwLock::new(setup_code),
             live_updates,
             ingest_gate: Arc::new(Semaphore::new(MAX_IN_FLIGHT_INGEST_REQUESTS)),
             analytics_gate: Arc::new(Semaphore::new(MAX_IN_FLIGHT_ANALYTICS_QUERIES)),
@@ -98,28 +111,39 @@ impl AppState {
         })
     }
 
-    /// Verifies the one-time setup token presented on a pre-installation endpoint.
+    /// Verifies the one-time setup verification code presented on a pre-installation endpoint.
     ///
-    /// `/api/v1/setup/*` runs before any account exists, so this token is the only identity
+    /// `/api/v1/setup/*` runs before any account exists, so this code is the only identity
     /// available; without it an attacker who reaches the port first could complete the setup
     /// wizard and take over the instance.
-    pub async fn verify_setup_token(&self, presented: Option<&str>) -> Result<(), AppError> {
-        let Some(expected) = self.setup_token.read().await.clone() else {
-            return Err(AppError::Forbidden);
+    ///
+    /// Once the instance is installed or the code consumed, all setup verification fails with
+    /// `NotFound` so that setup endpoints are completely closed to potential probes.
+    pub async fn verify_setup_code(&self, presented: Option<&str>) -> Result<(), AppError> {
+        if self.is_installed().await {
+            return Err(AppError::NotFound);
+        }
+        let Some(expected) = self.setup_code.read().await.clone() else {
+            return Err(AppError::NotFound);
         };
         let Some(presented) = presented else {
             return Err(AppError::Unauthorized);
         };
-        if crate::auth::constant_time_eq(presented, &expected) {
+        if crate::auth::constant_time_eq_setup_code(presented, &expected) {
             Ok(())
         } else {
             Err(AppError::Unauthorized)
         }
     }
 
-    /// Retires the setup token once the wizard completed, so it cannot be replayed.
-    pub async fn consume_setup_token(&self) {
-        *self.setup_token.write().await = None;
+    /// Retires the setup verification code once the wizard completed, so it cannot be replayed.
+    pub async fn consume_setup_code(&self) {
+        *self.setup_code.write().await = None;
+    }
+
+    #[doc(hidden)]
+    pub async fn setup_code_for_test(&self) -> Option<String> {
+        self.setup_code.read().await.clone()
     }
 
     /// Throttles the unauthenticated setup wizard endpoints, which are reachable before any

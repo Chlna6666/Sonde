@@ -19,7 +19,7 @@ export function SetupPage({ onComplete }: { onComplete: () => void }) {
     try {
       await api("/api/v1/setup/complete", {
         method: "POST",
-        headers: { "x-sonde-setup-token": String(form.get("setupToken") ?? "").trim() },
+        headers: { "x-sonde-setup-code": String(form.get("setupCode") ?? "").trim() },
         body: JSON.stringify({
           databaseType,
           databaseUrl: databaseType === "sqlite" ? null : form.get("databaseUrl"),
@@ -54,7 +54,7 @@ export function SetupPage({ onComplete }: { onComplete: () => void }) {
       <div className="auth-preferences"><ThemeSelect compact /><LocaleSelect compact /></div>
       <form onSubmit={(event) => void submit(event)} aria-describedby={error ? "setup-error" : undefined}>
         <div className="form-heading"><span>01 — 03</span><h2>{t("setup.title")}</h2></div>
-        <label className="field"><span>{t("setup.token")}</span><div className="input-wrap"><input name="setupToken" type="password" autoComplete="off" spellCheck={false} required /></div><small>{t("setup.tokenHint")}</small></label>
+        <label className="field"><span>{t("setup.token")}</span><div className="input-wrap"><input name="setupCode" type="text" placeholder={t("setup.tokenPlaceholder")} autoComplete="off" spellCheck={false} style={{ textTransform: "uppercase", letterSpacing: "0.08em", fontFamily: "monospace" }} required /></div><small>{t("setup.tokenHint")}</small></label>
         <fieldset><legend>{t("setup.engine")}</legend><div className="segmented-control">{(["sqlite", "postgresql", "mysql"] as DatabaseType[]).map((type) => <button type="button" aria-pressed={databaseType === type} key={type} onClick={() => setDatabaseType(type)}>{type}</button>)}</div></fieldset>
         {databaseType === "sqlite" ? <p className="managed-database"><Database aria-hidden="true" />{t("setup.sqliteManaged")}</p> : <Field label={t("setup.database")} name="databaseUrl" defaultValue={databaseUrl} key={databaseType} autoComplete="url" />}
         <div className="two-columns"><Field label={t("setup.email")} name="email" type="email" autoComplete="email" /><Field label={t("setup.username")} name="username" autoComplete="username" /></div>

@@ -122,11 +122,80 @@ pub fn constant_time_eq(left: &str, right: &str) -> bool {
         == 0
 }
 
+/// Unambiguous Crockford-style alphanumeric character set (excluding 0, O, 1, I).
+const SETUP_CODE_ALPHABET: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+
+/// Generates a human-friendly one-time setup code (e.g. `8F4K-9W2M`).
+///
+/// 8 characters from Crockford Base32 gives 40 bits of entropy (over 1 trillion possibilities),
+/// mathematically immune to brute-force under pre-installation rate limiting while being
+/// easy to read and type on physical consoles or mobile screens.
+#[must_use]
+pub fn random_setup_code() -> String {
+    let bytes = random_bytes(8);
+    let mut code = String::with_capacity(9);
+    for (i, b) in bytes.into_iter().enumerate() {
+        if i == 4 {
+            code.push('-');
+        }
+        let idx = (b as usize) % SETUP_CODE_ALPHABET.len();
+        code.push(SETUP_CODE_ALPHABET[idx] as char);
+    }
+    code
+}
+
+/// Constant-time comparison for setup verification codes.
+///
+/// Supports exact match as well as case-insensitive, hyphen-insensitive match for
+/// human-entered setup verification codes.
+#[must_use]
+pub fn constant_time_eq_setup_code(presented: &str, expected: &str) -> bool {
+    if constant_time_eq(presented, expected) {
+        return true;
+    }
+    let norm_p: String = presented
+        .chars()
+        .filter(|c| *c != '-' && !c.is_whitespace())
+        .flat_map(char::to_uppercase)
+        .collect();
+    let norm_e: String = expected
+        .chars()
+        .filter(|c| *c != '-' && !c.is_whitespace())
+        .flat_map(char::to_uppercase)
+        .collect();
+    if norm_p.is_empty() || norm_e.is_empty() {
+        return false;
+    }
+    constant_time_eq(&norm_p, &norm_e)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        constant_time_eq, hash_password, validate_identity, validate_password, verify_password,
+        constant_time_eq, constant_time_eq_setup_code, hash_password, random_setup_code,
+        validate_identity, validate_password, verify_password,
     };
+
+    #[test]
+    fn setup_code_generation_and_matching() {
+        let code = random_setup_code();
+        assert_eq!(code.len(), 9);
+        assert_eq!(&code[4..5], "-");
+        // Exact match
+        assert!(constant_time_eq_setup_code(&code, &code));
+        // Lowercase match
+        assert!(constant_time_eq_setup_code(&code.to_lowercase(), &code));
+        // Stripped hyphen match
+        let stripped = code.replace('-', "");
+        assert!(constant_time_eq_setup_code(&stripped, &code));
+        // Lowercase without hyphen
+        assert!(constant_time_eq_setup_code(&stripped.to_lowercase(), &code));
+        // With spaces
+        let spaced = format!("{} {}", &code[..4], &code[5..]);
+        assert!(constant_time_eq_setup_code(&spaced, &code));
+        // Incorrect code rejected
+        assert!(!constant_time_eq_setup_code("WRONGCOD", &code));
+    }
 
     #[test]
     fn constant_time_eq_requires_exact_match() {

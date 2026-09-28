@@ -18,6 +18,8 @@ pub struct SystemSettingsResponse {
     pub locale: String,
     pub secure_cookie: bool,
     pub server_time: i64,
+    pub version: &'static str,
+    pub database_backend: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -50,6 +52,15 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     );
 }
 
+fn format_database_backend(backend: sea_orm::DbBackend) -> &'static str {
+    match backend {
+        sea_orm::DbBackend::Sqlite => "SQLite (WAL)",
+        sea_orm::DbBackend::Postgres => "PostgreSQL",
+        sea_orm::DbBackend::MySql => "MySQL",
+        _ => "Custom",
+    }
+}
+
 async fn get_system_settings(
     state: web::Data<Arc<AppState>>,
     req: HttpRequest,
@@ -58,11 +69,14 @@ async fn get_system_settings(
     let user = authentication::authenticate(&installed, &req).await?;
     user.require("settings.manage", None)?;
     let now = chrono::Utc::now().timestamp_millis();
+    let database_backend = format_database_backend(installed.database.get_database_backend());
     Ok(HttpResponse::Ok().json(SystemSettingsResponse {
         timezone: installed.config.timezone.clone(),
         locale: installed.config.locale.clone(),
         secure_cookie: installed.config.secure_cookie,
         server_time: now,
+        version: crate::VERSION,
+        database_backend,
     }))
 }
 
@@ -94,11 +108,14 @@ async fn update_system_settings(
         .await?;
 
     let now = chrono::Utc::now().timestamp_millis();
+    let database_backend = format_database_backend(installed.database.get_database_backend());
     Ok(HttpResponse::Ok().json(SystemSettingsResponse {
         timezone: updated.timezone,
         locale: updated.locale,
         secure_cookie: updated.secure_cookie,
         server_time: now,
+        version: crate::VERSION,
+        database_backend,
     }))
 }
 
