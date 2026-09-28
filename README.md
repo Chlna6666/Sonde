@@ -77,6 +77,8 @@ Debug builds skip the embedded production frontend bundle. Set `SONDE_BUILD_WEB=
 | `SONDE_LOG_DIR` | Rolling log files directory (`sonde.YYYY-MM-DD.log`) | `$SONDE_DATA_DIR/logs` |
 | `SONDE_LOG_RETENTION_DAYS` | Daily log file retention window in days | `14` |
 | `SONDE_AUDIT_LOG_RETENTION_DAYS` | Database audit log retention window in days | `180` |
+| `SONDE_DOMAIN` | Primary domain (e.g. `sonde.example.com`) used for same-origin validation behind reverse proxies/HTTPS and secure cookie enforcement | unset |
+| `SONDE_ALLOWED_HOSTS` | Comma-separated list of allowed HTTP Host headers | `localhost,127.0.0.1,::1` (automatically includes `SONDE_DOMAIN` if set) |
 | `SONDE_MASTER_KEY` | 64-hex-character key encrypting stored secrets (currently TOTP shared secrets) | unset (generated as `$SONDE_DATA_DIR/sonde.master-key`) |
 | `SONDE_TRUSTED_PROXIES` | Comma-separated reverse-proxy IPs trusted for client IP and browser-facing `Forwarded` / `X-Forwarded-Host` / `X-Forwarded-Proto` metadata | unset (no proxy trusted) |
 | `SONDE_ALLOW_INSECURE_COOKIES` | Opts out of forced `Secure` session cookies when `SONDE_BIND` is not loopback | unset (disabled) |

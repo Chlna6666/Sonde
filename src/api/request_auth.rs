@@ -32,6 +32,8 @@ pub(crate) fn reject_cross_site_origin(
     request: &HttpRequest,
     trusted_proxies: &[IpAddr],
     fallback_scheme: &str,
+    domain: Option<&str>,
+    allowed_hosts: &[String],
 ) -> Result<(), AppError> {
     let Some(origin) = request
         .headers()
@@ -41,9 +43,16 @@ pub(crate) fn reject_cross_site_origin(
         return Ok(());
     };
 
-    origin_matches_request(request, origin, trusted_proxies, fallback_scheme)
-        .then_some(())
-        .ok_or(AppError::Forbidden)
+    origin_matches_request(
+        request,
+        origin,
+        trusted_proxies,
+        fallback_scheme,
+        domain,
+        allowed_hosts,
+    )
+    .then_some(())
+    .ok_or(AppError::Forbidden)
 }
 
 /// Matches a serialized browser origin against the public origin of this request.
@@ -56,6 +65,8 @@ pub(crate) fn origin_matches_request(
     origin: &str,
     trusted_proxies: &[IpAddr],
     fallback_scheme: &str,
+    domain: Option<&str>,
+    allowed_hosts: &[String],
 ) -> bool {
     let Ok(origin) = Url::parse(origin.trim()) else {
         return false;
@@ -68,6 +79,27 @@ pub(crate) fn origin_matches_request(
         || origin.fragment().is_some()
     {
         return false;
+    }
+
+    let origin_host = origin.host_str().unwrap_or_default();
+
+    // 1. Direct domain match: when SONDE_DOMAIN is configured (e.g. "sonde.chlna6666.com"),
+    // and the browser origin's host matches this domain:
+    if let Some(domain) = domain
+        && origin_host.eq_ignore_ascii_case(domain)
+    {
+        let authority_matches = request
+            .headers()
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|h| {
+                let h_name = h.split(':').next().unwrap_or(h).trim();
+                h_name.eq_ignore_ascii_case(domain)
+                    || allowed_hosts.iter().any(|a| a.eq_ignore_ascii_case(h_name))
+            });
+        if authority_matches {
+            return true;
+        }
     }
 
     let peer_is_trusted = request
@@ -245,24 +277,24 @@ mod tests {
             .insert_header(("host", "sonde.example.com"))
             .insert_header(("origin", "http://sonde.example.com"))
             .to_http_request();
-        assert!(reject_cross_site_origin(&same_origin, &[], "http").is_ok());
+        assert!(reject_cross_site_origin(&same_origin, &[], "http", None, &[]).is_ok());
 
         let cross_site = TestRequest::default()
             .insert_header(("host", "sonde.example.com"))
             .insert_header(("origin", "https://attacker.example"))
             .to_http_request();
-        assert!(reject_cross_site_origin(&cross_site, &[], "http").is_err());
+        assert!(reject_cross_site_origin(&cross_site, &[], "http", None, &[]).is_err());
 
         let opaque_origin = TestRequest::default()
             .insert_header(("host", "sonde.example.com"))
             .insert_header(("origin", "null"))
             .to_http_request();
-        assert!(reject_cross_site_origin(&opaque_origin, &[], "http").is_err());
+        assert!(reject_cross_site_origin(&opaque_origin, &[], "http", None, &[]).is_err());
 
         let absent_origin = TestRequest::default()
             .insert_header(("host", "sonde.example.com"))
             .to_http_request();
-        assert!(reject_cross_site_origin(&absent_origin, &[], "http").is_ok());
+        assert!(reject_cross_site_origin(&absent_origin, &[], "http", None, &[]).is_ok());
     }
 
     #[test]
@@ -275,7 +307,7 @@ mod tests {
             .insert_header(("x-forwarded-proto", "https"))
             .insert_header(("origin", "https://sonde.example.com"))
             .to_http_request();
-        assert!(reject_cross_site_origin(&rewritten, &[edge], "http").is_ok());
+        assert!(reject_cross_site_origin(&rewritten, &[edge], "http", None, &[]).is_ok());
     }
 
     #[test]
@@ -289,7 +321,7 @@ mod tests {
             .insert_header(("x-forwarded-proto", "https"))
             .insert_header(("origin", "https://sonde.example.com"))
             .to_http_request();
-        assert!(reject_cross_site_origin(&chained, &[edge], "http").is_ok());
+        assert!(reject_cross_site_origin(&chained, &[edge], "http", None, &[]).is_ok());
 
         let explicit_port = TestRequest::default()
             .peer_addr(SocketAddr::new(edge, 43123))
@@ -298,7 +330,7 @@ mod tests {
             .insert_header(("x-forwarded-proto", "https"))
             .insert_header(("origin", "https://sonde.example.com"))
             .to_http_request();
-        assert!(reject_cross_site_origin(&explicit_port, &[edge], "http").is_ok());
+        assert!(reject_cross_site_origin(&explicit_port, &[edge], "http", None, &[]).is_ok());
 
         let later_hop = TestRequest::default()
             .peer_addr(SocketAddr::new(edge, 43123))
@@ -307,7 +339,7 @@ mod tests {
             .insert_header(("x-forwarded-proto", "https"))
             .insert_header(("origin", "https://attacker.example"))
             .to_http_request();
-        assert!(reject_cross_site_origin(&later_hop, &[edge], "http").is_err());
+        assert!(reject_cross_site_origin(&later_hop, &[edge], "http", None, &[]).is_err());
     }
 
     #[test]
@@ -316,7 +348,41 @@ mod tests {
             .insert_header(("host", "sonde.example.com"))
             .insert_header(("origin", "https://sonde.example.com"))
             .to_http_request();
-        assert!(reject_cross_site_origin(&request, &[], "http").is_err());
+        assert!(reject_cross_site_origin(&request, &[], "http", None, &[]).is_err());
+    }
+
+    #[test]
+    fn domain_binding_accepts_browser_origin_behind_reverse_proxy() {
+        let request = TestRequest::default()
+            .insert_header(("host", "sonde.chlna6666.com"))
+            .insert_header(("origin", "https://sonde.chlna6666.com"))
+            .to_http_request();
+        // Even if fallback_scheme is http and proxy IP is untrusted, configured domain passes
+        assert!(
+            reject_cross_site_origin(
+                &request,
+                &[],
+                "http",
+                Some("sonde.chlna6666.com"),
+                &["sonde.chlna6666.com".into()]
+            )
+            .is_ok()
+        );
+
+        let attacker = TestRequest::default()
+            .insert_header(("host", "sonde.chlna6666.com"))
+            .insert_header(("origin", "https://evil.example"))
+            .to_http_request();
+        assert!(
+            reject_cross_site_origin(
+                &attacker,
+                &[],
+                "http",
+                Some("sonde.chlna6666.com"),
+                &["sonde.chlna6666.com".into()]
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -333,7 +399,9 @@ mod tests {
             &request,
             "https://attacker.example",
             &[],
-            "http"
+            "http",
+            None,
+            &[],
         ));
     }
 

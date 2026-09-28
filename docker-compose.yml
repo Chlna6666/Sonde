@@ -21,6 +21,8 @@ services:
     environment:
       - SONDE_BIND=0.0.0.0:8080
       - SONDE_DATA_DIR=/app/data
+      # Set your public domain when hosting behind reverse proxy/HTTPS (e.g. sonde.example.com)
+      # - SONDE_DOMAIN=${SONDE_DOMAIN:-}
       - SONDE_ALLOW_INSECURE_COOKIES=${SONDE_ALLOW_INSECURE_COOKIES:-1}
       - RUST_LOG=sonde=info,actix_web=info
     volumes:

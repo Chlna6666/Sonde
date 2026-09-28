@@ -29,6 +29,8 @@ pub struct RuntimeConfig {
     pub log_dir: PathBuf,
     pub log_retention_days: u32,
     pub audit_log_retention_days: u32,
+    pub domain: Option<String>,
+    pub allowed_hosts: Vec<String>,
     pub database_url_override: Option<String>,
     pub password_pepper: PasswordPepper,
     pub trusted_proxies: Vec<IpAddr>,
@@ -84,13 +86,23 @@ impl RuntimeConfig {
             .and_then(|val| val.parse::<u32>().ok())
             .unwrap_or(180);
 
+        let bind = env::var("SONDE_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into());
+        let domain = parse_domain(env::var("SONDE_DOMAIN").ok().as_deref());
+        let allowed_hosts = parse_allowed_hosts(
+            env::var("SONDE_ALLOWED_HOSTS").ok().as_deref(),
+            domain.as_deref(),
+            &bind,
+        );
+
         Ok(Self {
-            bind: env::var("SONDE_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into()),
+            bind,
             config_path,
             data_dir,
             log_dir,
             log_retention_days,
             audit_log_retention_days,
+            domain,
+            allowed_hosts,
             database_url_override: env::var("SONDE_DATABASE_URL").ok(),
             password_pepper,
             trusted_proxies: parse_trusted_proxies(
@@ -115,7 +127,11 @@ impl RuntimeConfig {
     /// opt-out for plain-HTTP deployments that cannot be moved behind TLS.
     #[must_use]
     pub fn requires_secure_cookies(&self) -> bool {
-        !self.bind_is_loopback() && !self.allow_insecure_cookies
+        let is_external_domain = self
+            .domain
+            .as_deref()
+            .is_some_and(|d| !matches!(d, "localhost" | "127.0.0.1" | "::1"));
+        (!self.bind_is_loopback() || is_external_domain) && !self.allow_insecure_cookies
     }
 }
 
@@ -275,6 +291,81 @@ fn parse_trusted_proxies(raw: Option<&str>) -> io::Result<Vec<IpAddr>> {
             })
         })
         .collect()
+}
+
+fn parse_domain(raw: Option<&str>) -> Option<String> {
+    let raw = raw?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Some(host) = url::Url::parse(raw)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+    {
+        return Some(host);
+    }
+    let host = raw
+        .strip_prefix("https://")
+        .or_else(|| raw.strip_prefix("http://"))
+        .unwrap_or(raw)
+        .split('/')
+        .next()
+        .unwrap_or(raw)
+        .split(':')
+        .next()
+        .unwrap_or(raw)
+        .trim();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_ascii_lowercase())
+    }
+}
+
+fn parse_allowed_hosts(raw: Option<&str>, domain: Option<&str>, bind: &str) -> Vec<String> {
+    let mut hosts = Vec::new();
+    if let Some(raw) = raw.filter(|v| !v.trim().is_empty()) {
+        for item in raw.split(',') {
+            let item = item.trim();
+            if !item.is_empty() {
+                let host = item
+                    .split('/')
+                    .next()
+                    .unwrap_or(item)
+                    .split(':')
+                    .next()
+                    .unwrap_or(item)
+                    .trim()
+                    .to_ascii_lowercase();
+                if !host.is_empty() && !hosts.contains(&host) {
+                    hosts.push(host);
+                }
+            }
+        }
+    } else {
+        hosts.push("localhost".into());
+        hosts.push("127.0.0.1".into());
+        hosts.push("::1".into());
+    }
+
+    if let Some(domain) = domain {
+        let domain_lower = domain.to_ascii_lowercase();
+        if !hosts.contains(&domain_lower) {
+            hosts.push(domain_lower);
+        }
+    }
+
+    let bind_host = bind
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !bind_host.is_empty() && bind_host != "0.0.0.0" && !hosts.contains(&bind_host) {
+        hosts.push(bind_host);
+    }
+
+    hosts
 }
 
 #[cfg(unix)]

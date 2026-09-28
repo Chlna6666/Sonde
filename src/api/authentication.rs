@@ -129,6 +129,8 @@ async fn login(
         &request,
         &state.runtime.trusted_proxies,
         fallback_scheme,
+        state.runtime.domain.as_deref(),
+        &state.runtime.allowed_hosts,
     )?;
     let source = login_source(&request, &state.runtime.trusted_proxies);
     let identifier = body.identifier()?;
@@ -203,6 +205,8 @@ async fn verify_2fa(
         &request,
         &state.runtime.trusted_proxies,
         fallback_scheme,
+        state.runtime.domain.as_deref(),
+        &state.runtime.allowed_hosts,
     )?;
     let source = login_source(&request, &state.runtime.trusted_proxies);
     let outcome =

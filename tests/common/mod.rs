@@ -67,6 +67,8 @@ pub async fn installed_http() -> HttpFixture {
     let log_dir = data_dir.join("logs");
     let runtime = RuntimeConfig {
         bind: "127.0.0.1:8080".into(),
+        domain: None,
+        allowed_hosts: vec!["localhost".into(), "127.0.0.1".into(), "::1".into()],
         data_dir,
         config_path,
         log_dir,

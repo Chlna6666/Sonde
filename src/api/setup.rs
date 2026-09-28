@@ -159,6 +159,8 @@ fn require_same_origin(
         origin,
         &state.runtime.trusted_proxies,
         fallback_scheme,
+        state.runtime.domain.as_deref(),
+        &state.runtime.allowed_hosts,
     )
     .then_some(())
     .ok_or(AppError::Forbidden)
