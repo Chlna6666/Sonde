@@ -578,7 +578,7 @@ export function SettingsPage() {
             <h2 style={{ margin: 0, fontSize: "1.05rem" }}>{t("settings.serverInfo")}</h2>
           </div>
           <div className="flex flex-col gap-2 text-xs">
-            <div className="flex justify-between py-1 border-b border-border-soft"><span className="text-muted">{t("settings.version")}</span><strong>v0.1.0-release</strong></div>
+            <div className="flex justify-between py-1 border-b border-border-soft"><span className="text-muted">{t("settings.version")}</span><strong>v0.1.1-release</strong></div>
             <div className="flex justify-between py-1 border-b border-border-soft"><span className="text-muted">{t("settings.runtimeMode")}</span><code className="text-signal">Production (WAL)</code></div>
             <div className="flex justify-between py-1 border-b border-border-soft">
               <span className="text-muted">{t("settings.security")}</span>
