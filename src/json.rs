@@ -107,7 +107,7 @@ mod tests {
         let batch: Batch<EventInput> =
             from_slice(br#"{"items":[{"name":"app_startup","attributes":{"k":1}}]}"#).unwrap();
         assert_eq!(batch.items.len(), 1);
-        assert_eq!(batch.items[0].name, "app_startup");
+        assert_eq!(&*batch.items[0].name, "app_startup");
         assert!(!batch.items[0].attributes.is_empty());
     }
 

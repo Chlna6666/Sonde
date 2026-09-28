@@ -419,10 +419,25 @@ pub async fn events(
     let (accepted, rejected) = validate_with(&mut items, |item| normalize_live_event(scope, item));
     let mut valid = select_valid(items, &rejected);
     let observation = event_observation(&valid);
+    let mut last_raw_id: Option<Box<str>> = None;
+    let mut last_hashed: Option<Box<str>> = None;
     for item in &mut valid {
-        item.anonymous_id = item.anonymous_id.take().map(|id| {
-            device_identity::scoped_hash_parts(&scope.application_id, &scope.environment_id, &id)
-        });
+        if let Some(id) = item.anonymous_id.take() {
+            let hashed = match (&last_raw_id, &last_hashed) {
+                (Some(raw), Some(cached)) if raw.as_ref() == id.as_ref() => cached.clone(),
+                _ => {
+                    let h = device_identity::scoped_hash_parts_boxed(
+                        &scope.application_id,
+                        &scope.environment_id,
+                        &id,
+                    );
+                    last_raw_id = Some(id);
+                    last_hashed = Some(h.clone());
+                    h
+                }
+            };
+            item.anonymous_id = Some(hashed);
+        }
     }
     let storage_scope = scope.storage_scope();
     installed
@@ -783,7 +798,7 @@ fn normalize_live_event(scope: &IngestScope, item: &mut EventInput) -> Result<()
         item.session_id.as_deref(),
         item.anonymous_id.as_deref(),
     )?;
-    item.anonymous_id = Some(scope.device_id.clone());
+    item.anonymous_id = Some(scope.device_id.clone().into());
     Ok(())
 }
 
@@ -793,7 +808,7 @@ fn normalize_live_error(scope: &IngestScope, item: &mut ErrorInput) -> Result<()
         item.session_id.as_deref(),
         item.anonymous_id.as_deref(),
     )?;
-    item.anonymous_id = Some(scope.device_id.clone());
+    item.anonymous_id = Some(scope.device_id.clone().into());
     Ok(())
 }
 

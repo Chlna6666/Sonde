@@ -60,7 +60,7 @@ async fn evaluator_persists_delivery_and_worker_retries_without_process_state() 
             application_id: application_id.clone(),
             environment_id,
         },
-        &[EventInput {
+        [EventInput {
             name: "application.start".into(),
             timestamp: Some(chrono::Utc::now().timestamp_millis()),
             anonymous_id: None,

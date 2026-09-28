@@ -18,15 +18,15 @@ use super::{
 struct ErrorGroupBatch {
     id: String,
     fingerprint: String,
-    name: String,
-    message_sample: String,
+    name: Box<str>,
+    message_sample: Box<str>,
     severity: &'static str,
     first_seen: i64,
     last_seen: i64,
     occurrences: i64,
-    last_app_version: Option<String>,
-    last_launcher_version: Option<String>,
-    last_os: Option<String>,
+    last_app_version: Option<Box<str>>,
+    last_launcher_version: Option<Box<str>>,
+    last_os: Option<Box<str>>,
 }
 
 pub async fn insert_error_index(
@@ -88,11 +88,11 @@ pub async fn insert_error_index(
             Value::from(scope.environment_id.clone()),
             Value::from(timestamp),
             Value::from(anonymous_id),
-            Value::from(error.session_id.clone()),
-            Value::from(error.app_version.clone()),
-            Value::from(error.launcher_version.clone()),
-            Value::from(error.os.clone()),
-            Value::from(error.stack_trace.clone()),
+            Value::from(error.session_id.as_deref()),
+            Value::from(error.app_version.as_deref()),
+            Value::from(error.launcher_version.as_deref()),
+            Value::from(error.os.as_deref()),
+            Value::from(error.stack_trace.as_deref()),
             Value::from(handled),
             Value::from(error.attributes.as_str().to_owned()),
             Value::from(received_at),
@@ -123,15 +123,15 @@ pub async fn insert_error_index(
                 Value::from(scope.application_id.clone()),
                 Value::from(scope.environment_id.clone()),
                 Value::from(group.fingerprint.clone()),
-                Value::from(group.name.clone()),
-                Value::from(group.message_sample.clone()),
+                Value::from(group.name.as_ref()),
+                Value::from(group.message_sample.as_ref()),
                 Value::from(group.severity),
                 Value::from(group.first_seen),
                 Value::from(group.last_seen),
                 Value::from(0_i64),
-                Value::from(group.last_app_version.clone()),
-                Value::from(group.last_launcher_version.clone()),
-                Value::from(group.last_os.clone()),
+                Value::from(group.last_app_version.as_deref()),
+                Value::from(group.last_launcher_version.as_deref()),
+                Value::from(group.last_os.as_deref()),
                 Value::from(received_at),
             ]
         })
@@ -167,17 +167,17 @@ pub async fn insert_error_index(
                     [group.last_seen, group.last_seen],
                 ),
             )
-            .value(Alias::new("message_sample"), group.message_sample.clone())
+            .value(Alias::new("message_sample"), group.message_sample.as_ref())
             .value(Alias::new("severity"), group.severity)
             .value(
                 Alias::new("last_app_version"),
-                group.last_app_version.clone(),
+                group.last_app_version.as_deref(),
             )
             .value(
                 Alias::new("last_launcher_version"),
-                group.last_launcher_version.clone(),
+                group.last_launcher_version.as_deref(),
             )
-            .value(Alias::new("last_os"), group.last_os.clone())
+            .value(Alias::new("last_os"), group.last_os.as_deref())
             .value(Alias::new("updated_at"), received_at)
             .and_where(Expr::col(Alias::new("id")).eq(&group.id))
             .to_owned();

@@ -34,7 +34,7 @@ async fn rollup_tracks_committed_ingest_and_dirty_raw_fallback() {
         .format("%Y-%m-%d")
         .to_string();
 
-    telemetry::insert_events(&database, &scope, &[event(timestamp, "evt-1")])
+    telemetry::insert_events(&database, &scope, [event(timestamp, "evt-1")])
         .await
         .unwrap();
     rollups::seed_historical_dirty_days_once(&database)
@@ -62,10 +62,10 @@ async fn rollup_tracks_committed_ingest_and_dirty_raw_fallback() {
     assert_eq!(initial[0].events, 1);
     assert_eq!(initial[0].users, 1);
 
-    telemetry::insert_events(&database, &scope, &[event(timestamp + 1, "evt-2")])
+    telemetry::insert_events(&database, &scope, [event(timestamp + 1, "evt-2")])
         .await
         .unwrap();
-    telemetry::insert_events(&database, &scope, &[event(timestamp + 2, "evt-3")])
+    telemetry::insert_events(&database, &scope, [event(timestamp + 2, "evt-3")])
         .await
         .unwrap();
 

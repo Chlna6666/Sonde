@@ -113,8 +113,8 @@ fn telemetry_validation(criterion: &mut Criterion) {
             sum: Some(40.0),
             min: Some(2.0),
             max: Some(20.0),
-            explicit_bounds: vec![5.0, 10.0],
-            bucket_counts: vec![1, 2, 1],
+            explicit_bounds: vec![5.0, 10.0].into(),
+            bucket_counts: vec![1, 2, 1].into(),
         }),
         unit: Some("ms".into()),
         timestamp: None,
@@ -147,7 +147,7 @@ fn event_batch_json(count: usize, with_attributes: bool) -> Vec<u8> {
                 os: Some("windows".into()),
                 system_language: Some("zh-CN".into()),
                 architecture: Some("x86_64".into()),
-                idempotency_key: Some(format!("req-{index}")),
+                idempotency_key: Some(format!("req-{index}").into()),
                 attributes: if with_attributes {
                     Attributes::from_map(AttributeMap::from_iter([
                         ("channel".into(), serde_json::Value::from("stable")),

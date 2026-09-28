@@ -56,7 +56,7 @@ impl IngestWriter {
             event_rx,
             write_gate.clone(),
             |database, scope, items| async move {
-                telemetry::insert_events(&database, &scope, &items)
+                telemetry::insert_events(&database, &scope, items)
                     .await
                     .map(|_| ())
             },
@@ -68,7 +68,7 @@ impl IngestWriter {
             metric_rx,
             write_gate.clone(),
             |database, scope, items| async move {
-                telemetry::insert_metrics(&database, &scope, &items)
+                telemetry::insert_metrics(&database, &scope, items)
                     .await
                     .map(|_| ())
             },
@@ -80,7 +80,7 @@ impl IngestWriter {
             log_rx,
             write_gate.clone(),
             |database, scope, items| async move {
-                telemetry::insert_logs(&database, &scope, &items)
+                telemetry::insert_logs(&database, &scope, items)
                     .await
                     .map(|_| ())
             },

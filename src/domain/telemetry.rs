@@ -12,19 +12,19 @@ const MAX_HISTOGRAM_BOUNDS: usize = 256;
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventInput {
-    pub name: String,
+    pub name: Box<str>,
     pub timestamp: Option<i64>,
-    pub anonymous_id: Option<String>,
-    pub session_id: Option<String>,
-    pub app_version: Option<String>,
-    pub launcher_version: Option<String>,
-    pub os: Option<String>,
+    pub anonymous_id: Option<Box<str>>,
+    pub session_id: Option<Box<str>>,
+    pub app_version: Option<Box<str>>,
+    pub launcher_version: Option<Box<str>>,
+    pub os: Option<Box<str>>,
     #[serde(default)]
-    pub system_language: Option<String>,
+    pub system_language: Option<Box<str>>,
     #[serde(default)]
-    pub architecture: Option<String>,
+    pub architecture: Option<Box<str>>,
     /// Stable client-generated key used to make event retries idempotent within one app/environment.
-    pub idempotency_key: Option<String>,
+    pub idempotency_key: Option<Box<str>>,
     #[serde(default)]
     pub attributes: Attributes,
 }
@@ -32,7 +32,7 @@ pub struct EventInput {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetricInput {
-    pub name: String,
+    pub name: Box<str>,
     pub metric_type: MetricType,
     /// Scalar value for counters/gauges and the legacy one-observation histogram representation.
     /// Aggregated histograms use `histogram` and may omit this field.
@@ -40,7 +40,7 @@ pub struct MetricInput {
     pub value: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub histogram: Option<HistogramInput>,
-    pub unit: Option<String>,
+    pub unit: Option<Box<str>>,
     pub timestamp: Option<i64>,
     #[serde(default)]
     pub attributes: Attributes,
@@ -54,9 +54,9 @@ pub struct HistogramInput {
     pub min: Option<f64>,
     pub max: Option<f64>,
     #[serde(default)]
-    pub explicit_bounds: Vec<f64>,
+    pub explicit_bounds: Box<[f64]>,
     #[serde(default)]
-    pub bucket_counts: Vec<u64>,
+    pub bucket_counts: Box<[u64]>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -111,9 +111,9 @@ impl MetricInput {
                 sum: Some(value),
                 min: Some(value),
                 max: Some(value),
-                explicit_bounds: Vec::new(),
+                explicit_bounds: Box::new([]),
                 // An explicit histogram with no finite bounds still has one +Inf bucket.
-                bucket_counts: vec![1],
+                bucket_counts: Box::new([1]),
             })
         })
     }
@@ -123,10 +123,10 @@ impl MetricInput {
 #[serde(rename_all = "camelCase")]
 pub struct LogInput {
     pub level: LogLevel,
-    pub message: String,
-    pub logger: Option<String>,
-    pub trace_id: Option<String>,
-    pub span_id: Option<String>,
+    pub message: Box<str>,
+    pub logger: Option<Box<str>>,
+    pub trace_id: Option<Box<str>>,
+    pub span_id: Option<Box<str>>,
     pub timestamp: Option<i64>,
     #[serde(default)]
     pub attributes: Attributes,
@@ -195,21 +195,21 @@ impl ErrorSeverity {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorInput {
-    pub name: String,
-    pub message: String,
-    pub stack_trace: Option<String>,
+    pub name: Box<str>,
+    pub message: Box<str>,
+    pub stack_trace: Option<Box<str>>,
     pub severity: Option<ErrorSeverity>,
     pub handled: Option<bool>,
     pub timestamp: Option<i64>,
-    pub anonymous_id: Option<String>,
-    pub session_id: Option<String>,
-    pub app_version: Option<String>,
-    pub launcher_version: Option<String>,
-    pub os: Option<String>,
+    pub anonymous_id: Option<Box<str>>,
+    pub session_id: Option<Box<str>>,
+    pub app_version: Option<Box<str>>,
+    pub launcher_version: Option<Box<str>>,
+    pub os: Option<Box<str>>,
     #[serde(default)]
-    pub system_language: Option<String>,
+    pub system_language: Option<Box<str>>,
     #[serde(default)]
-    pub architecture: Option<String>,
+    pub architecture: Option<Box<str>>,
     #[serde(default)]
     pub attributes: Attributes,
 }
@@ -472,8 +472,8 @@ mod tests {
                 sum: Some(40.0),
                 min: Some(2.0),
                 max: Some(20.0),
-                explicit_bounds: vec![5.0, 10.0],
-                bucket_counts: vec![1, 2, 1],
+                explicit_bounds: vec![5.0, 10.0].into(),
+                bucket_counts: vec![1, 2, 1].into(),
             }),
             unit: Some("ms".into()),
             timestamp: None,
@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn oversized_idempotency_key_is_rejected() {
         let mut event = event("application.start");
-        event.idempotency_key = Some("x".repeat(129));
+        event.idempotency_key = Some("x".repeat(129).into());
         assert!(event.validate().is_err());
     }
 
@@ -528,7 +528,7 @@ mod tests {
         assert_eq!(metric.compatibility_value(), 10.0);
 
         let mut invalid = histogram();
-        invalid.histogram.as_mut().unwrap().bucket_counts = vec![1, 1, 1];
+        invalid.histogram.as_mut().unwrap().bucket_counts = vec![1, 1, 1].into();
         assert!(invalid.validate().is_err());
     }
 
@@ -537,7 +537,7 @@ mod tests {
         let mut invalid = histogram();
         let histogram = invalid.histogram.as_mut().unwrap();
         histogram.count = 10_000_001;
-        histogram.bucket_counts = vec![10_000_001, 0, 0];
+        histogram.bucket_counts = vec![10_000_001, 0, 0].into();
         assert!(invalid.validate().is_err());
     }
 
@@ -552,8 +552,8 @@ mod tests {
                 sum: Some(3.0),
                 min: Some(1.0),
                 max: Some(2.0),
-                explicit_bounds: Vec::new(),
-                bucket_counts: Vec::new(),
+                explicit_bounds: Box::new([]),
+                bucket_counts: Box::new([]),
             }),
             unit: Some("ms".into()),
             timestamp: None,
@@ -588,6 +588,6 @@ mod tests {
         assert_eq!(histogram.min, Some(12.5));
         assert_eq!(histogram.max, Some(12.5));
         assert!(histogram.explicit_bounds.is_empty());
-        assert_eq!(histogram.bucket_counts, vec![1]);
+        assert_eq!(&*histogram.bucket_counts, &[1]);
     }
 }

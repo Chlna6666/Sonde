@@ -19,8 +19,8 @@ fn aggregate_histogram(timestamp: i64) -> MetricInput {
             sum: Some(63.0),
             min: Some(1.0),
             max: Some(25.0),
-            explicit_bounds: vec![5.0, 10.0, 20.0],
-            bucket_counts: vec![1, 2, 2, 1],
+            explicit_bounds: vec![5.0, 10.0, 20.0].into(),
+            bucket_counts: vec![1, 2, 2, 1].into(),
         }),
         unit: Some("ms".into()),
         timestamp: Some(timestamp),
@@ -71,7 +71,7 @@ fn metric_json_keeps_legacy_scalar_shape_and_accepts_aggregate_histograms() {
     .unwrap();
     assert!(aggregate.value.is_none());
     assert!(aggregate.validate().is_ok());
-    assert_eq!(aggregate.histogram.unwrap().bucket_counts, vec![1, 2, 1]);
+    assert_eq!(&*aggregate.histogram.unwrap().bucket_counts, &[1, 2, 1][..]);
 }
 
 #[tokio::test]
@@ -92,7 +92,7 @@ async fn histogram_population_survives_storage_and_explorer_projection() {
     telemetry::insert_metrics(
         &database,
         &scope,
-        &[
+        [
             aggregate_histogram(timestamp),
             legacy_histogram(timestamp + 1),
         ],

@@ -14,7 +14,7 @@ fn event(timestamp: i64, key: &str, user: &str) -> EventInput {
         name: "application.start".into(),
         timestamp: Some(timestamp),
         anonymous_id: Some(user.into()),
-        session_id: Some(format!("session-{key}")),
+        session_id: Some(format!("session-{key}").into()),
         app_version: Some("1.0.0".into()),
         launcher_version: Some("1.0.0".into()),
         os: Some("test".into()),
@@ -65,7 +65,7 @@ async fn user_rollup_merges_clean_days_dirty_days_and_partial_boundaries() {
     telemetry::insert_events(
         &database,
         &scope,
-        &[
+        [
             event(start + 3_600_000, "evt-1", "user-a"),
             event(start + 2 * 3_600_000, "evt-2", "user-a"),
             event(start + 13 * 3_600_000, "evt-3", "user-b"),
@@ -98,7 +98,7 @@ async fn user_rollup_merges_clean_days_dirty_days_and_partial_boundaries() {
     telemetry::insert_events(
         &database,
         &scope,
-        &[event(start + 15 * 3_600_000, "evt-4", "user-c")],
+        [event(start + 15 * 3_600_000, "evt-4", "user-c")],
     )
     .await
     .unwrap();
@@ -136,7 +136,7 @@ async fn user_rollup_merges_clean_days_dirty_days_and_partial_boundaries() {
     telemetry::insert_events(
         &database,
         &scope,
-        &[
+        [
             event(next_day + 3_600_000, "evt-5", "user-b"),
             event(next_day + 2 * 3_600_000, "evt-6", "user-d"),
         ],
@@ -183,11 +183,12 @@ async fn user_rollup_chunks_large_daily_unique_sets_without_losing_users() {
             )
         })
         .collect::<Vec<_>>();
+    let events_len = events.len();
     assert_eq!(
-        telemetry::insert_events(&database, &scope, &events)
+        telemetry::insert_events(&database, &scope, events)
             .await
             .unwrap(),
-        events.len()
+        events_len
     );
     assert_eq!(
         user_rollup::seed_historical_user_dirty_days_once(&database)
@@ -248,7 +249,7 @@ async fn user_growth_projection_deduplicates_across_days_and_months() {
     telemetry::insert_events(
         &database,
         &scope,
-        &[
+        [
             event(august_31 + 1_000, "growth-1", "user-a"),
             event(august_31 + 2_000, "growth-2", "user-b"),
             event(september_1 + 1_000, "growth-3", "user-b"),

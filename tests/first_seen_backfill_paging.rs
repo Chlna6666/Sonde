@@ -13,12 +13,12 @@ fn event(timestamp: i64, index: usize) -> EventInput {
     EventInput {
         name: "application.start".into(),
         timestamp: Some(timestamp),
-        anonymous_id: Some(format!("user-{index}")),
-        session_id: Some(format!("session-{index}")),
+        anonymous_id: Some(format!("user-{index}").into()),
+        session_id: Some(format!("session-{index}").into()),
         app_version: Some("1.0.0".into()),
         launcher_version: Some("1.0.0".into()),
         os: Some("test".into()),
-        idempotency_key: Some(format!("event-{index}")),
+        idempotency_key: Some(format!("event-{index}").into()),
         attributes: Attributes::new(),
         ..Default::default()
     }
@@ -59,7 +59,7 @@ async fn first_seen_seed_is_keyset_paged_instead_of_materializing_all_scope_days
     let events = (0..600_usize)
         .map(|index| event(start + index as i64 * 86_400_000 + 1_000, index))
         .collect::<Vec<_>>();
-    telemetry::insert_events(&database, &scope, &events)
+    telemetry::insert_events(&database, &scope, events)
         .await
         .unwrap();
 

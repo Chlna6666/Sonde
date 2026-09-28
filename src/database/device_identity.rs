@@ -11,13 +11,34 @@ pub fn scoped_hash(scope: &TelemetryScope, value: &str) -> String {
     scoped_hash_parts(&scope.application_id, &scope.environment_id, value)
 }
 
-pub fn scoped_hash_parts(application_id: &str, environment_id: &str, value: &str) -> String {
+#[inline]
+pub fn scoped_hash_digest(application_id: &str, environment_id: &str, value: &str) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
     hasher.update(application_id.as_bytes());
     hasher.update(b":");
     hasher.update(environment_id.as_bytes());
-    hex::encode(hasher.finalize())
+    hasher.finalize().into()
+}
+
+pub fn scoped_hash_parts_boxed(
+    application_id: &str,
+    environment_id: &str,
+    value: &str,
+) -> Box<str> {
+    let digest = scoped_hash_digest(application_id, environment_id, value);
+    let mut buf = [0u8; 64];
+    if hex::encode_to_slice(digest, &mut buf).is_err() {
+        return hex::encode(digest).into_boxed_str();
+    }
+    match std::str::from_utf8(&buf) {
+        Ok(s) => s.into(),
+        Err(_) => hex::encode(digest).into_boxed_str(),
+    }
+}
+
+pub fn scoped_hash_parts(application_id: &str, environment_id: &str, value: &str) -> String {
+    scoped_hash_parts_boxed(application_id, environment_id, value).into_string()
 }
 
 #[cfg(test)]

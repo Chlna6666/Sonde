@@ -22,8 +22,9 @@ pub struct TelemetryScope {
 pub async fn insert_events(
     database: &DatabaseConnection,
     scope: &TelemetryScope,
-    events: &[EventInput],
+    events: impl IntoIterator<Item = EventInput>,
 ) -> Result<usize, DbErr> {
+    let mut events: Vec<EventInput> = events.into_iter().collect();
     if events.is_empty() {
         return Ok(0);
     }
@@ -47,13 +48,17 @@ pub async fn insert_events(
     ];
     let mut inserted = 0_u64;
     let mut day_cache = UtcDayCache::default();
+    let dirty_timestamps: Vec<i64> = events
+        .iter()
+        .map(|event| event.timestamp.unwrap_or(received_at))
+        .collect();
 
-    for chunk in events.chunks(100) {
+    for chunk in events.chunks_mut(100) {
         let mut rows = Vec::with_capacity(chunk.len());
         for event in chunk {
             let timestamp = event.timestamp.unwrap_or(received_at);
             let day = day_cache.get_day(timestamp);
-            let attributes_json = encode_attributes(&event.attributes)?;
+            let attributes_json = encode_attributes(&event.attributes);
             let dedupe_key = event
                 .idempotency_key
                 .as_deref()
@@ -62,14 +67,18 @@ pub async fn insert_events(
                 Uuid::now_v7().to_string().into(),
                 scope.application_id.clone().into(),
                 scope.environment_id.clone().into(),
-                event.name.clone().into(),
+                std::mem::take(&mut event.name).into_string().into(),
                 timestamp.into(),
                 day.into(),
-                event.anonymous_id.clone().into(),
-                event.session_id.clone().into(),
-                event.app_version.clone().into(),
-                event.launcher_version.clone().into(),
-                event.os.clone().into(),
+                event.anonymous_id.take().map(|s| s.into_string()).into(),
+                event.session_id.take().map(|s| s.into_string()).into(),
+                event.app_version.take().map(|s| s.into_string()).into(),
+                event
+                    .launcher_version
+                    .take()
+                    .map(|s| s.into_string())
+                    .into(),
+                event.os.take().map(|s| s.into_string()).into(),
                 attributes_json.into(),
                 dedupe_key.into(),
                 received_at.into(),
@@ -90,9 +99,7 @@ pub async fn insert_events(
             &transaction,
             scope,
             rollups::DIRTY_SOURCE_EVENT,
-            events
-                .iter()
-                .map(|event| event.timestamp.unwrap_or(received_at)),
+            dirty_timestamps,
         )
         .await?;
     }
@@ -103,8 +110,9 @@ pub async fn insert_events(
 pub async fn insert_metrics(
     database: &DatabaseConnection,
     scope: &TelemetryScope,
-    metrics: &[MetricInput],
+    metrics: impl IntoIterator<Item = MetricInput>,
 ) -> Result<usize, DbErr> {
+    let mut metrics: Vec<MetricInput> = metrics.into_iter().collect();
     if metrics.is_empty() {
         return Ok(0);
     }
@@ -128,11 +136,16 @@ pub async fn insert_metrics(
         "histogram_bounds",
         "histogram_bucket_counts",
     ];
+    let dirty_timestamps: Vec<i64> = metrics
+        .iter()
+        .map(|metric| metric.timestamp.unwrap_or(received_at))
+        .collect();
 
-    for chunk in metrics.chunks(100) {
+    let count = metrics.len();
+    for chunk in metrics.chunks_mut(100) {
         let mut rows = Vec::with_capacity(chunk.len());
         for metric in chunk {
-            let attributes_json = encode_attributes(&metric.attributes)?;
+            let attributes_json = encode_attributes(&metric.attributes);
             let (
                 histogram_count,
                 histogram_sum,
@@ -145,10 +158,10 @@ pub async fn insert_metrics(
                 Uuid::now_v7().to_string().into(),
                 scope.application_id.clone().into(),
                 scope.environment_id.clone().into(),
-                metric.name.clone().into(),
+                std::mem::take(&mut metric.name).into_string().into(),
                 metric.metric_type.as_str().into(),
                 metric.compatibility_value().into(),
-                metric.unit.clone().into(),
+                metric.unit.take().map(|s| s.into_string()).into(),
                 metric.timestamp.unwrap_or(received_at).into(),
                 attributes_json.into(),
                 received_at.into(),
@@ -166,13 +179,11 @@ pub async fn insert_metrics(
         &transaction,
         scope,
         rollups::DIRTY_SOURCE_METRIC,
-        metrics
-            .iter()
-            .map(|metric| metric.timestamp.unwrap_or(received_at)),
+        dirty_timestamps,
     )
     .await?;
     transaction.commit().await?;
-    Ok(metrics.len())
+    Ok(count)
 }
 
 type EncodedHistogram = (
@@ -223,8 +234,9 @@ fn encode_histogram_parts(histogram: &HistogramInput) -> Result<EncodedHistogram
 pub async fn insert_logs(
     database: &DatabaseConnection,
     scope: &TelemetryScope,
-    logs: &[LogInput],
+    logs: impl IntoIterator<Item = LogInput>,
 ) -> Result<usize, DbErr> {
+    let mut logs: Vec<LogInput> = logs.into_iter().collect();
     if logs.is_empty() {
         return Ok(0);
     }
@@ -243,20 +255,30 @@ pub async fn insert_logs(
         "attributes",
         "received_at",
     ];
+    let dirty_timestamps: Vec<i64> = logs
+        .iter()
+        .map(|log| log.timestamp.unwrap_or(received_at))
+        .collect();
+    let error_timestamps: Vec<i64> = logs
+        .iter()
+        .filter(|log| matches!(&log.level, LogLevel::Error | LogLevel::Fatal))
+        .map(|log| log.timestamp.unwrap_or(received_at))
+        .collect();
 
-    for chunk in logs.chunks(100) {
+    let count = logs.len();
+    for chunk in logs.chunks_mut(100) {
         let mut rows = Vec::with_capacity(chunk.len());
         for log in chunk {
-            let attributes_json = encode_attributes(&log.attributes)?;
+            let attributes_json = encode_attributes(&log.attributes);
             rows.push(vec![
                 Uuid::now_v7().to_string().into(),
                 scope.application_id.clone().into(),
                 scope.environment_id.clone().into(),
                 log.level.as_str().into(),
-                log.message.clone().into(),
-                log.logger.clone().into(),
-                log.trace_id.clone().into(),
-                log.span_id.clone().into(),
+                std::mem::take(&mut log.message).into_string().into(),
+                log.logger.take().map(|s| s.into_string()).into(),
+                log.trace_id.take().map(|s| s.into_string()).into(),
+                log.span_id.take().map(|s| s.into_string()).into(),
                 log.timestamp.unwrap_or(received_at).into(),
                 attributes_json.into(),
                 received_at.into(),
@@ -268,20 +290,18 @@ pub async fn insert_logs(
         &transaction,
         scope,
         rollups::DIRTY_SOURCE_LOG,
-        logs.iter().map(|log| log.timestamp.unwrap_or(received_at)),
+        dirty_timestamps,
     )
     .await?;
     rollups::mark_dirty_timestamps_for_source(
         &transaction,
         scope,
         log_error_rollup::DIRTY_SOURCE_LOG_ERROR,
-        logs.iter()
-            .filter(|log| matches!(&log.level, LogLevel::Error | LogLevel::Fatal))
-            .map(|log| log.timestamp.unwrap_or(received_at)),
+        error_timestamps,
     )
     .await?;
     transaction.commit().await?;
-    Ok(logs.len())
+    Ok(count)
 }
 
 pub async fn insert_migrated_event(
@@ -314,15 +334,15 @@ pub async fn insert_migrated_event(
         Uuid::now_v7().to_string().into(),
         scope.application_id.clone().into(),
         scope.environment_id.clone().into(),
-        event.name.clone().into(),
+        event.name.as_ref().into(),
         timestamp.into(),
         day.into(),
-        event.anonymous_id.clone().into(),
-        event.session_id.clone().into(),
-        event.app_version.clone().into(),
-        event.launcher_version.clone().into(),
-        event.os.clone().into(),
-        encode_attributes(&event.attributes)?.into(),
+        event.anonymous_id.as_deref().into(),
+        event.session_id.as_deref().into(),
+        event.app_version.as_deref().into(),
+        event.launcher_version.as_deref().into(),
+        event.os.as_deref().into(),
+        encode_attributes(&event.attributes).into(),
         dedupe_key.into(),
         received_at.into(),
     ]];
@@ -343,8 +363,8 @@ pub async fn insert_migrated_event(
     Ok(inserted)
 }
 
-fn encode_attributes(attributes: &Attributes) -> Result<String, DbErr> {
-    Ok(attributes.as_str().to_owned())
+fn encode_attributes(attributes: &Attributes) -> &str {
+    attributes.as_str()
 }
 
 fn utc_day(timestamp: i64) -> String {
@@ -419,14 +439,14 @@ pub async fn insert_errors(
             let mut attrs = err.attributes.decoded().map_err(json_error)?;
             attrs.insert(
                 "error_name".into(),
-                serde_json::Value::String(err.name.clone()),
+                serde_json::Value::from(err.name.as_ref()),
             );
             attrs.insert(
                 "error_message".into(),
-                serde_json::Value::String(err.message.clone()),
+                serde_json::Value::from(err.message.as_ref()),
             );
             if let Some(ref st) = err.stack_trace {
-                attrs.insert("stack_trace".into(), serde_json::Value::String(st.clone()));
+                attrs.insert("stack_trace".into(), serde_json::Value::from(st.as_ref()));
             }
             if let Some(h) = err.handled {
                 attrs.insert("handled".into(), serde_json::Value::Bool(h));
@@ -438,19 +458,19 @@ pub async fn insert_errors(
                 );
             }
             if let Some(ref s) = err.session_id {
-                attrs.insert("session_id".into(), serde_json::Value::String(s.clone()));
+                attrs.insert("session_id".into(), serde_json::Value::from(s.as_ref()));
             }
             if let Some(ref v) = err.app_version {
-                attrs.insert("app_version".into(), serde_json::Value::String(v.clone()));
+                attrs.insert("app_version".into(), serde_json::Value::from(v.as_ref()));
             }
             if let Some(ref v) = err.launcher_version {
                 attrs.insert(
                     "launcher_version".into(),
-                    serde_json::Value::String(v.clone()),
+                    serde_json::Value::from(v.as_ref()),
                 );
             }
             if let Some(ref os) = err.os {
-                attrs.insert("os".into(), serde_json::Value::String(os.clone()));
+                attrs.insert("os".into(), serde_json::Value::from(os.as_ref()));
             }
             let attributes_json = serde_json::to_string(&attrs).map_err(json_error)?;
             let level_str = match err.severity {

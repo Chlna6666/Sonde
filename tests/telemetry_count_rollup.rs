@@ -73,14 +73,14 @@ async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
     telemetry::insert_metrics(
         &database,
         &scope,
-        &[metric(day1 + 1_000, 1.0), metric(day2 + 1_000, 2.0)],
+        [metric(day1 + 1_000, 1.0), metric(day2 + 1_000, 2.0)],
     )
     .await
     .unwrap();
     telemetry::insert_logs(
         &database,
         &scope,
-        &[
+        [
             log(day1 + 2_000, LogLevel::Info, "one"),
             log(day1 + 3_000, LogLevel::Error, "error-one"),
             log(day2 + 2_000, LogLevel::Fatal, "fatal-two"),
@@ -117,13 +117,13 @@ async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
         );
     }
 
-    telemetry::insert_metrics(&database, &scope, &[metric(day2 + 3_000, 3.0)])
+    telemetry::insert_metrics(&database, &scope, [metric(day2 + 3_000, 3.0)])
         .await
         .unwrap();
     telemetry::insert_logs(
         &database,
         &scope,
-        &[log(day2 + 4_000, LogLevel::Error, "error-three")],
+        [log(day2 + 4_000, LogLevel::Error, "error-three")],
     )
     .await
     .unwrap();
@@ -157,7 +157,7 @@ async fn scalar_counts_use_rollups_with_dirty_and_partial_fallbacks() {
     telemetry::insert_logs(
         &database,
         &scope,
-        &[log(day2 + 5_000, LogLevel::Info, "informational")],
+        [log(day2 + 5_000, LogLevel::Info, "informational")],
     )
     .await
     .unwrap();

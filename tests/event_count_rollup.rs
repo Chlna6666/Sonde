@@ -9,8 +9,8 @@ fn event(timestamp: i64, key: &str) -> EventInput {
     EventInput {
         name: "application.start".into(),
         timestamp: Some(timestamp),
-        anonymous_id: Some(format!("user-{key}")),
-        session_id: Some(format!("session-{key}")),
+        anonymous_id: Some(format!("user-{key}").into()),
+        session_id: Some(format!("session-{key}").into()),
         app_version: Some("1.0.0".into()),
         launcher_version: Some("1.0.0".into()),
         os: Some("test".into()),
@@ -84,7 +84,7 @@ async fn event_count_hybrid_matches_exact_windows_and_dirty_fallback() {
     telemetry::insert_events(
         &database,
         &app_a_prod,
-        &[
+        [
             event(day1 + 1_000, "a1"),
             event(day1 + 20_000, "a2"),
             event(day2 + 1_000, "a3"),
@@ -93,13 +93,13 @@ async fn event_count_hybrid_matches_exact_windows_and_dirty_fallback() {
     )
     .await
     .unwrap();
-    telemetry::insert_events(&database, &app_a_beta, &[event(day2 + 2_000, "ab1")])
+    telemetry::insert_events(&database, &app_a_beta, [event(day2 + 2_000, "ab1")])
         .await
         .unwrap();
     telemetry::insert_events(
         &database,
         &app_b_prod,
-        &[event(day1 + 3_000, "b1"), event(day2 + 3_000, "b2")],
+        [event(day1 + 3_000, "b1"), event(day2 + 3_000, "b2")],
     )
     .await
     .unwrap();
@@ -141,7 +141,7 @@ async fn event_count_hybrid_matches_exact_windows_and_dirty_fallback() {
         2
     );
 
-    telemetry::insert_events(&database, &app_a_prod, &[event(day2 + 50_000, "a5")])
+    telemetry::insert_events(&database, &app_a_prod, [event(day2 + 50_000, "a5")])
         .await
         .unwrap();
     assert_eq!(

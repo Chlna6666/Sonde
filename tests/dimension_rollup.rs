@@ -15,8 +15,8 @@ fn event(
     EventInput {
         name: "application.start".into(),
         timestamp: Some(timestamp),
-        anonymous_id: Some(format!("device-{idempotency_key}")),
-        session_id: Some(format!("session-{idempotency_key}")),
+        anonymous_id: Some(format!("device-{idempotency_key}").into()),
+        session_id: Some(format!("session-{idempotency_key}").into()),
         app_version: Some(app_version.into()),
         launcher_version: Some(launcher_version.into()),
         os: Some(os.into()),
@@ -67,7 +67,7 @@ async fn dimension_rollup_uses_clean_rollups_dirty_raw_and_exact_boundary() {
     telemetry::insert_events(
         &database,
         &scope,
-        &[
+        [
             event(
                 start + 3_600_000,
                 "evt-1",
@@ -137,7 +137,7 @@ async fn dimension_rollup_uses_clean_rollups_dirty_raw_and_exact_boundary() {
     telemetry::insert_events(
         &database,
         &scope,
-        &[event(
+        [event(
             start + 15 * 3_600_000,
             "evt-4",
             "3.0.0",

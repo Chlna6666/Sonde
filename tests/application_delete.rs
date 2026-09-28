@@ -17,7 +17,7 @@ fn event(timestamp: i64, key: &str, user: &str) -> EventInput {
         name: "application.start".into(),
         timestamp: Some(timestamp),
         anonymous_id: Some(user.into()),
-        session_id: Some(format!("session-{key}")),
+        session_id: Some(format!("session-{key}").into()),
         app_version: Some("1.0.0".into()),
         launcher_version: Some("1.0.0".into()),
         os: Some("test".into()),
@@ -138,11 +138,11 @@ async fn deleting_application_removes_raw_and_derived_state_without_touching_oth
     telemetry::insert_events(
         &database,
         &delete_scope,
-        &[event(start + 1_000, "delete-1", "shared-user")],
+        [event(start + 1_000, "delete-1", "shared-user")],
     )
     .await
     .unwrap();
-    telemetry::insert_logs(&database, &delete_scope, &[error_log(start + 1_500)])
+    telemetry::insert_logs(&database, &delete_scope, [error_log(start + 1_500)])
         .await
         .unwrap();
     telemetry::insert_events(
@@ -151,7 +151,7 @@ async fn deleting_application_removes_raw_and_derived_state_without_touching_oth
             application_id: keep_app.clone(),
             environment_id: keep_env,
         },
-        &[event(start + 2_000, "keep-1", "shared-user")],
+        [event(start + 2_000, "keep-1", "shared-user")],
     )
     .await
     .unwrap();

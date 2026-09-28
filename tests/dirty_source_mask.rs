@@ -78,7 +78,7 @@ async fn source_mask_merges_without_invalidating_unrelated_rollup_fields() {
         .and_utc()
         .timestamp_millis();
 
-    telemetry::insert_events(&database, &scope, &[event(day_start + 1_000)])
+    telemetry::insert_events(&database, &scope, [event(day_start + 1_000)])
         .await
         .unwrap();
     let event_dirty =
@@ -90,10 +90,10 @@ async fn source_mask_merges_without_invalidating_unrelated_rollup_fields() {
             .unwrap()
     );
 
-    telemetry::insert_metrics(&database, &scope, &[metric(day_start + 2_000)])
+    telemetry::insert_metrics(&database, &scope, [metric(day_start + 2_000)])
         .await
         .unwrap();
-    telemetry::insert_logs(&database, &scope, &[log(day_start + 3_000)])
+    telemetry::insert_logs(&database, &scope, [log(day_start + 3_000)])
         .await
         .unwrap();
 
@@ -149,7 +149,7 @@ async fn historical_event_seeds_or_event_into_existing_metric_dirty_marker() {
         .and_utc()
         .timestamp_millis();
 
-    telemetry::insert_events(&database, &scope, &[event(day_start + 1_000)])
+    telemetry::insert_events(&database, &scope, [event(day_start + 1_000)])
         .await
         .unwrap();
     let initial = environment_dirty(&database, &scope.application_id, &scope.environment_id).await;
@@ -159,7 +159,7 @@ async fn historical_event_seeds_or_event_into_existing_metric_dirty_marker() {
             .unwrap()
     );
 
-    telemetry::insert_metrics(&database, &scope, &[metric(day_start + 2_000)])
+    telemetry::insert_metrics(&database, &scope, [metric(day_start + 2_000)])
         .await
         .unwrap();
     let metric_only =

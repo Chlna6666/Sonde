@@ -98,7 +98,7 @@ async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth
             application_id: source_app_id.clone(),
             environment_id: source_env_id.clone(),
         },
-        &[MetricInput {
+        [MetricInput {
             name: "http.request.duration".into(),
             metric_type: MetricType::Histogram,
             value: None,
@@ -107,8 +107,8 @@ async fn full_backup_archive_round_trip_replaces_state_and_resets_ephemeral_auth
                 sum: Some(63.0),
                 min: Some(1.0),
                 max: Some(25.0),
-                explicit_bounds: vec![5.0, 10.0, 20.0],
-                bucket_counts: vec![1, 2, 2, 1],
+                explicit_bounds: vec![5.0, 10.0, 20.0].into(),
+                bucket_counts: vec![1, 2, 2, 1].into(),
             }),
             unit: Some("ms".into()),
             timestamp: Some(now + 1),

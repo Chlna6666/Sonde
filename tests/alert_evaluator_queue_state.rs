@@ -26,7 +26,7 @@ async fn setup(consecutive_hits: u16) -> (sea_orm::DatabaseConnection, String) {
             application_id: application_id.clone(),
             environment_id,
         },
-        &[EventInput {
+        [EventInput {
             name: "hit".into(),
             timestamp: Some(chrono::Utc::now().timestamp_millis()),
             anonymous_id: None,

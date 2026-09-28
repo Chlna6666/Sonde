@@ -10,7 +10,7 @@ fn event(timestamp: i64, key: &str, user: &str) -> EventInput {
         name: "application.start".into(),
         timestamp: Some(timestamp),
         anonymous_id: Some(user.into()),
-        session_id: Some(format!("session-{key}")),
+        session_id: Some(format!("session-{key}").into()),
         app_version: Some("1.0.0".into()),
         launcher_version: Some("1.0.0".into()),
         os: Some("test".into()),
@@ -79,17 +79,17 @@ async fn first_seen_index_preserves_scope_and_dirty_fallback_semantics() {
     telemetry::insert_events(
         &database,
         &prod,
-        &[
+        [
             event(start + 1_000, "a-1", "user-a"),
             event(start + 2_000, "a-2", "user-b"),
         ],
     )
     .await
     .unwrap();
-    telemetry::insert_events(&database, &beta, &[event(start + 3_000, "a-3", "user-a")])
+    telemetry::insert_events(&database, &beta, [event(start + 3_000, "a-3", "user-a")])
         .await
         .unwrap();
-    telemetry::insert_events(&database, &other, &[event(start + 4_000, "b-1", "user-a")])
+    telemetry::insert_events(&database, &other, [event(start + 4_000, "b-1", "user-a")])
         .await
         .unwrap();
 
@@ -116,7 +116,7 @@ async fn first_seen_index_preserves_scope_and_dirty_fallback_semantics() {
 
     // A new event makes the scope dirty. The index is intentionally stale until the worker runs,
     // but the hybrid query must still return the authoritative raw result immediately.
-    telemetry::insert_events(&database, &prod, &[event(start + 5_000, "a-4", "user-c")])
+    telemetry::insert_events(&database, &prod, [event(start + 5_000, "a-4", "user-c")])
         .await
         .unwrap();
     assert_eq!(
@@ -149,13 +149,9 @@ async fn first_seen_index_moves_earlier_for_out_of_order_events() {
         .and_utc()
         .timestamp_millis();
 
-    telemetry::insert_events(
-        &database,
-        &scope,
-        &[event(start + 10_000, "late", "user-a")],
-    )
-    .await
-    .unwrap();
+    telemetry::insert_events(&database, &scope, [event(start + 10_000, "late", "user-a")])
+        .await
+        .unwrap();
     backfill_all(&database).await;
     assert_eq!(
         first_seen::count_new_users_hybrid(
@@ -173,7 +169,7 @@ async fn first_seen_index_moves_earlier_for_out_of_order_events() {
     telemetry::insert_events(
         &database,
         &scope,
-        &[event(start + 1_000, "older-arrival", "user-a")],
+        [event(start + 1_000, "older-arrival", "user-a")],
     )
     .await
     .unwrap();
@@ -211,7 +207,7 @@ async fn invalidated_first_seen_falls_back_to_raw_until_new_epoch_completes() {
     telemetry::insert_events(
         &database,
         &scope,
-        &[
+        [
             event(start + 1_000, "before-a", "user-a"),
             event(start + 2_000, "before-b", "user-b"),
         ],
@@ -227,7 +223,7 @@ async fn invalidated_first_seen_falls_back_to_raw_until_new_epoch_completes() {
     telemetry::insert_events(
         &database,
         &scope,
-        &[event(start + 3_000, "during-rebuild", "user-c")],
+        [event(start + 3_000, "during-rebuild", "user-c")],
     )
     .await
     .unwrap();

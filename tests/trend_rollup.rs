@@ -10,7 +10,7 @@ fn event(timestamp: i64, key: &str, user: &str) -> EventInput {
         name: "application.start".into(),
         timestamp: Some(timestamp),
         anonymous_id: Some(user.into()),
-        session_id: Some(format!("session-{key}")),
+        session_id: Some(format!("session-{key}").into()),
         app_version: Some("1.0.0".into()),
         launcher_version: Some("1.0.0".into()),
         os: Some("test".into()),
@@ -72,14 +72,14 @@ async fn global_daily_users_are_deduplicated_across_applications() {
     telemetry::insert_events(
         &database,
         &app_a,
-        &[event(day + 1_000, "a-shared", "shared-user")],
+        [event(day + 1_000, "a-shared", "shared-user")],
     )
     .await
     .unwrap();
     telemetry::insert_events(
         &database,
         &app_b,
-        &[event(day + 2_000, "b-shared", "shared-user")],
+        [event(day + 2_000, "b-shared", "shared-user")],
     )
     .await
     .unwrap();
@@ -123,7 +123,7 @@ async fn monthly_trend_unions_users_across_days_and_preserves_partial_start() {
     telemetry::insert_events(
         &database,
         &app_a,
-        &[
+        [
             event(august + 1_000, "a-aug", "shared-user"),
             event(september + 1_000, "a-sep-shared", "shared-user"),
             event(september + 2_000, "a-sep-new", "new-user"),
@@ -134,7 +134,7 @@ async fn monthly_trend_unions_users_across_days_and_preserves_partial_start() {
     telemetry::insert_events(
         &database,
         &app_b,
-        &[event(august + 2_000, "b-aug", "shared-user")],
+        [event(august + 2_000, "b-aug", "shared-user")],
     )
     .await
     .unwrap();

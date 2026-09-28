@@ -19,8 +19,8 @@ fn histogram_metric(timestamp: i64) -> MetricInput {
             sum: Some(63.0),
             min: Some(1.0),
             max: Some(25.0),
-            explicit_bounds: vec![5.0, 10.0, 20.0],
-            bucket_counts: vec![1, 2, 2, 1],
+            explicit_bounds: vec![5.0, 10.0, 20.0].into(),
+            bucket_counts: vec![1, 2, 2, 1].into(),
         }),
         unit: Some("ms".into()),
         timestamp: Some(timestamp),
@@ -43,7 +43,7 @@ async fn single_application_backup_preserves_histogram_population() {
             application_id: application_id.clone(),
             environment_id,
         },
-        &[histogram_metric(timestamp)],
+        [histogram_metric(timestamp)],
     )
     .await
     .unwrap();
@@ -59,8 +59,8 @@ async fn single_application_backup_preserves_histogram_population() {
         .as_ref()
         .unwrap();
     assert_eq!(histogram.count, 6);
-    assert_eq!(histogram.explicit_bounds, vec![5.0, 10.0, 20.0]);
-    assert_eq!(histogram.bucket_counts, vec![1, 2, 2, 1]);
+    assert_eq!(&*histogram.explicit_bounds, &[5.0, 10.0, 20.0][..]);
+    assert_eq!(&*histogram.bucket_counts, &[1, 2, 2, 1][..]);
 
     let target = database::connect("sqlite::memory:").await.unwrap();
     database::migrate(&target).await.unwrap();
