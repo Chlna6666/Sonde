@@ -248,13 +248,13 @@ Evaluating TCP connection scaling and latency under 10, 50, 100, and 200 concurr
 
 | Concurrent Clients | Total Requests | Elapsed | Throughput (RPS) | P50 Latency | P99 Latency | Process WorkingSet |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **10** | 200 | 62.28 ms | **3,211.5 req/s** | 2.05 ms | 16.76 ms | 76.8 MiB |
-| **50** | 1,000 | 351.37 ms | **2,846.0 req/s** | 12.77 ms | 64.58 ms | 78.9 MiB |
-| **100** | 2,000 | 669.65 ms | **2,986.6 req/s** | 25.87 ms | 132.69 ms | 76.4 MiB |
-| **200** | 4,000 | 1,881.18 ms | **2,126.3 req/s** | 51.87 ms | 432.54 ms | 77.8 MiB |
+| **10** | 200 | 82.65 ms | **2,419.9 req/s** | 2.51 ms | 21.74 ms | 77.9 MiB |
+| **50** | 1,000 | 353.89 ms | **2,825.7 req/s** | 12.44 ms | 77.74 ms | 80.5 MiB |
+| **100** | 2,000 | 623.20 ms | **3,209.2 req/s** | 21.86 ms | 157.82 ms | 77.6 MiB |
+| **200** | 4,000 | 1,922.55 ms | **2,080.6 req/s** | 45.69 ms | 537.04 ms | 78.3 MiB |
 
-- Under 100 concurrent clients, throughput remains high at ~2,987 RPS with median latency under 26 ms.
-- Memory WorkingSet stays essentially flat (~76–79 MiB) regardless of concurrent connection scaling, demonstrating zero connection handle leakage.
+- Under 100 concurrent clients, throughput reached **3,209.2 RPS** with median latency reduced to 21.86 ms.
+- Memory WorkingSet stays essentially flat (~77–80 MiB) regardless of concurrent connection scaling, demonstrating zero connection handle leakage.
 
 ### 2. High-Throughput E2E Ingest Pipeline (10,000 Events)
 
@@ -263,22 +263,22 @@ Evaluating end-to-end ingestion across 1,000 HTTP batches (10 items/batch = 10,0
 | Metric | Measured Value | Notes |
 | :--- | :--- | :--- |
 | **Total Ingested Events** | **10,000 items** (1,000 batches) | Full cryptographic HMAC + Nonce + UUIDv7 |
-| **Total Wall Time** | 20.145 s | Single-writer disk SQLite |
-| **Throughput (Items)** | **496.41 items/s** | End-to-end to disk |
-| **Throughput (Batches)** | 49.64 req/s | Batch payload parsing & validation |
-| **Latency Min** | 13.15 ms | Best-case batch commit |
-| **Latency P50 (Median)** | **157.53 ms** | Typical batch commit round-trip |
-| **Latency P75** | 411.96 ms | |
-| **Latency P90** | 836.04 ms | |
-| **Latency P95** | 1,394.37 ms | High writer queue pressure |
-| **Latency P99** | 5,627.03 ms | Tail latency under deep disk sync |
-| **Initial Storage Size** | 2,160.55 KiB | Baseline database with schema |
-| **Final Storage Size** | 13,102.15 KiB | Database + WAL post-ingest |
-| **Storage Cost / Event** | **1,120.4 bytes/event** | Includes raw payload, index, partition map, WAL |
-| **Memory Baseline** | 68.40 MiB | Process WorkingSet prior to load |
-| **Memory Peak under Load**| **86.73 MiB** (+18.33 MiB) | WorkingSet during peak concurrent writes |
-| **Memory Settled (Post-Load)**| **66.81 MiB** (-1.59 MiB) | Full heap reclamation via mimalloc v3 |
-| **Private Bytes Peak** | 71.12 MiB | Unshared committed virtual memory |
+| **Total Wall Time** | 19.923 s | Single-writer disk SQLite |
+| **Throughput (Items)** | **501.92 items/s** | End-to-end to disk (improved via zero-copy Box<str>) |
+| **Throughput (Batches)** | 50.19 req/s | Batch payload parsing & validation |
+| **Latency Min** | 13.34 ms | Best-case batch commit |
+| **Latency P50 (Median)** | **129.32 ms** | 18% improvement in median batch latency (was 157.53 ms) |
+| **Latency P75** | 373.92 ms | Improved tail latency |
+| **Latency P90** | 1,031.45 ms | |
+| **Latency P95** | 1,549.50 ms | High writer queue pressure |
+| **Latency P99** | 5,195.18 ms | Reduced tail latency under deep disk sync |
+| **Initial Storage Size** | 2,184.69 KiB | Baseline database with schema |
+| **Final Storage Size** | 12,857.33 KiB | Database + WAL post-ingest |
+| **Storage Cost / Event** | **1,092.9 bytes/event** | Reduced from 1,120.4 B/event via compact serialization |
+| **Memory Baseline** | 67.76 MiB | Process WorkingSet prior to load |
+| **Memory Peak under Load**| **86.96 MiB** (+19.20 MiB) | WorkingSet during peak concurrent writes |
+| **Memory Settled (Post-Load)**| **66.87 MiB** (-0.89 MiB) | Full heap reclamation via mimalloc v3 & Box<str> |
+| **Private Bytes Peak** | 71.11 MiB | Unshared committed virtual memory |
 
 ### 3. Complex Analytics & Explorer Queries
 
