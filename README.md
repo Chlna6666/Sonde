@@ -74,6 +74,9 @@ Debug builds skip the embedded production frontend bundle. Set `SONDE_BUILD_WEB=
 | `SONDE_CONFIG_PATH` | Overrides the generated configuration file location | `$SONDE_DATA_DIR/sonde.json` |
 | `SONDE_PEPPER_PATH` | Overrides the generated password-pepper file location | `$SONDE_DATA_DIR/sonde.password-pepper` |
 | `SONDE_DATABASE_URL` | Database connection-string override | unset |
+| `SONDE_LOG_DIR` | Rolling log files directory (`sonde.YYYY-MM-DD.log`) | `$SONDE_DATA_DIR/logs` |
+| `SONDE_LOG_RETENTION_DAYS` | Daily log file retention window in days | `14` |
+| `SONDE_AUDIT_LOG_RETENTION_DAYS` | Database audit log retention window in days | `180` |
 | `SONDE_MASTER_KEY` | 64-hex-character key encrypting stored secrets (currently TOTP shared secrets) | unset (generated as `$SONDE_DATA_DIR/sonde.master-key`) |
 | `SONDE_TRUSTED_PROXIES` | Comma-separated reverse-proxy IPs trusted for client IP and browser-facing `Forwarded` / `X-Forwarded-Host` / `X-Forwarded-Proto` metadata | unset (no proxy trusted) |
 | `SONDE_ALLOW_INSECURE_COOKIES` | Opts out of forced `Secure` session cookies when `SONDE_BIND` is not loopback | unset (disabled) |

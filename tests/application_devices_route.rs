@@ -39,15 +39,18 @@ async fn application_devices_and_backup_routes_are_not_shadowed() {
     .unwrap();
 
     let pepper = [42_u8; 32];
+    let log_dir = data_dir.join("logs");
     let runtime = RuntimeConfig {
         bind: "127.0.0.1:8080".into(),
         data_dir,
         config_path,
+        log_dir,
+        log_retention_days: 14,
+        audit_log_retention_days: 180,
         database_url_override: None,
         password_pepper: PasswordPepper::new(pepper),
         trusted_proxies: Vec::new(),
         allow_insecure_cookies: true,
-        setup_token: None,
         master_key: MasterKey::from_bytes([9_u8; 32]),
     };
 

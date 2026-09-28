@@ -74,6 +74,9 @@ Debug 构建会跳过内嵌前端的生产打包。若需在 Debug 模式构建�
 | `SONDE_CONFIG_PATH` | 覆盖生成的配置文件位置 | `$SONDE_DATA_DIR/sonde.json` |
 | `SONDE_PEPPER_PATH` | 覆盖生成的密码 Pepper 文件位置 | `$SONDE_DATA_DIR/sonde.password-pepper` |
 | `SONDE_DATABASE_URL` | 覆盖数据库连接字符串 | 未设置 |
+| `SONDE_LOG_DIR` | 按日滚动日志文件目录（`sonde.YYYY-MM-DD.log`） | `$SONDE_DATA_DIR/logs` |
+| `SONDE_LOG_RETENTION_DAYS` | 日志文件保留天数 | `14` |
+| `SONDE_AUDIT_LOG_RETENTION_DAYS` | 数据库审计日志保留天数 | `180` |
 | `SONDE_MASTER_KEY` | 64 位十六进制主密钥，用于加密存储的机密（当前为 TOTP 共享密钥） | 未设置（生成为 `$SONDE_DATA_DIR/sonde.master-key`） |
 | `SONDE_TRUSTED_PROXIES` | 受信反向代理 IP，逗号分隔；仅这些 peer 可提供客户端 IP 与浏览器侧 `Forwarded` / `X-Forwarded-Host` / `X-Forwarded-Proto` 元数据 | 未设置（不信任任何代理） |
 | `SONDE_ALLOW_INSECURE_COOKIES` | 当 `SONDE_BIND` 非回环地址时，关闭强制 `Secure` 会话 Cookie | 未设置（关闭） |

@@ -14,6 +14,7 @@ pub mod domain;
 pub mod error;
 pub mod ingest_signature;
 pub mod json;
+pub mod logging;
 pub mod secret_cipher;
 pub mod security;
 pub mod services;
@@ -28,13 +29,12 @@ use std::{io, sync::Arc};
 
 use actix_web::{App, HttpServer, middleware, web};
 use tracing::{info, warn};
-use tracing_subscriber::EnvFilter;
 
 use crate::{config::RuntimeConfig, state::AppState};
 
 pub async fn run() -> io::Result<()> {
-    init_tracing();
     let runtime = RuntimeConfig::from_environment()?;
+    logging::init(&runtime.log_dir);
     let state = Arc::new(
         AppState::load(runtime.clone())
             .await
@@ -91,10 +91,4 @@ pub async fn run() -> io::Result<()> {
     .max_connections(25_000)
     .run()
     .await
-}
-
-fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("sonde=info,actix_web=info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
 }

@@ -70,7 +70,7 @@ impl AppState {
     pub async fn load(runtime: RuntimeConfig) -> Result<Self, AppError> {
         let installed = crate::bootstrap::load_installed(&runtime).await?;
         if let Some(installed) = installed.as_deref() {
-            crate::bootstrap::spawn_background_workers(installed);
+            crate::bootstrap::spawn_background_workers(installed, &runtime);
         }
 
         let setup_code = if installed.is_none() {
@@ -212,7 +212,7 @@ impl AppState {
         if guard.is_some() {
             return Err(AppError::AlreadyInitialized);
         }
-        crate::bootstrap::spawn_background_workers(&state);
+        crate::bootstrap::spawn_background_workers(&state, &self.runtime);
         *guard = Some(Arc::new(state));
         Ok(())
     }

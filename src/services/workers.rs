@@ -5,6 +5,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::{
+    config::RuntimeConfig,
     database::{
         alert_delivery, device_activity_backfill, device_risk, first_seen, ingest_bootstrap,
         ingest_nonce,
@@ -32,10 +33,10 @@ const DEVICE_ACTIVITY_BACKFILL_INTERVAL: Duration = Duration::from_secs(10);
 const DEVICE_ACTIVITY_BACKFILL_LEASE_TTL: Duration = Duration::from_secs(60);
 const DEVICE_ACTIVITY_BACKFILL_BATCH: u64 = 128;
 
-pub fn spawn_leased_workers(database: DatabaseConnection) {
+pub fn spawn_leased_workers(database: DatabaseConnection, runtime: RuntimeConfig) {
     spawn_alert_worker(database.clone());
     spawn_alert_delivery_worker(database.clone());
-    spawn_retention_worker(database.clone());
+    spawn_retention_worker(database.clone(), runtime);
     spawn_ingest_security_cleanup_worker(database.clone());
     spawn_first_seen_backfill_worker(database.clone());
     spawn_device_activity_backfill_worker(database);
@@ -97,7 +98,7 @@ fn spawn_alert_delivery_worker(database: DatabaseConnection) {
     });
 }
 
-fn spawn_retention_worker(database: DatabaseConnection) {
+fn spawn_retention_worker(database: DatabaseConnection, runtime: RuntimeConfig) {
     let holder_id = format!("retention:{}", Uuid::now_v7());
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(RETENTION_INTERVAL);
@@ -109,13 +110,14 @@ fn spawn_retention_worker(database: DatabaseConnection) {
                 "retention-sweep",
                 &holder_id,
                 RETENTION_LEASE_TTL,
-                || run_retention_cycle(&database),
+                || run_retention_cycle(&database, &runtime),
             )
             .await
             {
                 Ok(Some(report)) => {
                     info!(
                         apps = report.apps_processed,
+                        audit_logs_pruned = report.audit_logs_deleted,
                         "leased retention sweep completed"
                     );
                 }
@@ -130,8 +132,17 @@ fn spawn_retention_worker(database: DatabaseConnection) {
 
 async fn run_retention_cycle(
     database: &DatabaseConnection,
+    runtime: &RuntimeConfig,
 ) -> Result<retention::RetentionReport, DbErr> {
-    let report = retention::run_retention_sweep(database).await?;
+    let report = retention::run_retention_sweep(database, runtime.audit_log_retention_days).await?;
+
+    if let Ok(pruned_logs) =
+        crate::logging::prune_archived_logs(&runtime.log_dir, runtime.log_retention_days)
+        && pruned_logs > 0
+    {
+        info!(pruned = pruned_logs, "pruned archived log files");
+    }
+
     let now = chrono::Utc::now().timestamp_millis();
     let cutoff = now.saturating_sub(ALERT_DELIVERY_HISTORY_RETENTION_MILLIS);
     let pruned =

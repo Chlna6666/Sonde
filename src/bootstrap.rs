@@ -100,8 +100,8 @@ fn build_installed(
     )?))
 }
 
-pub(crate) fn spawn_background_workers(state: &InstalledState) {
-    crate::services::workers::spawn_leased_workers(state.database.clone());
+pub(crate) fn spawn_background_workers(state: &InstalledState, runtime: &RuntimeConfig) {
+    crate::services::workers::spawn_leased_workers(state.database.clone(), runtime.clone());
     // Rollups use generation-based contention control and are intentionally safe to run on every
     // replica; distributing dirty-day work avoids making the aggregation pipeline leader-bound.
     crate::services::rollups::spawn_rollup_worker(state.database.clone());

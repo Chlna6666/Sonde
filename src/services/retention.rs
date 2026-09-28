@@ -29,9 +29,13 @@ pub struct RetentionReport {
     pub user_rollups_deleted: u64,
     pub log_error_rollups_deleted: u64,
     pub dirty_days_deleted: u64,
+    pub audit_logs_deleted: u64,
 }
 
-pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<RetentionReport, DbErr> {
+pub async fn run_retention_sweep(
+    database: &DatabaseConnection,
+    audit_log_retention_days: u32,
+) -> Result<RetentionReport, DbErr> {
     let select_apps = Query::select()
         .columns(["id", "name", "retention_days"].map(Alias::new))
         .from(Alias::new("applications"))
@@ -200,7 +204,15 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
 
     auth_state::cleanup_expired(database).await?;
 
-    if report.apps_processed > 0 {
+    if audit_log_retention_days > 0 {
+        let audit_cutoff = now - i64::from(audit_log_retention_days) * 86_400_000;
+        let audit_logs_deleted =
+            delete_system_records_in_batches(database, "audit_log", "created_at", audit_cutoff)
+                .await?;
+        report.audit_logs_deleted = audit_logs_deleted;
+    }
+
+    if report.apps_processed > 0 || report.audit_logs_deleted > 0 {
         info!(
             apps = report.apps_processed,
             events_pruned = report.events_deleted,
@@ -217,6 +229,7 @@ pub async fn run_retention_sweep(database: &DatabaseConnection) -> Result<Retent
             user_rollups_pruned = report.user_rollups_deleted,
             log_error_rollups_pruned = report.log_error_rollups_deleted,
             dirty_days_pruned = report.dirty_days_deleted,
+            audit_logs_pruned = report.audit_logs_deleted,
             "periodic data retention sweep summary"
         );
     }
@@ -291,6 +304,47 @@ async fn delete_matching_ids(
             .from(Alias::new(table))
             .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
             .and_where(cutoff_condition.clone())
+            .limit(DELETE_BATCH_SIZE)
+            .to_owned();
+        let rows = database.query_all(&select).await?;
+        if rows.is_empty() {
+            break;
+        }
+
+        let ids = rows
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "id"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let batch_len = ids.len();
+        let delete = Query::delete()
+            .from_table(Alias::new(table))
+            .and_where(Expr::col(Alias::new("id")).is_in(ids))
+            .to_owned();
+        let affected = database.execute(&delete).await?.rows_affected();
+        deleted = deleted.saturating_add(affected);
+
+        if affected == 0 || batch_len < DELETE_BATCH_SIZE as usize {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+
+    Ok(deleted)
+}
+
+async fn delete_system_records_in_batches(
+    database: &DatabaseConnection,
+    table: &str,
+    timestamp_column: &str,
+    cutoff: i64,
+) -> Result<u64, DbErr> {
+    let mut deleted = 0_u64;
+
+    loop {
+        let select = Query::select()
+            .column(Alias::new("id"))
+            .from(Alias::new(table))
+            .and_where(Expr::col(Alias::new(timestamp_column)).lt(cutoff))
             .limit(DELETE_BATCH_SIZE)
             .to_owned();
         let rows = database.query_all(&select).await?;

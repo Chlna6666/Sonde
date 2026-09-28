@@ -26,13 +26,13 @@ pub struct RuntimeConfig {
     pub bind: String,
     pub data_dir: PathBuf,
     pub config_path: PathBuf,
+    pub log_dir: PathBuf,
+    pub log_retention_days: u32,
+    pub audit_log_retention_days: u32,
     pub database_url_override: Option<String>,
     pub password_pepper: PasswordPepper,
     pub trusted_proxies: Vec<IpAddr>,
     pub allow_insecure_cookies: bool,
-    /// Operator-supplied one-time setup token. When absent, a random token is generated at
-    /// startup and logged once, so the pre-installation API is never anonymously usable.
-    pub setup_token: Option<String>,
     /// Master key for AEAD encryption of stored secrets (see `secret_cipher`).
     pub master_key: MasterKey,
 }
@@ -67,32 +67,36 @@ impl RuntimeConfig {
         }
         let password_pepper = load_or_create_pepper(&pepper_path)?;
 
-        let setup_token = match env::var("SONDE_SETUP_TOKEN") {
-            Ok(value) => {
-                let token = value.trim().to_owned();
-                if token.chars().count() < 16 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "SONDE_SETUP_TOKEN must be at least 16 characters",
-                    ));
-                }
-                Some(token)
-            }
-            Err(_) => None,
-        };
         let master_key = load_master_key(&data_dir)?;
+
+        let log_dir = env::var_os("SONDE_LOG_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| data_dir.join("logs"));
+        fs::create_dir_all(&log_dir)?;
+
+        let log_retention_days = env::var("SONDE_LOG_RETENTION_DAYS")
+            .ok()
+            .and_then(|val| val.parse::<u32>().ok())
+            .unwrap_or(14);
+
+        let audit_log_retention_days = env::var("SONDE_AUDIT_LOG_RETENTION_DAYS")
+            .ok()
+            .and_then(|val| val.parse::<u32>().ok())
+            .unwrap_or(180);
 
         Ok(Self {
             bind: env::var("SONDE_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into()),
             config_path,
             data_dir,
+            log_dir,
+            log_retention_days,
+            audit_log_retention_days,
             database_url_override: env::var("SONDE_DATABASE_URL").ok(),
             password_pepper,
             trusted_proxies: parse_trusted_proxies(
                 env::var("SONDE_TRUSTED_PROXIES").ok().as_deref(),
             )?,
             allow_insecure_cookies: env_flag("SONDE_ALLOW_INSECURE_COOKIES"),
-            setup_token,
             master_key,
         })
     }
