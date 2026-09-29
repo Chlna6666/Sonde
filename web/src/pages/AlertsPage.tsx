@@ -266,7 +266,13 @@ export function AlertsPage() {
           <span className="relative z-10 flex items-center gap-2">
             <BellRing size={14} />
             <span>{t("alerts.tabRules")}</span>
-            <span className="px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[10px] bg-[var(--input-bg)] border border-[var(--border-soft)] font-mono">
+            <span
+              className={`px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[10px] font-mono transition-colors ${
+                activeTab === "rules"
+                  ? "bg-[var(--signal-ink)]/15 text-[var(--signal-ink)] border border-[var(--signal-ink)]/20"
+                  : "bg-[var(--input-bg)] text-[var(--muted)] border border-[var(--border-soft)]"
+              }`}
+            >
               {rules.length}
             </span>
           </span>
@@ -287,7 +293,13 @@ export function AlertsPage() {
           <span className="relative z-10 flex items-center gap-2">
             <Radio size={14} />
             <span>{t("alerts.tabChannels")}</span>
-            <span className="px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[10px] bg-[var(--input-bg)] border border-[var(--border-soft)] font-mono">
+            <span
+              className={`px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[10px] font-mono transition-colors ${
+                activeTab === "channels"
+                  ? "bg-[var(--signal-ink)]/15 text-[var(--signal-ink)] border border-[var(--signal-ink)]/20"
+                  : "bg-[var(--input-bg)] text-[var(--muted)] border border-[var(--border-soft)]"
+              }`}
+            >
               {channels.length}
             </span>
           </span>
@@ -308,7 +320,13 @@ export function AlertsPage() {
           <span className="relative z-10 flex items-center gap-2">
             <Send size={14} />
             <span>{t("alerts.tabDeliveries")}</span>
-            <span className="px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[10px] bg-[var(--input-bg)] border border-[var(--border-soft)] font-mono">
+            <span
+              className={`px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[10px] font-mono transition-colors ${
+                activeTab === "deliveries"
+                  ? "bg-[var(--signal-ink)]/15 text-[var(--signal-ink)] border border-[var(--signal-ink)]/20"
+                  : "bg-[var(--input-bg)] text-[var(--muted)] border border-[var(--border-soft)]"
+              }`}
+            >
               {deliveries.length}
             </span>
           </span>

@@ -1,5 +1,23 @@
 import { FormEvent, useEffect, useState } from "react";
-import { ChevronLeft, ChevronRight, Copy, Eye, Search, SlidersHorizontal, X, FileJson, Check, Activity, Radio, ScrollText } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  Eye,
+  Search,
+  SlidersHorizontal,
+  X,
+  FileJson,
+  Check,
+  CheckCircle2,
+  Activity,
+  Radio,
+  ScrollText,
+  Trash2,
+  RotateCcw,
+  AlertTriangle,
+  RefreshCw,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { motion } from "motion/react";
@@ -32,8 +50,22 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
   const [data, setData] = useState<Page | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [successMsg, setSuccessMsg] = useState("");
   const [inspectRecord, setInspectRecord] = useState<RecordValue | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // Selection & Batch Delete
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+  const [confirmDeleteModal, setConfirmDeleteModal] = useState<{ open: boolean; ids: string[]; isSingle?: boolean }>({
+    open: false,
+    ids: [],
+  });
+
+  // Reset Records
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetScope, setResetScope] = useState<"kind" | "all">("kind");
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     void api<Application[]>("/api/v1/admin/applications")
@@ -55,6 +87,7 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
   }, [applicationId]);
 
   useEffect(() => {
+    setSelectedIds(new Set());
     if (applicationId && environmentId) void load();
   }, [kind, applicationId, environmentId, page]);
 
@@ -65,6 +98,7 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
   function changeKind(next: Kind) {
     setKind(next);
     setPage(1);
+    setSelectedIds(new Set());
     setSearchParams({ kind: next, applicationId });
   }
 
@@ -72,6 +106,7 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
     event?.preventDefault();
     setLoading(true);
     setError("");
+    setSelectedIds(new Set());
     const query = new URLSearchParams({
       applicationId,
       environmentId,
@@ -95,6 +130,89 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const currentPageIds = data?.items.map((item) => item.id) ?? [];
+  const isAllSelected = currentPageIds.length > 0 && currentPageIds.every((id) => selectedIds.has(id));
+  const isSomeSelected = currentPageIds.some((id) => selectedIds.has(id)) && !isAllSelected;
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (isAllSelected) {
+        for (const id of currentPageIds) next.delete(id);
+      } else {
+        for (const id of currentPageIds) next.add(id);
+      }
+      return next;
+    });
+  }
+
+  async function executeDelete(ids: string[]) {
+    if (!applicationId || ids.length === 0) return;
+    setDeleting(true);
+    setError("");
+    try {
+      const res = await api<{ deleted: number }>(`/api/v1/admin/explorer/${kind}/delete`, {
+        method: "POST",
+        body: JSON.stringify({
+          applicationId,
+          environmentId: environmentId || undefined,
+          ids,
+        }),
+      });
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
+      setSuccessMsg(t("explorer.deleteSuccess", { count: res.deleted }));
+      setTimeout(() => setSuccessMsg(""), 4000);
+      setConfirmDeleteModal({ open: false, ids: [] });
+      if (inspectRecord && ids.includes(inspectRecord.id)) {
+        setInspectRecord(null);
+      }
+      void load();
+    } catch (cause) {
+      showError(cause);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function executeReset() {
+    if (!applicationId) return;
+    setResetting(true);
+    setError("");
+    try {
+      const targetKind = resetScope === "all" ? "all" : kind;
+      const res = await api<{ deleted: number }>(`/api/v1/admin/explorer/${targetKind}/reset`, {
+        method: "POST",
+        body: JSON.stringify({
+          applicationId,
+          environmentId: environmentId || undefined,
+        }),
+      });
+      setSelectedIds(new Set());
+      setSuccessMsg(t("explorer.resetSuccess", { count: res.deleted }));
+      setTimeout(() => setSuccessMsg(""), 4000);
+      setResetModalOpen(false);
+      setPage(1);
+      void load();
+    } catch (cause) {
+      showError(cause);
+    } finally {
+      setResetting(false);
+    }
+  }
+
   const kinds: { value: Kind; label: string; icon: typeof Activity }[] = [
     { value: "events", label: t("explorer.events"), icon: Activity },
     { value: "metrics", label: t("explorer.metrics"), icon: Radio },
@@ -115,31 +233,44 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
           </p>
         </div>
 
-        <div className="segmented-control self-start sm:self-auto">
-          {kinds.map((item) => {
-            const active = kind === item.value;
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.value}
-                type="button"
-                className={`segmented-control-item flex items-center gap-2 ${active ? "active" : ""}`}
-                onClick={() => changeKind(item.value)}
-              >
-                {active ? (
-                  <motion.div
-                    layoutId="explorer-kind-pill"
-                    transition={{ type: "spring", stiffness: 450, damping: 32 }}
-                    className="segmented-control-pill"
-                  />
-                ) : null}
-                <span className="relative z-10 flex items-center gap-1.5">
-                  <Icon size={14} />
-                  <span>{item.label}</span>
-                </span>
-              </button>
-            );
-          })}
+        <div className="flex items-center gap-2">
+          <div className="segmented-control self-start sm:self-auto">
+            {kinds.map((item) => {
+              const active = kind === item.value;
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.value}
+                  type="button"
+                  className={`segmented-control-item flex items-center gap-2 ${active ? "active" : ""}`}
+                  onClick={() => changeKind(item.value)}
+                >
+                  {active ? (
+                    <motion.div
+                      layoutId="explorer-kind-pill"
+                      transition={{ type: "spring", stiffness: 450, damping: 32 }}
+                      className="segmented-control-pill"
+                    />
+                  ) : null}
+                  <span className="relative z-10 flex items-center gap-1.5">
+                    <Icon size={14} />
+                    <span>{item.label}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setResetModalOpen(true)}
+            icon={<RotateCcw size={14} className="text-[var(--danger)]" />}
+            className="text-[var(--danger)] hover:bg-[var(--danger-subtle)] hover:border-[var(--danger)]/40 text-xs font-semibold"
+            title={t("explorer.reset")}
+          >
+            {t("explorer.reset")}
+          </Button>
         </div>
       </div>
 
@@ -260,20 +391,77 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
         </div>
       ) : null}
 
+      {successMsg ? (
+        <div className="flex items-center gap-2 p-3 mb-4 rounded-xl bg-[var(--signal)]/10 border border-[var(--signal)] text-[var(--signal)] text-xs font-semibold">
+          <CheckCircle2 size={16} />
+          {successMsg}
+        </div>
+      ) : null}
+
+      {/* Batch Action Bar */}
+      {selectedIds.size > 0 ? (
+        <div className="flex items-center justify-between p-3 mb-4 rounded-[var(--radius-lg)] bg-[var(--panel-strong)] border border-[var(--border-highlight)] shadow-sm">
+          <div className="flex items-center gap-2 text-xs font-semibold text-[var(--text)]">
+            <span className="px-2 py-0.5 rounded-[var(--radius-sm)] bg-[var(--signal)] text-[var(--signal-ink)] font-mono font-bold">
+              {selectedIds.size}
+            </span>
+            <span>{t("explorer.selectedCount", { count: selectedIds.size })}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSelectedIds(new Set())}
+            >
+              {t("explorer.clearSelection")}
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => setConfirmDeleteModal({ open: true, ids: Array.from(selectedIds) })}
+              icon={<Trash2 size={14} />}
+            >
+              {t("explorer.batchDelete")}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       {/* Results Table */}
       <section aria-busy={loading}>
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-10 text-center">
+                <input
+                  type="checkbox"
+                  checked={isAllSelected}
+                  ref={(input) => {
+                    if (input) input.indeterminate = isSomeSelected;
+                  }}
+                  onChange={toggleSelectAll}
+                  aria-label="Select all records"
+                  className="w-4 h-4 rounded border-[var(--border)] accent-[var(--signal)] cursor-pointer align-middle"
+                />
+              </TableHead>
               {columns(kind, t).map((column) => (
                 <TableHead key={column}>{column}</TableHead>
               ))}
-              <TableHead className="text-right">{t("common.inspect")}</TableHead>
+              <TableHead className="text-right">{t("common.actions") || t("common.inspect")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody className="font-mono text-[11px]">
             {data?.items.map((record) => (
-              <TableRow key={record.id}>
+              <TableRow key={record.id} className={selectedIds.has(record.id) ? "bg-[var(--signal)]/5" : ""}>
+                <TableCell className="text-center">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(record.id)}
+                    onChange={() => toggleSelect(record.id)}
+                    aria-label={`Select ${record.id}`}
+                    className="w-4 h-4 rounded border-[var(--border)] accent-[var(--signal)] cursor-pointer align-middle"
+                  />
+                </TableCell>
                 <TableCell className="text-[var(--muted)] whitespace-nowrap">
                   {new Date(record.timestamp).toLocaleString()}
                 </TableCell>
@@ -312,21 +500,30 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
                     <TableCell className="text-[var(--muted)]">{String(record.target ?? "-")}</TableCell>
                   </>
                 ) : null}
-                <TableCell className="text-right">
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => setInspectRecord(record)}
-                    icon={<Eye size={14} />}
-                    title="Inspect Payload"
-                  />
+                <TableCell className="text-right whitespace-nowrap">
+                  <div className="inline-flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => setInspectRecord(record)}
+                      icon={<Eye size={14} />}
+                      title={t("explorer.inspectPayload")}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => setConfirmDeleteModal({ open: true, ids: [record.id], isSingle: true })}
+                      icon={<Trash2 size={14} className="text-[var(--danger)]" />}
+                      title={t("explorer.deleteRecord")}
+                    />
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
 
             {data?.items.length === 0 && !loading ? (
               <TableRow>
-                <TableCell colSpan={6} className="py-12 text-center text-xs text-[var(--muted)] font-sans">
+                <TableCell colSpan={columns(kind, t).length + 2} className="py-12 text-center text-xs text-[var(--muted)] font-sans">
                   {t("explorer.empty")}
                 </TableCell>
               </TableRow>
@@ -368,14 +565,25 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
           icon={<FileJson size={18} />}
           size="lg"
           actions={
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => handleCopyJson(inspectRecord)}
-              icon={copied ? <Check size={14} className="text-[var(--signal)]" /> : <Copy size={14} />}
-            >
-              {copied ? t("common.copied") : t("common.copyJson")}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-[var(--danger)] hover:bg-[var(--danger-subtle)] hover:border-[var(--danger)]/30"
+                onClick={() => setConfirmDeleteModal({ open: true, ids: [inspectRecord.id], isSingle: true })}
+                icon={<Trash2 size={14} />}
+              >
+                {t("explorer.deleteRecord")}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => handleCopyJson(inspectRecord)}
+                icon={copied ? <Check size={14} className="text-[var(--signal)]" /> : <Copy size={14} />}
+              >
+                {copied ? t("common.copied") : t("common.copyJson")}
+              </Button>
+            </div>
           }
         >
           {inspectRecord.level ? (
@@ -413,6 +621,120 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
           <pre className="p-4 rounded-[var(--radius-md)] bg-[var(--bg)] border border-[var(--border)] text-xs font-mono text-[var(--text)] overflow-x-auto max-h-[60vh] leading-relaxed">
             {JSON.stringify(inspectRecord, null, 2)}
           </pre>
+        </Modal>
+      ) : null}
+
+      {/* Confirm Delete Modal */}
+      {confirmDeleteModal.open ? (
+        <Modal
+          isOpen={true}
+          onClose={() => setConfirmDeleteModal({ open: false, ids: [] })}
+          title={confirmDeleteModal.isSingle ? t("explorer.deleteRecord") : t("explorer.batchDelete")}
+          icon={<Trash2 size={18} className="text-[var(--danger)]" />}
+          size="sm"
+          actions={
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setConfirmDeleteModal({ open: false, ids: [] })}
+                disabled={deleting}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => void executeDelete(confirmDeleteModal.ids)}
+                disabled={deleting}
+                icon={deleting ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
+              >
+                {deleting ? t("explorer.deleting") : t("common.delete")}
+              </Button>
+            </div>
+          }
+        >
+          <p className="text-sm text-[var(--muted)] leading-relaxed m-0">
+            {confirmDeleteModal.isSingle
+              ? t("explorer.confirmDeleteSingle")
+              : t("explorer.confirmDeleteSelected", { count: confirmDeleteModal.ids.length })}
+          </p>
+        </Modal>
+      ) : null}
+
+      {/* Reset Records Modal */}
+      {resetModalOpen ? (
+        <Modal
+          isOpen={true}
+          onClose={() => setResetModalOpen(false)}
+          title={t("explorer.reset")}
+          icon={<AlertTriangle size={18} className="text-[var(--danger)]" />}
+          size="md"
+          actions={
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setResetModalOpen(false)}
+                disabled={resetting}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => void executeReset()}
+                disabled={resetting}
+                icon={resetting ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
+              >
+                {resetting ? t("explorer.resetting") : t("explorer.confirmResetButton")}
+              </Button>
+            </div>
+          }
+        >
+          <div className="space-y-4">
+            <p className="text-xs text-[var(--muted)] m-0">
+              {t("explorer.resetPrompt")}
+            </p>
+
+            <div className="space-y-2">
+              <label className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--input-bg)] cursor-pointer hover:border-[var(--signal)] transition-colors">
+                <input
+                  type="radio"
+                  name="resetScope"
+                  value="kind"
+                  checked={resetScope === "kind"}
+                  onChange={() => setResetScope("kind")}
+                  className="accent-[var(--signal)] cursor-pointer"
+                />
+                <div>
+                  <div className="text-xs font-semibold text-[var(--text)]">
+                    {t("explorer.resetScopeKind", { kind: t(`explorer.${kind}`) })}
+                  </div>
+                </div>
+              </label>
+
+              <label className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--input-bg)] cursor-pointer hover:border-[var(--danger)] transition-colors">
+                <input
+                  type="radio"
+                  name="resetScope"
+                  value="all"
+                  checked={resetScope === "all"}
+                  onChange={() => setResetScope("all")}
+                  className="accent-[var(--danger)] cursor-pointer"
+                />
+                <div>
+                  <div className="text-xs font-semibold text-[var(--text)]">
+                    {t("explorer.resetScopeAll")}
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            <div className="p-3 rounded-[var(--radius-md)] bg-[var(--danger-subtle)] border border-[var(--danger)]/30 text-xs text-[var(--danger)]">
+              {t("explorer.confirmResetWarning")}
+            </div>
+          </div>
         </Modal>
       ) : null}
     </div>
