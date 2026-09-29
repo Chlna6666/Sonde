@@ -209,7 +209,6 @@ use sonde_sdk::DeviceFacts;
 sonde
     .set_device_facts(DeviceFacts {
         app_version: Some("1.4.2".into()),
-        launcher_version: None,
         os: Some("Windows 11 24H2".into()),
         system_language: Some("zh-CN".into()),
         architecture: Some("x86_64".into()),

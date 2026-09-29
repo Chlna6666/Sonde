@@ -408,7 +408,6 @@ pub async fn heartbeat(
         item_count: 0,
         session_id: None,
         app_version: timed_fact(facts.app_version, received_at),
-        launcher_version: timed_fact(facts.launcher_version, received_at),
         os: timed_fact(facts.os, received_at),
         system_language: timed_fact(facts.system_language, received_at),
         architecture: timed_fact(facts.architecture, received_at),
@@ -530,7 +529,6 @@ async fn enrich_events_with_device_facts(
 ) {
     let needs_facts = items.iter().any(|item| {
         item.app_version.is_none()
-            || item.launcher_version.is_none()
             || item.os.is_none()
             || item.system_language.is_none()
             || item.architecture.is_none()
@@ -545,9 +543,6 @@ async fn enrich_events_with_device_facts(
     for item in items {
         if item.app_version.is_none() {
             item.app_version = facts.app_version.as_deref().map(Into::into);
-        }
-        if item.launcher_version.is_none() {
-            item.launcher_version = facts.launcher_version.as_deref().map(Into::into);
         }
         if item.os.is_none() {
             item.os = facts.os.as_deref().map(Into::into);
@@ -568,7 +563,6 @@ async fn enrich_errors_with_device_facts(
 ) {
     let needs_facts = items.iter().any(|item| {
         item.app_version.is_none()
-            || item.launcher_version.is_none()
             || item.os.is_none()
             || item.system_language.is_none()
             || item.architecture.is_none()
@@ -583,9 +577,6 @@ async fn enrich_errors_with_device_facts(
     for item in items {
         if item.app_version.is_none() {
             item.app_version = facts.app_version.as_deref().map(Into::into);
-        }
-        if item.launcher_version.is_none() {
-            item.launcher_version = facts.launcher_version.as_deref().map(Into::into);
         }
         if item.os.is_none() {
             item.os = facts.os.as_deref().map(Into::into);
@@ -648,17 +639,11 @@ fn event_observation(items: &[EventInput]) -> Option<DeviceObservation> {
     }
     let received_at = chrono::Utc::now().timestamp_millis();
     let mut app_version = None;
-    let mut launcher_version = None;
     let mut os = None;
     let mut system_language = None;
     let mut architecture = None;
     for item in items {
         update_current_dimension(&mut app_version, item.app_version.as_deref(), received_at);
-        update_current_dimension(
-            &mut launcher_version,
-            item.launcher_version.as_deref(),
-            received_at,
-        );
         update_current_dimension(&mut os, item.os.as_deref(), received_at);
         let extracted_lang = if item.system_language.is_none() {
             extract_attribute_string(
@@ -688,7 +673,6 @@ fn event_observation(items: &[EventInput]) -> Option<DeviceObservation> {
         item_count: items.len(),
         session_id: None,
         app_version,
-        launcher_version,
         os,
         system_language,
         architecture,
@@ -701,17 +685,11 @@ fn error_observation(items: &[ErrorInput]) -> Option<DeviceObservation> {
     }
     let received_at = chrono::Utc::now().timestamp_millis();
     let mut app_version = None;
-    let mut launcher_version = None;
     let mut os = None;
     let mut system_language = None;
     let mut architecture = None;
     for item in items {
         update_current_dimension(&mut app_version, item.app_version.as_deref(), received_at);
-        update_current_dimension(
-            &mut launcher_version,
-            item.launcher_version.as_deref(),
-            received_at,
-        );
         update_current_dimension(&mut os, item.os.as_deref(), received_at);
         let extracted_lang = if item.system_language.is_none() {
             extract_attribute_string(
@@ -741,7 +719,6 @@ fn error_observation(items: &[ErrorInput]) -> Option<DeviceObservation> {
         item_count: items.len(),
         session_id: None,
         app_version,
-        launcher_version,
         os,
         system_language,
         architecture,
@@ -760,7 +737,6 @@ fn simple_observation(kind: DeviceTelemetryKind, item_count: usize) -> Option<De
         item_count,
         session_id: None,
         app_version: None,
-        launcher_version: None,
         os: None,
         system_language: None,
         architecture: None,
@@ -1019,7 +995,6 @@ mod tests {
             anonymous_id: None,
             session_id: None,
             app_version: Some("2.0.0".into()),
-            launcher_version: Some("1.5.0".into()),
             os: Some("windows".into()),
             system_language: None,
             architecture: None,
@@ -1054,7 +1029,6 @@ mod tests {
         assert!(event.timestamp.is_none());
         assert!(event.session_id.is_none());
         assert_eq!(event.app_version.as_deref(), Some("2.0.0"));
-        assert_eq!(event.launcher_version.as_deref(), Some("1.5.0"));
         assert_eq!(event.os.as_deref(), Some("windows"));
     }
 

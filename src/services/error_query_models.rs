@@ -25,7 +25,6 @@ pub struct ErrorGroupRecord {
     pub last_seen: i64,
     pub occurrences: u64,
     pub last_app_version: Option<String>,
-    pub last_launcher_version: Option<String>,
     pub last_os: Option<String>,
 }
 
@@ -47,7 +46,6 @@ pub struct ErrorOccurrenceRecord {
     pub anonymous_id: Option<String>,
     pub session_id: Option<String>,
     pub app_version: Option<String>,
-    pub launcher_version: Option<String>,
     pub os: Option<String>,
     pub stack_trace: Option<String>,
     pub handled: Option<bool>,

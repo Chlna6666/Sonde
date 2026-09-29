@@ -66,7 +66,6 @@ async fn evaluator_persists_delivery_and_worker_retries_without_process_state() 
             anonymous_id: None,
             session_id: None,
             app_version: None,
-            launcher_version: None,
             os: None,
             idempotency_key: None,
             attributes: Attributes::new(),

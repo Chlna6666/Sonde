@@ -9,7 +9,6 @@ fn event(
     timestamp: i64,
     idempotency_key: &str,
     app_version: &str,
-    launcher_version: &str,
     os: &str,
 ) -> EventInput {
     EventInput {
@@ -18,7 +17,6 @@ fn event(
         anonymous_id: Some(format!("device-{idempotency_key}").into()),
         session_id: Some(format!("session-{idempotency_key}").into()),
         app_version: Some(app_version.into()),
-        launcher_version: Some(launcher_version.into()),
         os: Some(os.into()),
         idempotency_key: Some(idempotency_key.into()),
         attributes: Attributes::new(),
@@ -72,21 +70,18 @@ async fn dimension_rollup_uses_clean_rollups_dirty_raw_and_exact_boundary() {
                 start + 3_600_000,
                 "evt-1",
                 "1.0.0",
-                "10.0.0",
                 "Windows 11 Build 26100",
             ),
             event(
                 start + 13 * 3_600_000,
                 "evt-2",
                 "2.0.0",
-                "10.1.0",
                 "Ubuntu 24.04 Linux x86_64",
             ),
             event(
                 start + 14 * 3_600_000,
                 "evt-3",
                 "2.0.0",
-                "10.1.0",
                 "Ubuntu 24.04 Linux x86_64",
             ),
         ],
@@ -141,7 +136,6 @@ async fn dimension_rollup_uses_clean_rollups_dirty_raw_and_exact_boundary() {
             start + 15 * 3_600_000,
             "evt-4",
             "3.0.0",
-            "10.2.0",
             "Windows 11 Build 26100",
         )],
     )

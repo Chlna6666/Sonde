@@ -27,7 +27,6 @@ pub struct DeviceProfileRecord {
     pub last_error_at: Option<i64>,
     pub last_session_id: Option<String>,
     pub last_app_version: Option<String>,
-    pub last_launcher_version: Option<String>,
     pub last_os: Option<String>,
     pub last_system_language: Option<String>,
     pub last_architecture: Option<String>,
@@ -37,7 +36,6 @@ pub struct DeviceProfileRecord {
     pub error_items: i64,
     pub session_changes: i64,
     pub app_version_changes: i64,
-    pub launcher_version_changes: i64,
     pub os_changes: i64,
     pub risk_score: i32,
     pub last_anomaly: Option<String>,
@@ -81,7 +79,6 @@ pub async fn list_profiles(
                 "last_error_at",
                 "last_session_id",
                 "last_app_version",
-                "last_launcher_version",
                 "last_os",
                 "last_system_language",
                 "last_architecture",
@@ -91,7 +88,6 @@ pub async fn list_profiles(
                 "error_items",
                 "session_changes",
                 "app_version_changes",
-                "launcher_version_changes",
                 "os_changes",
                 "risk_score",
                 "last_anomaly",
@@ -122,7 +118,6 @@ pub async fn list_profiles(
                 last_error_at: row.try_get("", "last_error_at")?,
                 last_session_id: row.try_get("", "last_session_id")?,
                 last_app_version: row.try_get("", "last_app_version")?,
-                last_launcher_version: row.try_get("", "last_launcher_version")?,
                 last_os: row.try_get("", "last_os")?,
                 last_system_language: row.try_get("", "last_system_language")?,
                 last_architecture: row.try_get("", "last_architecture")?,
@@ -132,7 +127,6 @@ pub async fn list_profiles(
                 error_items: row.try_get("", "error_items")?,
                 session_changes: row.try_get("", "session_changes")?,
                 app_version_changes: row.try_get("", "app_version_changes")?,
-                launcher_version_changes: row.try_get("", "launcher_version_changes")?,
                 os_changes: row.try_get("", "os_changes")?,
                 risk_score: row.try_get("", "risk_score")?,
                 last_anomaly: row.try_get("", "last_anomaly")?,
@@ -215,7 +209,6 @@ fn build_condition(filter: &DeviceProfileFilter<'_>) -> Condition {
                 .add(Expr::col(Alias::new("device_hash")).like(pattern.clone()))
                 .add(Expr::col(Alias::new("last_session_id")).like(pattern.clone()))
                 .add(Expr::col(Alias::new("last_app_version")).like(pattern.clone()))
-                .add(Expr::col(Alias::new("last_launcher_version")).like(pattern.clone()))
                 .add(Expr::col(Alias::new("last_os")).like(pattern.clone()))
                 .add(Expr::col(Alias::new("last_system_language")).like(pattern.clone()))
                 .add(Expr::col(Alias::new("last_architecture")).like(pattern)),

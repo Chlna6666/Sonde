@@ -25,7 +25,6 @@ struct ErrorGroupBatch {
     last_seen: i64,
     occurrences: i64,
     last_app_version: Option<Box<str>>,
-    last_launcher_version: Option<Box<str>>,
     last_os: Option<Box<str>>,
 }
 
@@ -65,7 +64,6 @@ pub async fn insert_error_index(
                 last_seen: timestamp,
                 occurrences: 0,
                 last_app_version: error.app_version.clone(),
-                last_launcher_version: error.launcher_version.clone(),
                 last_os: error.os.clone(),
             });
         group.first_seen = std::cmp::min(group.first_seen, timestamp);
@@ -74,9 +72,6 @@ pub async fn insert_error_index(
             group.message_sample.clone_from(&error.message);
             group.severity = severity;
             group.last_app_version.clone_from(&error.app_version);
-            group
-                .last_launcher_version
-                .clone_from(&error.launcher_version);
             group.last_os.clone_from(&error.os);
         }
         group.occurrences = group.occurrences.saturating_add(1);
@@ -90,7 +85,6 @@ pub async fn insert_error_index(
             Value::from(anonymous_id),
             Value::from(error.session_id.as_deref()),
             Value::from(error.app_version.as_deref()),
-            Value::from(error.launcher_version.as_deref()),
             Value::from(error.os.as_deref()),
             Value::from(error.stack_trace.as_deref()),
             Value::from(handled),
@@ -111,7 +105,6 @@ pub async fn insert_error_index(
         "last_seen",
         "occurrences",
         "last_app_version",
-        "last_launcher_version",
         "last_os",
         "updated_at",
     ];
@@ -130,7 +123,6 @@ pub async fn insert_error_index(
                 Value::from(group.last_seen),
                 Value::from(0_i64),
                 Value::from(group.last_app_version.as_deref()),
-                Value::from(group.last_launcher_version.as_deref()),
                 Value::from(group.last_os.as_deref()),
                 Value::from(received_at),
             ]
@@ -173,10 +165,6 @@ pub async fn insert_error_index(
                 Alias::new("last_app_version"),
                 group.last_app_version.as_deref(),
             )
-            .value(
-                Alias::new("last_launcher_version"),
-                group.last_launcher_version.as_deref(),
-            )
             .value(Alias::new("last_os"), group.last_os.as_deref())
             .value(Alias::new("updated_at"), received_at)
             .and_where(Expr::col(Alias::new("id")).eq(&group.id))
@@ -193,7 +181,6 @@ pub async fn insert_error_index(
         "anonymous_id",
         "session_id",
         "app_version",
-        "launcher_version",
         "os",
         "stack_trace",
         "handled",
@@ -276,7 +263,6 @@ mod tests {
             anonymous_id: None,
             session_id: None,
             app_version: None,
-            launcher_version: None,
             os: None,
             system_language: None,
             architecture: None,

@@ -130,7 +130,6 @@ fn map_device(
         last_error_at: record.last_error_at,
         session_id: record.last_session_id,
         app_version: record.last_app_version,
-        launcher_version: record.last_launcher_version,
         os: record.last_os,
         system_language: record.last_system_language,
         architecture: record.last_architecture,
@@ -140,7 +139,6 @@ fn map_device(
         error_items: record.error_items,
         session_changes: record.session_changes,
         app_version_changes: record.app_version_changes,
-        launcher_version_changes: record.launcher_version_changes,
         os_changes: record.os_changes,
         anomaly_reasons: record
             .last_anomaly

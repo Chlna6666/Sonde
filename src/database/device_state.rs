@@ -36,7 +36,6 @@ pub struct DeviceObservation {
     pub item_count: usize,
     pub session_id: Option<TimedDimension>,
     pub app_version: Option<TimedDimension>,
-    pub launcher_version: Option<TimedDimension>,
     pub os: Option<TimedDimension>,
     pub system_language: Option<TimedDimension>,
     pub architecture: Option<TimedDimension>,
@@ -54,8 +53,6 @@ struct DeviceRow {
     last_session_at: Option<i64>,
     last_app_version: Option<String>,
     last_app_version_at: Option<i64>,
-    last_launcher_version: Option<String>,
-    last_launcher_version_at: Option<i64>,
     last_os: Option<String>,
     last_os_at: Option<i64>,
     last_system_language: Option<String>,
@@ -68,7 +65,6 @@ struct DeviceRow {
     error_items: i64,
     session_changes: i64,
     app_version_changes: i64,
-    launcher_version_changes: i64,
     os_changes: i64,
     risk_score: i32,
     last_anomaly: Option<String>,
@@ -154,11 +150,6 @@ pub async fn observe(
         current.last_app_version_at,
         observation.app_version.as_ref(),
     );
-    let launcher_version = merge_dimension(
-        current.last_launcher_version,
-        current.last_launcher_version_at,
-        observation.launcher_version.as_ref(),
-    );
     let os = merge_dimension(current.last_os, current.last_os_at, observation.os.as_ref());
     let system_language = merge_dimension(
         current.last_system_language,
@@ -203,18 +194,6 @@ pub async fn observe(
             "rapid_app_version_change",
         );
     }
-    if launcher_version.changed
-        && launcher_version
-            .change_interval
-            .is_some_and(|interval| interval <= RAPID_VERSION_MILLIS)
-    {
-        add_risk(
-            &mut risk_score,
-            6,
-            &mut anomaly_flags,
-            "rapid_launcher_version_change",
-        );
-    }
     if os.changed {
         add_risk(&mut risk_score, 15, &mut anomaly_flags, "os_changed");
         if os
@@ -245,11 +224,6 @@ pub async fn observe(
         .value(Alias::new("last_session_at"), session.last_activity_at)
         .value(Alias::new("last_app_version"), app_version.value)
         .value(Alias::new("last_app_version_at"), app_version.timestamp)
-        .value(Alias::new("last_launcher_version"), launcher_version.value)
-        .value(
-            Alias::new("last_launcher_version_at"),
-            launcher_version.timestamp,
-        )
         .value(Alias::new("last_os"), os.value)
         .value(Alias::new("last_os_at"), os.timestamp)
         .value(Alias::new("last_system_language"), system_language.value)
@@ -274,12 +248,6 @@ pub async fn observe(
             current
                 .app_version_changes
                 .saturating_add(change_increment(app_version.changed)),
-        )
-        .value(
-            Alias::new("launcher_version_changes"),
-            current
-                .launcher_version_changes
-                .saturating_add(change_increment(launcher_version.changed)),
         )
         .value(
             Alias::new("os_changes"),
@@ -321,8 +289,6 @@ async fn ensure_device_row(
             "last_session_at",
             "last_app_version",
             "last_app_version_at",
-            "last_launcher_version",
-            "last_launcher_version_at",
             "last_os",
             "last_os_at",
             "last_system_language",
@@ -335,7 +301,6 @@ async fn ensure_device_row(
             "error_items",
             "session_changes",
             "app_version_changes",
-            "launcher_version_changes",
             "os_changes",
             "risk_score",
             "last_anomaly",
@@ -363,9 +328,6 @@ async fn ensure_device_row(
             Option::<i64>::None.into(),
             Option::<String>::None.into(),
             Option::<i64>::None.into(),
-            Option::<String>::None.into(),
-            Option::<i64>::None.into(),
-            0_i64.into(),
             0_i64.into(),
             0_i64.into(),
             0_i64.into(),
@@ -402,8 +364,6 @@ async fn load_device_for_update(
                 "last_session_at",
                 "last_app_version",
                 "last_app_version_at",
-                "last_launcher_version",
-                "last_launcher_version_at",
                 "last_os",
                 "last_os_at",
                 "last_system_language",
@@ -416,7 +376,6 @@ async fn load_device_for_update(
                 "error_items",
                 "session_changes",
                 "app_version_changes",
-                "launcher_version_changes",
                 "os_changes",
                 "risk_score",
                 "last_anomaly",
@@ -445,8 +404,6 @@ async fn load_device_for_update(
                 last_session_at: row.try_get("", "last_session_at")?,
                 last_app_version: row.try_get("", "last_app_version")?,
                 last_app_version_at: row.try_get("", "last_app_version_at")?,
-                last_launcher_version: row.try_get("", "last_launcher_version")?,
-                last_launcher_version_at: row.try_get("", "last_launcher_version_at")?,
                 last_os: row.try_get("", "last_os")?,
                 last_os_at: row.try_get("", "last_os_at")?,
                 last_system_language: row.try_get("", "last_system_language")?,
@@ -459,7 +416,6 @@ async fn load_device_for_update(
                 error_items: row.try_get("", "error_items")?,
                 session_changes: row.try_get("", "session_changes")?,
                 app_version_changes: row.try_get("", "app_version_changes")?,
-                launcher_version_changes: row.try_get("", "launcher_version_changes")?,
                 os_changes: row.try_get("", "os_changes")?,
                 risk_score: row.try_get("", "risk_score")?,
                 last_anomaly: row.try_get("", "last_anomaly")?,
@@ -472,7 +428,6 @@ async fn load_device_for_update(
 #[derive(Clone, Debug, Default)]
 pub struct DeviceFactsRow {
     pub app_version: Option<String>,
-    pub launcher_version: Option<String>,
     pub os: Option<String>,
     pub system_language: Option<String>,
     pub architecture: Option<String>,
@@ -487,7 +442,6 @@ pub async fn load_device_facts(
         .columns(
             [
                 "last_app_version",
-                "last_launcher_version",
                 "last_os",
                 "last_system_language",
                 "last_architecture",
@@ -504,7 +458,6 @@ pub async fn load_device_facts(
         .map(|row| {
             Ok(DeviceFactsRow {
                 app_version: row.try_get("", "last_app_version")?,
-                launcher_version: row.try_get("", "last_launcher_version")?,
                 os: row.try_get("", "last_os")?,
                 system_language: row.try_get("", "last_system_language")?,
                 architecture: row.try_get("", "last_architecture")?,
@@ -697,8 +650,6 @@ mod tests {
             last_session_at: None,
             last_app_version: None,
             last_app_version_at: None,
-            last_launcher_version: None,
-            last_launcher_version_at: None,
             last_os: None,
             last_os_at: None,
             last_system_language: None,
@@ -711,7 +662,6 @@ mod tests {
             error_items: 0,
             session_changes: 0,
             app_version_changes: 0,
-            launcher_version_changes: 0,
             os_changes: 0,
             risk_score: 0,
             last_anomaly: None,
@@ -724,7 +674,6 @@ mod tests {
             item_count: 0,
             session_id: None,
             app_version: None,
-            launcher_version: None,
             os: None,
             system_language: None,
             architecture: None,

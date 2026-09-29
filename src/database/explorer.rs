@@ -35,7 +35,6 @@ pub struct EventRecord {
     pub timestamp: i64,
     pub anonymous_id: Option<String>,
     pub app_version: Option<String>,
-    pub launcher_version: Option<String>,
     pub os: Option<String>,
     pub attributes: Box<RawValue>,
 }
@@ -92,7 +91,6 @@ pub async fn events(
                 "timestamp",
                 "anonymous_id",
                 "app_version",
-                "launcher_version",
                 "os",
                 "attributes",
             ]
@@ -107,7 +105,6 @@ pub async fn events(
             timestamp: row.try_get("", "timestamp")?,
             anonymous_id: row.try_get("", "anonymous_id")?,
             app_version: row.try_get("", "app_version")?,
-            launcher_version: row.try_get("", "launcher_version")?,
             os: row.try_get("", "os")?,
             attributes: decode_raw_json(row.try_get("", "attributes")?, "event attributes")?,
         })

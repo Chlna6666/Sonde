@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct DeviceFactsInput {
     pub app_version: Option<String>,
-    pub launcher_version: Option<String>,
     pub os: Option<String>,
     pub system_language: Option<String>,
     pub architecture: Option<String>,
@@ -16,11 +15,6 @@ impl DeviceFactsInput {
             &self.app_version,
             128,
             "appVersion must be at most 128 bytes",
-        )?;
-        validate_optional(
-            &self.launcher_version,
-            128,
-            "launcherVersion must be at most 128 bytes",
         )?;
         validate_optional(&self.os, 256, "os must be at most 256 bytes")?;
         validate_optional(
@@ -34,7 +28,6 @@ impl DeviceFactsInput {
             "architecture must be at most 64 bytes",
         )?;
         if self.app_version.is_none()
-            && self.launcher_version.is_none()
             && self.os.is_none()
             && self.system_language.is_none()
             && self.architecture.is_none()

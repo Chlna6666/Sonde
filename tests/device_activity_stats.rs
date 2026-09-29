@@ -152,7 +152,6 @@ async fn observe(
             item_count: 0,
             session_id: None,
             app_version: None,
-            launcher_version: None,
             os: None,
             system_language: None,
             architecture: None,

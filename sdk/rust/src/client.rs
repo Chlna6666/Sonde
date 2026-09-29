@@ -268,9 +268,6 @@ impl SondeClient {
         if event.app_version.is_none() {
             event.app_version = facts.app_version;
         }
-        if event.launcher_version.is_none() {
-            event.launcher_version = facts.launcher_version;
-        }
         if event.os.is_none() {
             event.os = facts.os;
         }
@@ -292,9 +289,6 @@ impl SondeClient {
             .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
         if error.app_version.is_none() {
             error.app_version = facts.app_version;
-        }
-        if error.launcher_version.is_none() {
-            error.launcher_version = facts.launcher_version;
         }
         if error.os.is_none() {
             error.os = facts.os;
@@ -337,11 +331,6 @@ impl SondeClientBuilder {
 
     pub fn app_version(mut self, version: impl Into<String>) -> Self {
         self.facts.app_version = Some(version.into());
-        self
-    }
-
-    pub fn launcher_version(mut self, version: impl Into<String>) -> Self {
-        self.facts.launcher_version = Some(version.into());
         self
     }
 
@@ -734,7 +723,6 @@ fn validate_device_facts(facts: &DeviceFacts) -> Result<()> {
         ));
     }
     validate_optional_fact(&facts.app_version, 128, "appVersion")?;
-    validate_optional_fact(&facts.launcher_version, 128, "launcherVersion")?;
     validate_optional_fact(&facts.os, 256, "os")?;
     validate_optional_fact(&facts.system_language, 64, "systemLanguage")?;
     validate_optional_fact(&facts.architecture, 64, "architecture")?;
@@ -854,14 +842,12 @@ mod tests {
     fn serializes_event_with_camel_case_facts() -> crate::Result<()> {
         let event = crate::model::Event::new("test_event")
             .app_version("1.0.0")
-            .launcher_version("0.5.0")
             .os("windows")
             .system_language("zh-CN")
             .architecture("x86_64")
             .attribute("source", "antigravity_verify");
         let json = serde_json::to_string(&event)?;
         assert!(json.contains(r#""appVersion":"1.0.0""#));
-        assert!(json.contains(r#""launcherVersion":"0.5.0""#));
         assert!(json.contains(r#""os":"windows""#));
         assert!(json.contains(r#""systemLanguage":"zh-CN""#));
         assert!(json.contains(r#""architecture":"x86_64""#));

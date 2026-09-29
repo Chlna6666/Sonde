@@ -29,7 +29,6 @@ pub struct ErrorGroupRecord {
     pub last_seen: i64,
     pub occurrences: u64,
     pub last_app_version: Option<String>,
-    pub last_launcher_version: Option<String>,
     pub last_os: Option<String>,
 }
 
@@ -51,7 +50,6 @@ pub struct ErrorOccurrenceRecord {
     pub anonymous_id: Option<String>,
     pub session_id: Option<String>,
     pub app_version: Option<String>,
-    pub launcher_version: Option<String>,
     pub os: Option<String>,
     pub stack_trace: Option<String>,
     pub handled: Option<bool>,
@@ -87,7 +85,6 @@ pub async fn groups(
                 "last_seen",
                 "occurrences",
                 "last_app_version",
-                "last_launcher_version",
                 "last_os",
             ]
             .map(Alias::new),
@@ -133,7 +130,6 @@ pub async fn groups(
             last_seen: row.try_get("", "last_seen")?,
             occurrences,
             last_app_version: optional_string(&row, "last_app_version")?,
-            last_launcher_version: optional_string(&row, "last_launcher_version")?,
             last_os: optional_string(&row, "last_os")?,
         });
     }
@@ -164,7 +160,6 @@ pub async fn group(
                 "last_seen",
                 "occurrences",
                 "last_app_version",
-                "last_launcher_version",
                 "last_os",
             ]
             .map(Alias::new),
@@ -188,7 +183,6 @@ pub async fn group(
         last_seen: row.try_get("", "last_seen")?,
         occurrences: u64::try_from(row.try_get::<i64>("", "occurrences")?).unwrap_or(0),
         last_app_version: optional_string(&row, "last_app_version")?,
-        last_launcher_version: optional_string(&row, "last_launcher_version")?,
         last_os: optional_string(&row, "last_os")?,
     }))
 }
@@ -211,7 +205,6 @@ pub async fn occurrences(
                 "anonymous_id",
                 "session_id",
                 "app_version",
-                "launcher_version",
                 "os",
                 "stack_trace",
                 "handled",
@@ -249,7 +242,6 @@ pub async fn occurrences(
             anonymous_id: optional_string(&row, "anonymous_id")?,
             session_id: optional_string(&row, "session_id")?,
             app_version: optional_string(&row, "app_version")?,
-            launcher_version: optional_string(&row, "launcher_version")?,
             os: optional_string(&row, "os")?,
             stack_trace: optional_string(&row, "stack_trace")?,
             handled,

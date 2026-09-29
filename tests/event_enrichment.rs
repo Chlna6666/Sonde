@@ -44,7 +44,6 @@ async fn server_enriches_events_with_recorded_device_facts()
         &ingest_scope,
         DeviceFactsInput {
             app_version: Some("1.2.3".into()),
-            launcher_version: Some("0.4.0".into()),
             os: Some("windows".into()),
             system_language: Some("zh-CN".into()),
             architecture: Some("x86_64".into()),
@@ -59,7 +58,6 @@ async fn server_enriches_events_with_recorded_device_facts()
         anonymous_id: None,
         session_id: None,
         app_version: None,
-        launcher_version: None,
         os: None,
         system_language: None,
         architecture: None,
@@ -92,7 +90,6 @@ async fn server_enriches_events_with_recorded_device_facts()
     let record = &page.items[0];
     assert_eq!(record.name, "test_event");
     assert_eq!(record.app_version.as_deref(), Some("1.2.3"));
-    assert_eq!(record.launcher_version.as_deref(), Some("0.4.0"));
     assert_eq!(record.os.as_deref(), Some("windows"));
 
     Ok(())

@@ -135,7 +135,6 @@ fn migrated_event(row: super::parser::D1EventRow) -> Result<EventInput, AppError
         anonymous_id: Some(row.user_hash.into_boxed_str()),
         session_id: None,
         app_version: row.app_version.map(Into::into),
-        launcher_version: row.launcher_version.map(Into::into),
         os: row.os.map(Into::into),
         system_language: None,
         architecture: None,

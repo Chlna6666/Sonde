@@ -16,7 +16,6 @@ fn event(timestamp: i64) -> EventInput {
         anonymous_id: Some("user-a".into()),
         session_id: Some("session-a".into()),
         app_version: Some("1.0.0".into()),
-        launcher_version: Some("1.0.0".into()),
         os: Some("test".into()),
         idempotency_key: Some("event-a".into()),
         attributes: Attributes::new(),

@@ -32,7 +32,6 @@ async fn setup(consecutive_hits: u16) -> (sea_orm::DatabaseConnection, String) {
             anonymous_id: None,
             session_id: None,
             app_version: None,
-            launcher_version: None,
             os: None,
             idempotency_key: None,
             attributes: Attributes::new(),

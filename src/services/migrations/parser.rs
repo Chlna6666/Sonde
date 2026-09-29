@@ -15,7 +15,6 @@ pub(super) struct D1EventRow {
     pub day: String,
     pub user_hash: String,
     pub app_version: Option<String>,
-    pub launcher_version: Option<String>,
     pub os: Option<String>,
     pub key_id: Option<String>,
 }
@@ -31,7 +30,6 @@ pub(crate) struct D1Preview {
     pub first_day: Option<String>,
     pub last_day: Option<String>,
     pub app_versions: BTreeMap<String, usize>,
-    pub launcher_versions: BTreeMap<String, usize>,
     pub operating_systems: BTreeMap<String, usize>,
 }
 
@@ -60,7 +58,6 @@ pub(crate) fn parse_d1_export(sql: &str) -> Result<ParsedD1Export, AppError> {
             first_day: summary.first_day,
             last_day: summary.last_day,
             app_versions: summary.app_versions,
-            launcher_versions: summary.launcher_versions,
             operating_systems: summary.operating_systems,
         },
         rows,
@@ -72,7 +69,6 @@ struct PreviewSummary {
     first_day: Option<String>,
     last_day: Option<String>,
     app_versions: BTreeMap<String, usize>,
-    launcher_versions: BTreeMap<String, usize>,
     operating_systems: BTreeMap<String, usize>,
 }
 
@@ -84,7 +80,6 @@ fn summarize(rows: Vec<D1EventRow>) -> (Vec<D1EventRow>, PreviewSummary) {
         first_day: None,
         last_day: None,
         app_versions: BTreeMap::new(),
-        launcher_versions: BTreeMap::new(),
         operating_systems: BTreeMap::new(),
     };
     for row in rows {
@@ -103,10 +98,6 @@ fn summarize(rows: Vec<D1EventRow>) -> (Vec<D1EventRow>, PreviewSummary) {
                 .map_or_else(|| row.day.clone(), |day| day.max(row.day.clone())),
         );
         count_value(&mut summary.app_versions, row.app_version.as_deref());
-        count_value(
-            &mut summary.launcher_versions,
-            row.launcher_version.as_deref(),
-        );
         count_value(&mut summary.operating_systems, row.os.as_deref());
         unique_rows.push(row);
     }
@@ -125,7 +116,7 @@ mod tests {
 
     #[test]
     fn parses_and_deduplicates_wrangler_export() -> Result<(), crate::error::AppError> {
-        let sql = "CREATE TABLE events (ts INTEGER); INSERT INTO events (ts, day, user_hash, app_version, launcher_version, os, key_id) VALUES (1000, '2026-01-02', 'u1', '1.0', NULL, 'Windows', 'abc'), (900, '2026-01-02', 'u1', '0.9', NULL, 'Windows', 'abc');";
+        let sql = "CREATE TABLE events (ts INTEGER); INSERT INTO events (ts, day, user_hash, app_version, os, key_id) VALUES (1000, '2026-01-02', 'u1', '1.0', 'Windows', 'abc'), (900, '2026-01-02', 'u1', '0.9', 'Windows', 'abc');";
         let parsed = parse_d1_export(sql)?;
         assert_eq!(parsed.preview.rows, 2);
         assert_eq!(parsed.preview.valid, 1);

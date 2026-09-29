@@ -30,8 +30,6 @@ impl MigrationTrait for DeviceProfiles {
                 nullable_bigint("last_session_at"),
                 nullable_bounded_string("last_app_version", 128),
                 nullable_bigint("last_app_version_at"),
-                nullable_bounded_string("last_launcher_version", 128),
-                nullable_bigint("last_launcher_version_at"),
                 nullable_bounded_string("last_os", 256),
                 nullable_bigint("last_os_at"),
                 bigint("event_items"),
@@ -40,7 +38,6 @@ impl MigrationTrait for DeviceProfiles {
                 bigint("error_items"),
                 bigint("session_changes"),
                 bigint("app_version_changes"),
-                bigint("launcher_version_changes"),
                 bigint("os_changes"),
                 ColumnDef::new(Alias::new("risk_score"))
                     .integer()

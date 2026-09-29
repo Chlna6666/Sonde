@@ -40,7 +40,6 @@ pub async fn insert_events(
         "anonymous_id",
         "session_id",
         "app_version",
-        "launcher_version",
         "os",
         "attributes",
         "dedupe_key",
@@ -73,11 +72,6 @@ pub async fn insert_events(
                 event.anonymous_id.take().map(|s| s.into_string()).into(),
                 event.session_id.take().map(|s| s.into_string()).into(),
                 event.app_version.take().map(|s| s.into_string()).into(),
-                event
-                    .launcher_version
-                    .take()
-                    .map(|s| s.into_string())
-                    .into(),
                 event.os.take().map(|s| s.into_string()).into(),
                 attributes_json.into(),
                 dedupe_key.into(),
@@ -324,7 +318,6 @@ pub async fn insert_migrated_event(
         "anonymous_id",
         "session_id",
         "app_version",
-        "launcher_version",
         "os",
         "attributes",
         "dedupe_key",
@@ -340,7 +333,6 @@ pub async fn insert_migrated_event(
         event.anonymous_id.as_deref().into(),
         event.session_id.as_deref().into(),
         event.app_version.as_deref().into(),
-        event.launcher_version.as_deref().into(),
         event.os.as_deref().into(),
         encode_attributes(&event.attributes).into(),
         dedupe_key.into(),
@@ -462,12 +454,6 @@ pub async fn insert_errors(
             }
             if let Some(ref v) = err.app_version {
                 attrs.insert("app_version".into(), serde_json::Value::from(v.as_ref()));
-            }
-            if let Some(ref v) = err.launcher_version {
-                attrs.insert(
-                    "launcher_version".into(),
-                    serde_json::Value::from(v.as_ref()),
-                );
             }
             if let Some(ref os) = err.os {
                 attrs.insert("os".into(), serde_json::Value::from(os.as_ref()));

@@ -125,7 +125,6 @@ pub(super) async fn create_telemetry_tables(manager: &SchemaManager<'_>) -> Resu
             nullable_string("anonymous_id"),
             nullable_string("session_id"),
             nullable_string("app_version"),
-            nullable_string("launcher_version"),
             nullable_string("os"),
             text("attributes"),
             nullable_string("dedupe_key"),

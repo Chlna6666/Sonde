@@ -211,11 +211,6 @@ fn map_application_stats(
             .into_iter()
             .map(map_distribution)
             .collect(),
-        launcher_versions: record
-            .launcher_versions
-            .into_iter()
-            .map(map_distribution)
-            .collect(),
         os_families: record
             .os_families
             .into_iter()

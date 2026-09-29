@@ -33,7 +33,6 @@ type Device = {
   lastErrorAt?: number | null;
   sessionId?: string | null;
   appVersion?: string | null;
-  launcherVersion?: string | null;
   os?: string | null;
   systemLanguage?: string | null;
   architecture?: string | null;
@@ -43,7 +42,6 @@ type Device = {
   errorItems: number;
   sessionChanges: number;
   appVersionChanges: number;
-  launcherVersionChanges: number;
   osChanges: number;
   anomalyReasons: string[];
   lastAnomalyAt?: number | null;
@@ -302,7 +300,7 @@ export function DevicesPage() {
                 <TableCell><StatusBadge status={device.status} copy={copy} /></TableCell>
                 <TableCell><RiskBadge level={device.riskLevel} score={device.riskScore} copy={copy} /></TableCell>
                 <TableCell className="text-[11px] text-[var(--muted)]">
-                  <div><strong className="text-[var(--text)]">{device.appVersion ?? "-"}</strong> / {device.launcherVersion ?? "-"}</div>
+                  <div><strong className="text-[var(--text)]">{device.appVersion ?? "-"}</strong></div>
                   <div className="mt-1">{device.os ?? "-"}</div>
                   {(device.systemLanguage || device.architecture) ? (
                     <div className="mt-1 flex items-center gap-1.5 flex-wrap">
@@ -431,7 +429,6 @@ function reasonLabel(reason: string, zh: boolean) {
     clock_ahead: ["Clock ahead", "设备时钟超前"],
     rapid_session_change: ["Rapid session changes", "会话快速切换"],
     rapid_app_version_change: ["Rapid app version changes", "应用版本快速切换"],
-    rapid_launcher_version_change: ["Rapid launcher changes", "启动器版本快速切换"],
     os_changed: ["OS changed", "操作系统变化"],
     rapid_os_change: ["Rapid OS changes", "操作系统快速切换"],
   };

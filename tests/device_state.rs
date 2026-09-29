@@ -23,7 +23,6 @@ fn observation(
             value: value.into(),
             timestamp: telemetry_at,
         }),
-        launcher_version: None,
         os: os.map(|value| device_state::TimedDimension {
             value: value.into(),
             timestamp: telemetry_at,

@@ -164,7 +164,6 @@ fn row_from_fields(fields: &HashMap<&str, &Option<String>>) -> Option<D1EventRow
         day: required("day")?.to_owned(),
         user_hash: required("user_hash")?.to_owned(),
         app_version: optional("app_version"),
-        launcher_version: optional("launcher_version"),
         os: optional("os"),
         key_id: optional("key_id"),
     })

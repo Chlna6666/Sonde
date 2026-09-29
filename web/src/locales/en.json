@@ -109,7 +109,6 @@
   "apps.statsDailyAvg": "Daily Average",
   "apps.statsTrend": "Daily Ingestion & User Trend",
   "apps.statsAppVersions": "App Versions Distribution",
-  "apps.statsLaunchers": "Launcher Versions",
   "apps.statsOS": "Detailed Operating Systems",
   "apps.osFamilies": "OS Platforms / Families",
   "apps.osDetailed": "Detailed OS Builds",

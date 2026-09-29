@@ -31,7 +31,6 @@ pub struct EventRecord {
     pub timestamp: i64,
     pub anonymous_id: Option<String>,
     pub app_version: Option<String>,
-    pub launcher_version: Option<String>,
     pub os: Option<String>,
     pub attributes: Box<RawValue>,
 }

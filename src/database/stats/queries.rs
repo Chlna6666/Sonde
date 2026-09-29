@@ -141,7 +141,6 @@ pub struct AppTelemetryStats {
     pub version_timeline: Vec<VersionTimelinePoint>,
     pub version_series: Vec<VersionSeries>,
     pub app_versions: Vec<DistributionItem>,
-    pub launcher_versions: Vec<DistributionItem>,
     pub os_families: Vec<DistributionItem>,
     pub operating_systems: Vec<DistributionItem>,
     pub build_distribution: Vec<DistributionItem>,
@@ -386,32 +385,6 @@ pub async fn application_stats(
         .await?
     };
 
-    let launcher_version_dimension =
-        crate::database::dimension_rollup::event_dimension_timeline_hybrid(
-            database,
-            Some(application_id),
-            environment_id,
-            since_ts,
-            crate::database::dimension_rollup::DIMENSION_LAUNCHER_VERSION,
-        )
-        .await?;
-    let launcher_versions = if let Some(points) = launcher_version_dimension {
-        distribution_items(
-            crate::database::dimension_rollup::aggregate_dimension(&points),
-            50,
-        )
-    } else {
-        distribution(
-            database,
-            application_id,
-            environment_id,
-            since_ts,
-            "launcher_version",
-            total_events,
-        )
-        .await?
-    };
-
     let os_dimension = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
         database,
         Some(application_id),
@@ -485,7 +458,6 @@ pub async fn application_stats(
         version_timeline,
         version_series,
         app_versions,
-        launcher_versions,
         os_families,
         operating_systems,
         build_distribution,

@@ -11,8 +11,6 @@ pub struct DeviceFacts {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub launcher_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub os: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_language: Option<String>,
@@ -31,7 +29,6 @@ impl DeviceFacts {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.app_version.is_none()
-            && self.launcher_version.is_none()
             && self.os.is_none()
             && self.system_language.is_none()
             && self.architecture.is_none()
@@ -46,8 +43,6 @@ pub struct Event {
     pub idempotency_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub launcher_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub os: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -64,7 +59,6 @@ impl Event {
             name: name.into(),
             idempotency_key: None,
             app_version: None,
-            launcher_version: None,
             os: None,
             system_language: None,
             architecture: None,
@@ -84,11 +78,6 @@ impl Event {
 
     pub fn app_version(mut self, version: impl Into<String>) -> Self {
         self.app_version = Some(version.into());
-        self
-    }
-
-    pub fn launcher_version(mut self, version: impl Into<String>) -> Self {
-        self.launcher_version = Some(version.into());
         self
     }
 
@@ -260,8 +249,6 @@ pub struct ErrorEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub launcher_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub os: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_language: Option<String>,
@@ -280,7 +267,6 @@ impl ErrorEvent {
             severity: None,
             handled: None,
             app_version: None,
-            launcher_version: None,
             os: None,
             system_language: None,
             architecture: None,
@@ -305,11 +291,6 @@ impl ErrorEvent {
 
     pub fn app_version(mut self, version: impl Into<String>) -> Self {
         self.app_version = Some(version.into());
-        self
-    }
-
-    pub fn launcher_version(mut self, version: impl Into<String>) -> Self {
-        self.launcher_version = Some(version.into());
         self
     }
 

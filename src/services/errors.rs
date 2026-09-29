@@ -81,7 +81,6 @@ fn map_group(record: error_query::ErrorGroupRecord) -> ErrorGroupRecord {
         last_seen: record.last_seen,
         occurrences: record.occurrences,
         last_app_version: record.last_app_version,
-        last_launcher_version: record.last_launcher_version,
         last_os: record.last_os,
     }
 }
@@ -103,7 +102,6 @@ fn map_occurrence(record: error_query::ErrorOccurrenceRecord) -> ErrorOccurrence
         anonymous_id: record.anonymous_id,
         session_id: record.session_id,
         app_version: record.app_version,
-        launcher_version: record.launcher_version,
         os: record.os,
         stack_trace: record.stack_trace,
         handled: record.handled,

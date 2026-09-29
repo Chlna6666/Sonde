@@ -17,7 +17,6 @@ pub struct EventInput {
     pub anonymous_id: Option<Box<str>>,
     pub session_id: Option<Box<str>>,
     pub app_version: Option<Box<str>>,
-    pub launcher_version: Option<Box<str>>,
     pub os: Option<Box<str>>,
     #[serde(default)]
     pub system_language: Option<Box<str>>,
@@ -204,7 +203,6 @@ pub struct ErrorInput {
     pub anonymous_id: Option<Box<str>>,
     pub session_id: Option<Box<str>>,
     pub app_version: Option<Box<str>>,
-    pub launcher_version: Option<Box<str>>,
     pub os: Option<Box<str>>,
     #[serde(default)]
     pub system_language: Option<Box<str>>,
@@ -226,7 +224,6 @@ impl ValidateTelemetry for ErrorInput {
             self.anonymous_id.as_deref(),
             self.session_id.as_deref(),
             self.app_version.as_deref(),
-            self.launcher_version.as_deref(),
             self.os.as_deref(),
             self.system_language.as_deref(),
             self.architecture.as_deref(),
@@ -251,7 +248,6 @@ impl ValidateTelemetry for EventInput {
             self.anonymous_id.as_deref(),
             self.session_id.as_deref(),
             self.app_version.as_deref(),
-            self.launcher_version.as_deref(),
             self.os.as_deref(),
             self.system_language.as_deref(),
             self.architecture.as_deref(),
@@ -406,7 +402,6 @@ fn validate_common_dimensions(
     anonymous_id: Option<&str>,
     session_id: Option<&str>,
     app_version: Option<&str>,
-    launcher_version: Option<&str>,
     os: Option<&str>,
     system_language: Option<&str>,
     architecture: Option<&str>,
@@ -417,9 +412,7 @@ fn validate_common_dimensions(
     if session_id.is_some_and(|value| value.is_empty() || value.len() > 256) {
         return Err("session_id must be 1..256 bytes when provided");
     }
-    if app_version.is_some_and(|value| value.len() > 128)
-        || launcher_version.is_some_and(|value| value.len() > 128)
-    {
+    if app_version.is_some_and(|value| value.len() > 128) {
         return Err("version fields must be at most 128 bytes");
     }
     if os.is_some_and(|value| value.len() > 256) {
@@ -453,7 +446,6 @@ mod tests {
             anonymous_id: None,
             session_id: None,
             app_version: None,
-            launcher_version: None,
             os: None,
             system_language: None,
             architecture: None,

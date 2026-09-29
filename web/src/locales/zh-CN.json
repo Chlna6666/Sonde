@@ -109,7 +109,6 @@
   "apps.statsDailyAvg": "日均事件量",
   "apps.statsTrend": "每日数据吞吐与用户趋势",
   "apps.statsAppVersions": "应用版本分布",
-  "apps.statsLaunchers": "启动器版本",
   "apps.statsOS": "详细操作系统版本",
   "apps.osFamilies": "操作系统大类平台",
   "apps.osDetailed": "详细操作系统版本",

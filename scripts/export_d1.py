@@ -136,7 +136,6 @@ def direct_import_to_sonde(
         day = str(r.get("day", ""))
         user_hash = str(r.get("user_hash", ""))
         app_ver = r.get("app_version")
-        launcher_ver = r.get("launcher_version")
         os_name = r.get("os")
         key_id = r.get("key_id")
 
@@ -159,8 +158,8 @@ def direct_import_to_sonde(
 
         cur.execute(
             """
-            INSERT INTO events (id, application_id, environment_id, name, timestamp, day, anonymous_id, session_id, app_version, launcher_version, os, attributes, dedupe_key, received_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO events (id, application_id, environment_id, name, timestamp, day, anonymous_id, session_id, app_version, os, attributes, dedupe_key, received_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_id,
@@ -172,12 +171,11 @@ def direct_import_to_sonde(
                 user_hash,
                 None,
                 app_ver,
-                launcher_ver,
                 os_name,
                 attributes_json,
                 dedupe_key,
                 now_ms,
-            )
+            ),
         )
         inserted += 1
 

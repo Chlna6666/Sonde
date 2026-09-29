@@ -12,7 +12,6 @@ fn event(timestamp: i64, idempotency_key: &str) -> EventInput {
         anonymous_id: Some("device-a".into()),
         session_id: Some("session-a".into()),
         app_version: Some("1.0.0".into()),
-        launcher_version: None,
         os: Some("test".into()),
         idempotency_key: Some(idempotency_key.into()),
         attributes: Attributes::new(),

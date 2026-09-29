@@ -84,7 +84,6 @@ impl AlertExpression {
                 "environment_id",
                 "name",
                 "app_version",
-                "launcher_version",
                 "os",
             ],
             AlertSource::MetricAverage | AlertSource::MetricSum => {

@@ -71,7 +71,6 @@ fn map_event(record: explorer::EventRecord) -> EventRecord {
         timestamp: record.timestamp,
         anonymous_id: record.anonymous_id,
         app_version: record.app_version,
-        launcher_version: record.launcher_version,
         os: record.os,
         attributes: record.attributes,
     }

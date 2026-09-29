@@ -75,7 +75,6 @@ type PublicAppData = {
     versionSeries?: VersionSeriesData[];
     buildDistribution?: Array<{ name: string; count: number; percentage: number }>;
     appVersions: Array<{ name: string; count: number; percentage: number }>;
-    launcherVersions: Array<{ name: string; count: number; percentage: number }>;
     osFamilies?: Array<{ name: string; count: number; percentage: number }>;
     operatingSystems: Array<{ name: string; count: number; percentage: number }>;
   };

@@ -27,7 +27,6 @@ type Preview = {
   firstDay?: string;
   lastDay?: string;
   appVersions: Record<string, number>;
-  launcherVersions: Record<string, number>;
   operatingSystems: Record<string, number>;
 };
 type ImportRun = {

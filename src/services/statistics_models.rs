@@ -149,7 +149,6 @@ pub struct AppTelemetryStats {
     pub version_timeline: Vec<VersionTimelinePoint>,
     pub version_series: Vec<VersionSeries>,
     pub app_versions: Vec<DistributionItem>,
-    pub launcher_versions: Vec<DistributionItem>,
     pub os_families: Vec<DistributionItem>,
     pub operating_systems: Vec<DistributionItem>,
     pub build_distribution: Vec<DistributionItem>,

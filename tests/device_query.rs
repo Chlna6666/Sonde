@@ -19,7 +19,6 @@ fn observation(received_at: i64, os: &str) -> DeviceObservation {
             value: "1.0.0".into(),
             timestamp: received_at,
         }),
-        launcher_version: None,
         os: Some(TimedDimension {
             value: os.into(),
             timestamp: received_at,

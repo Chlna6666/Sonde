@@ -14,7 +14,6 @@ use super::{
 };
 
 pub const DIMENSION_APP_VERSION: &str = "app_version";
-pub const DIMENSION_LAUNCHER_VERSION: &str = "launcher_version";
 pub const DIMENSION_OS: &str = "os";
 
 const GLOBAL_ENVIRONMENT: &str = "*";
@@ -136,7 +135,6 @@ pub async fn recompute_claimed_day_dimensions(
     let mut rows = Vec::new();
     for dimension in [
         DIMENSION_APP_VERSION,
-        DIMENSION_LAUNCHER_VERSION,
         DIMENSION_OS,
     ] {
         let mut query = Query::select();
@@ -519,7 +517,6 @@ async fn raw_dimension_counts(
 fn raw_column(dimension: &str) -> Result<&'static str, DbErr> {
     match dimension {
         DIMENSION_APP_VERSION => Ok("app_version"),
-        DIMENSION_LAUNCHER_VERSION => Ok("launcher_version"),
         DIMENSION_OS => Ok("os"),
         _ => Err(DbErr::Custom(format!(
             "unsupported event dimension {dimension}"

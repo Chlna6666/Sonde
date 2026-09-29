@@ -125,7 +125,6 @@ pub struct BackupEvent {
     pub anonymous_id: Option<String>,
     pub session_id: Option<String>,
     pub app_version: Option<String>,
-    pub launcher_version: Option<String>,
     pub os: Option<String>,
     pub attributes: String,
     pub dedupe_key: Option<String>,
