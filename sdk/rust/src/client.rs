@@ -1,7 +1,7 @@
 use std::{
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, RwLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -13,7 +13,7 @@ use reqwest::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
@@ -109,25 +109,38 @@ impl SondeClient {
     pub async fn set_device_facts(&self, facts: DeviceFacts) -> Result<()> {
         self.ensure_running()?;
         validate_device_facts(&facts)?;
-        *self.inner.transport.facts.write().await = facts;
+        {
+            let mut guard = self
+                .inner
+                .transport
+                .facts
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *guard = facts;
+        }
         self.inner.transport.heartbeat().await
     }
 
     /// Enqueue an event. With disk spooling enabled, completion means the item is fsynced to the
     /// queue WAL and admitted to the bounded in-memory worker queue. It does not mean the server has
     /// acknowledged the item; call `flush()` when an acknowledgement barrier is required.
-    pub async fn event(&self, event: Event) -> Result<()> {
+    pub async fn event(&self, mut event: Event) -> Result<()> {
         self.ensure_running()?;
+        self.enrich_event(&mut event);
         self.inner.queues.events.enqueue(event).await
     }
 
-    pub fn try_event(&self, event: Event) -> Result<()> {
+    pub fn try_event(&self, mut event: Event) -> Result<()> {
         self.ensure_running()?;
+        self.enrich_event(&mut event);
         self.inner.queues.events.try_enqueue(event)
     }
 
-    pub async fn events(&self, events: Vec<Event>) -> Result<()> {
+    pub async fn events(&self, mut events: Vec<Event>) -> Result<()> {
         self.ensure_running()?;
+        for event in &mut events {
+            self.enrich_event(event);
+        }
         for event in events {
             self.inner.queues.events.enqueue(event).await?;
         }
@@ -170,18 +183,23 @@ impl SondeClient {
         Ok(())
     }
 
-    pub async fn error(&self, error: ErrorEvent) -> Result<()> {
+    pub async fn error(&self, mut error: ErrorEvent) -> Result<()> {
         self.ensure_running()?;
+        self.enrich_error(&mut error);
         self.inner.queues.errors.enqueue(error).await
     }
 
-    pub fn try_error(&self, error: ErrorEvent) -> Result<()> {
+    pub fn try_error(&self, mut error: ErrorEvent) -> Result<()> {
         self.ensure_running()?;
+        self.enrich_error(&mut error);
         self.inner.queues.errors.try_enqueue(error)
     }
 
-    pub async fn errors(&self, errors: Vec<ErrorEvent>) -> Result<()> {
+    pub async fn errors(&self, mut errors: Vec<ErrorEvent>) -> Result<()> {
         self.ensure_running()?;
+        for error in &mut errors {
+            self.enrich_error(error);
+        }
         for error in errors {
             self.inner.queues.errors.enqueue(error).await?;
         }
@@ -236,6 +254,56 @@ impl SondeClient {
             Err(Error::ShuttingDown)
         } else {
             Ok(())
+        }
+    }
+
+    fn enrich_event(&self, event: &mut Event) {
+        let facts = self
+            .inner
+            .transport
+            .facts
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
+        if event.app_version.is_none() {
+            event.app_version = facts.app_version;
+        }
+        if event.launcher_version.is_none() {
+            event.launcher_version = facts.launcher_version;
+        }
+        if event.os.is_none() {
+            event.os = facts.os;
+        }
+        if event.system_language.is_none() {
+            event.system_language = facts.system_language;
+        }
+        if event.architecture.is_none() {
+            event.architecture = facts.architecture;
+        }
+    }
+
+    fn enrich_error(&self, error: &mut ErrorEvent) {
+        let facts = self
+            .inner
+            .transport
+            .facts
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
+        if error.app_version.is_none() {
+            error.app_version = facts.app_version;
+        }
+        if error.launcher_version.is_none() {
+            error.launcher_version = facts.launcher_version;
+        }
+        if error.os.is_none() {
+            error.os = facts.os;
+        }
+        if error.system_language.is_none() {
+            error.system_language = facts.system_language;
+        }
+        if error.architecture.is_none() {
+            error.architecture = facts.architecture;
         }
     }
 
@@ -411,7 +479,11 @@ impl SondeClientBuilder {
 
 impl Transport {
     async fn heartbeat(&self) -> Result<()> {
-        let facts = self.facts.read().await.clone();
+        let facts = self
+            .facts
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
         validate_device_facts(&facts)?;
         let body = serialize_payload(&facts)?;
         let response = self.signed_post("/heartbeat", body).await?;
@@ -776,5 +848,37 @@ mod tests {
         assert!(validate_device_facts(&DeviceFacts::default()).is_err());
         assert!(validate_user_agent("sonde-rust-sdk/test").is_ok());
         assert!(validate_user_agent("bad\nagent").is_err());
+    }
+
+    #[test]
+    fn serializes_event_with_camel_case_facts() -> crate::Result<()> {
+        let event = crate::model::Event::new("test_event")
+            .app_version("1.0.0")
+            .launcher_version("0.5.0")
+            .os("windows")
+            .system_language("zh-CN")
+            .architecture("x86_64")
+            .attribute("source", "antigravity_verify");
+        let json = serde_json::to_string(&event)?;
+        assert!(json.contains(r#""appVersion":"1.0.0""#));
+        assert!(json.contains(r#""launcherVersion":"0.5.0""#));
+        assert!(json.contains(r#""os":"windows""#));
+        assert!(json.contains(r#""systemLanguage":"zh-CN""#));
+        assert!(json.contains(r#""architecture":"x86_64""#));
+        assert!(json.contains(r#""source":"antigravity_verify""#));
+        Ok(())
+    }
+
+    #[test]
+    fn serializes_error_event_with_camel_case_facts() -> crate::Result<()> {
+        let error = crate::model::ErrorEvent::new("CrashError", "null pointer")
+            .app_version("2.1.0")
+            .os("linux")
+            .architecture("aarch64");
+        let json = serde_json::to_string(&error)?;
+        assert!(json.contains(r#""appVersion":"2.1.0""#));
+        assert!(json.contains(r#""os":"linux""#));
+        assert!(json.contains(r#""architecture":"aarch64""#));
+        Ok(())
     }
 }

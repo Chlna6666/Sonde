@@ -44,6 +44,16 @@ pub struct Event {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launcher_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub attributes: Attributes,
 }
@@ -53,6 +63,11 @@ impl Event {
         Self {
             name: name.into(),
             idempotency_key: None,
+            app_version: None,
+            launcher_version: None,
+            os: None,
+            system_language: None,
+            architecture: None,
             attributes: Attributes::new(),
         }
     }
@@ -64,6 +79,31 @@ impl Event {
 
     pub fn idempotency_key(mut self, key: impl Into<String>) -> Self {
         self.idempotency_key = Some(key.into());
+        self
+    }
+
+    pub fn app_version(mut self, version: impl Into<String>) -> Self {
+        self.app_version = Some(version.into());
+        self
+    }
+
+    pub fn launcher_version(mut self, version: impl Into<String>) -> Self {
+        self.launcher_version = Some(version.into());
+        self
+    }
+
+    pub fn os(mut self, os: impl Into<String>) -> Self {
+        self.os = Some(os.into());
+        self
+    }
+
+    pub fn system_language(mut self, language: impl Into<String>) -> Self {
+        self.system_language = Some(language.into());
+        self
+    }
+
+    pub fn architecture(mut self, architecture: impl Into<String>) -> Self {
+        self.architecture = Some(architecture.into());
         self
     }
 }
@@ -217,6 +257,16 @@ pub struct ErrorEvent {
     pub severity: Option<ErrorSeverity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launcher_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub attributes: Attributes,
 }
@@ -229,6 +279,11 @@ impl ErrorEvent {
             stack_trace: None,
             severity: None,
             handled: None,
+            app_version: None,
+            launcher_version: None,
+            os: None,
+            system_language: None,
+            architecture: None,
             attributes: Attributes::new(),
         }
     }
@@ -245,6 +300,31 @@ impl ErrorEvent {
 
     pub fn handled(mut self, handled: bool) -> Self {
         self.handled = Some(handled);
+        self
+    }
+
+    pub fn app_version(mut self, version: impl Into<String>) -> Self {
+        self.app_version = Some(version.into());
+        self
+    }
+
+    pub fn launcher_version(mut self, version: impl Into<String>) -> Self {
+        self.launcher_version = Some(version.into());
+        self
+    }
+
+    pub fn os(mut self, os: impl Into<String>) -> Self {
+        self.os = Some(os.into());
+        self
+    }
+
+    pub fn system_language(mut self, language: impl Into<String>) -> Self {
+        self.system_language = Some(language.into());
+        self
+    }
+
+    pub fn architecture(mut self, architecture: impl Into<String>) -> Self {
+        self.architecture = Some(architecture.into());
         self
     }
 
