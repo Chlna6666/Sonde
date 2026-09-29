@@ -469,6 +469,50 @@ async fn load_device_for_update(
         .transpose()
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct DeviceFactsRow {
+    pub app_version: Option<String>,
+    pub launcher_version: Option<String>,
+    pub os: Option<String>,
+    pub system_language: Option<String>,
+    pub architecture: Option<String>,
+}
+
+pub async fn load_device_facts(
+    database: &impl ConnectionTrait,
+    device_hash: &str,
+) -> Result<Option<DeviceFactsRow>, DbErr> {
+    let mut query = Query::select();
+    query
+        .columns(
+            [
+                "last_app_version",
+                "last_launcher_version",
+                "last_os",
+                "last_system_language",
+                "last_architecture",
+            ]
+            .map(Alias::new),
+        )
+        .from(Alias::new("telemetry_devices"))
+        .and_where(Expr::col(Alias::new("id")).eq(device_hash))
+        .limit(1);
+    let query = query.to_owned();
+    database
+        .query_one(&query)
+        .await?
+        .map(|row| {
+            Ok(DeviceFactsRow {
+                app_version: row.try_get("", "last_app_version")?,
+                launcher_version: row.try_get("", "last_launcher_version")?,
+                os: row.try_get("", "last_os")?,
+                system_language: row.try_get("", "last_system_language")?,
+                architecture: row.try_get("", "last_architecture")?,
+            })
+        })
+        .transpose()
+}
+
 fn update_counters(current: &DeviceRow, observation: &DeviceObservation) -> TelemetryCounters {
     let item_count = i64::try_from(observation.item_count).unwrap_or(i64::MAX);
     let mut counters = TelemetryCounters {

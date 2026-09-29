@@ -1,3 +1,4 @@
+use sea_orm::DatabaseConnection;
 use sha2::{Digest, Sha256};
 use tracing::warn;
 
@@ -63,6 +64,21 @@ impl IngestScope {
 
     pub(crate) fn signed_device_id(&self) -> &str {
         &self.device_id
+    }
+
+    #[doc(hidden)]
+    pub fn for_test(
+        application_id: impl Into<String>,
+        environment_id: impl Into<String>,
+        device_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            application_id: application_id.into(),
+            environment_id: environment_id.into(),
+            source_ip: "127.0.0.1".into(),
+            device_id: device_id.into(),
+            risk_tier: RiskTier::Low,
+        }
     }
 }
 
@@ -418,6 +434,7 @@ pub async fn events(
     charge_item_budget(installed, scope, items.len()).await?;
     let (accepted, rejected) = validate_with(&mut items, |item| normalize_live_event(scope, item));
     let mut valid = select_valid(items, &rejected);
+    enrich_events_with_device_facts(&installed.database, scope, &mut valid).await;
     let observation = event_observation(&valid);
     let mut last_raw_id: Option<Box<str>> = None;
     let mut last_hashed: Option<Box<str>> = None;
@@ -494,7 +511,8 @@ pub async fn errors(
     ensure_batch_size(items.len())?;
     charge_item_budget(installed, scope, items.len()).await?;
     let (accepted, rejected) = validate_with(&mut items, |item| normalize_live_error(scope, item));
-    let valid = select_valid(items, &rejected);
+    let mut valid = select_valid(items, &rejected);
+    enrich_errors_with_device_facts(&installed.database, scope, &mut valid).await;
     let observation = error_observation(&valid);
     let storage_scope = scope.storage_scope();
     installed
@@ -503,6 +521,82 @@ pub async fn errors(
         .await?;
     observe_signed_device(installed, scope, &storage_scope, observation).await;
     Ok(BatchReceipt { accepted, rejected })
+}
+
+async fn enrich_events_with_device_facts(
+    database: &DatabaseConnection,
+    scope: &IngestScope,
+    items: &mut [EventInput],
+) {
+    let needs_facts = items.iter().any(|item| {
+        item.app_version.is_none()
+            || item.launcher_version.is_none()
+            || item.os.is_none()
+            || item.system_language.is_none()
+            || item.architecture.is_none()
+    });
+    if !needs_facts {
+        return;
+    }
+    let device_hash = device_hash_for_scope(scope);
+    let Ok(Some(facts)) = device_state::load_device_facts(database, &device_hash).await else {
+        return;
+    };
+    for item in items {
+        if item.app_version.is_none() {
+            item.app_version = facts.app_version.as_deref().map(Into::into);
+        }
+        if item.launcher_version.is_none() {
+            item.launcher_version = facts.launcher_version.as_deref().map(Into::into);
+        }
+        if item.os.is_none() {
+            item.os = facts.os.as_deref().map(Into::into);
+        }
+        if item.system_language.is_none() {
+            item.system_language = facts.system_language.as_deref().map(Into::into);
+        }
+        if item.architecture.is_none() {
+            item.architecture = facts.architecture.as_deref().map(Into::into);
+        }
+    }
+}
+
+async fn enrich_errors_with_device_facts(
+    database: &DatabaseConnection,
+    scope: &IngestScope,
+    items: &mut [ErrorInput],
+) {
+    let needs_facts = items.iter().any(|item| {
+        item.app_version.is_none()
+            || item.launcher_version.is_none()
+            || item.os.is_none()
+            || item.system_language.is_none()
+            || item.architecture.is_none()
+    });
+    if !needs_facts {
+        return;
+    }
+    let device_hash = device_hash_for_scope(scope);
+    let Ok(Some(facts)) = device_state::load_device_facts(database, &device_hash).await else {
+        return;
+    };
+    for item in items {
+        if item.app_version.is_none() {
+            item.app_version = facts.app_version.as_deref().map(Into::into);
+        }
+        if item.launcher_version.is_none() {
+            item.launcher_version = facts.launcher_version.as_deref().map(Into::into);
+        }
+        if item.os.is_none() {
+            item.os = facts.os.as_deref().map(Into::into);
+        }
+        if item.system_language.is_none() {
+            item.system_language = facts.system_language.as_deref().map(Into::into);
+        }
+        if item.architecture.is_none() {
+            item.architecture = facts.architecture.as_deref().map(Into::into);
+        }
+    }
 }
 
 async fn observe_signed_device(

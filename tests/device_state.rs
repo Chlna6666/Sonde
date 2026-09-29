@@ -143,3 +143,42 @@ async fn device_profile_is_server_owned_and_monotonic() -> Result<(), Box<dyn st
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn loads_device_facts_for_telemetry_enrichment() -> Result<(), Box<dyn std::error::Error>> {
+    let database = database::connect("sqlite::memory:").await?;
+    database::migrate(&database).await?;
+    let scope = TelemetryScope {
+        application_id: "app-device-facts".into(),
+        environment_id: "env-device-facts".into(),
+    };
+    let device_hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let now = chrono::Utc::now().timestamp_millis();
+
+    assert!(
+        device_state::load_device_facts(&database, device_hash)
+            .await?
+            .is_none()
+    );
+
+    device_state::observe(
+        &database,
+        &scope,
+        device_hash,
+        &observation(
+            device_state::DeviceTelemetryKind::Heartbeat,
+            now,
+            now,
+            Some("3.4.1"),
+            Some("windows"),
+        ),
+    )
+    .await?;
+
+    let facts = device_state::load_device_facts(&database, device_hash)
+        .await?
+        .unwrap();
+    assert_eq!(facts.app_version.as_deref(), Some("3.4.1"));
+    assert_eq!(facts.os.as_deref(), Some("windows"));
+    Ok(())
+}
