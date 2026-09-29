@@ -280,8 +280,9 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
                 {kind === "events" ? (
                   <>
                     <TableCell className="font-bold text-[var(--text)] font-sans">{String(record.name ?? "-")}</TableCell>
-                    <TableCell className="text-[var(--muted)]">{String(record.deviceId ?? "-")}</TableCell>
-                    <TableCell className="text-[var(--muted)]">{String(record.userId ?? "-")}</TableCell>
+                    <TableCell className="text-[var(--muted)]">{String(record.anonymousId ?? record.deviceId ?? "-")}</TableCell>
+                    <TableCell className="text-[var(--muted)]">{String(record.appVersion ?? "-")}</TableCell>
+                    <TableCell className="text-[var(--muted)]">{String(record.os ?? "-")}</TableCell>
                   </>
                 ) : null}
                 {kind === "metrics" ? (
@@ -421,7 +422,13 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
 function columns(kind: Kind, t: (key: string) => string): string[] {
   switch (kind) {
     case "events":
-      return [t("explorer.time"), t("explorer.event"), t("explorer.deviceId"), t("explorer.userId")];
+      return [
+        t("explorer.time"),
+        t("explorer.event"),
+        t("explorer.deviceId"),
+        t("explorer.version"),
+        t("explorer.os"),
+      ];
     case "metrics":
       return [t("explorer.time"), t("explorer.metric"), t("explorer.value"), t("explorer.unit")];
     case "logs":
