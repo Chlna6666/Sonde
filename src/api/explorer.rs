@@ -26,12 +26,31 @@ struct ExplorerQuery {
     page_size: Option<u64>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteRecordsRequest {
+    application_id: String,
+    environment_id: Option<String>,
+    ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResetRecordsRequest {
+    application_id: String,
+    environment_id: Option<String>,
+}
+
 pub fn configure(config: &mut web::ServiceConfig) {
     config.service(
         web::scope("/api/v1/admin/explorer")
             .route("/events", web::get().to(events))
             .route("/metrics", web::get().to(metrics))
-            .route("/logs", web::get().to(logs)),
+            .route("/logs", web::get().to(logs))
+            .route("/{kind}/delete", web::post().to(delete_records))
+            .route("/{kind}", web::delete().to(delete_records))
+            .route("/{kind}/reset", web::post().to(reset_records))
+            .route("/{kind}/reset", web::delete().to(reset_records)),
     );
 }
 
@@ -63,6 +82,49 @@ async fn logs(
     let _permit = state.try_acquire_analytics()?;
     let (installed, user, filter) = authorize(&state, &request, query.into_inner()).await?;
     Ok(HttpResponse::Ok().json(explorer::logs(&installed, &user, &filter).await?))
+}
+
+async fn delete_records(
+    state: web::Data<Arc<AppState>>,
+    request: HttpRequest,
+    path: web::Path<String>,
+    body: web::Json<DeleteRecordsRequest>,
+) -> Result<HttpResponse, AppError> {
+    let installed = state.installed().await?;
+    let user = authentication::authenticate(&installed, &request).await?;
+    let kind = path.into_inner();
+    let body = body.into_inner();
+    let deleted = explorer::delete_records(
+        &installed,
+        &user,
+        &kind,
+        &body.application_id,
+        body.environment_id.as_deref(),
+        &body.ids,
+    )
+    .await?;
+    Ok(HttpResponse::Ok().json(serde_json::json!({ "deleted": deleted })))
+}
+
+async fn reset_records(
+    state: web::Data<Arc<AppState>>,
+    request: HttpRequest,
+    path: web::Path<String>,
+    body: web::Json<ResetRecordsRequest>,
+) -> Result<HttpResponse, AppError> {
+    let installed = state.installed().await?;
+    let user = authentication::authenticate(&installed, &request).await?;
+    let kind = path.into_inner();
+    let body = body.into_inner();
+    let deleted = explorer::reset_records(
+        &installed,
+        &user,
+        &kind,
+        &body.application_id,
+        body.environment_id.as_deref(),
+    )
+    .await?;
+    Ok(HttpResponse::Ok().json(serde_json::json!({ "deleted": deleted })))
 }
 
 async fn authorize(

@@ -80,12 +80,9 @@ impl AlertExpression {
 
     fn allowed_filter_fields(&self) -> &'static [&'static str] {
         match &self.source {
-            AlertSource::EventCount | AlertSource::MissingData | AlertSource::ChangeRate => &[
-                "environment_id",
-                "name",
-                "app_version",
-                "os",
-            ],
+            AlertSource::EventCount | AlertSource::MissingData | AlertSource::ChangeRate => {
+                &["environment_id", "name", "app_version", "os"]
+            }
             AlertSource::MetricAverage | AlertSource::MetricSum => {
                 &["environment_id", "name", "metric_type", "unit"]
             }

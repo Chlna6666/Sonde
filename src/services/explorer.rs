@@ -112,3 +112,80 @@ fn map_log(record: explorer::LogRecord) -> LogRecord {
         attributes: record.attributes,
     }
 }
+
+pub async fn delete_records(
+    installed: &InstalledState,
+    user: &AuthenticatedUser,
+    kind: &str,
+    application_id: &str,
+    environment_id: Option<&str>,
+    ids: &[String],
+) -> Result<u64, AppError> {
+    user.require("apps.manage", Some(application_id))?;
+    let application_id =
+        crate::security::validate_safe_identifier("applicationId", application_id)?;
+    let environment_id =
+        crate::security::validate_optional_safe_identifier("environmentId", environment_id)?;
+    let table = match kind {
+        "events" => "events",
+        "metrics" => "metric_points",
+        "logs" => "logs",
+        _ => return Err(AppError::Validation("unsupported explorer kind".into())),
+    };
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    if ids.len() > 1000 {
+        return Err(AppError::Validation(
+            "cannot delete more than 1000 records at once".into(),
+        ));
+    }
+    let validated_ids: Vec<String> = ids
+        .iter()
+        .map(|id| crate::security::validate_safe_identifier("id", id))
+        .collect::<Result<_, _>>()?;
+
+    let count = explorer::delete_records(
+        &installed.database,
+        table,
+        &application_id,
+        environment_id.as_deref(),
+        &validated_ids,
+    )
+    .await?;
+    Ok(count)
+}
+
+pub async fn reset_records(
+    installed: &InstalledState,
+    user: &AuthenticatedUser,
+    kind: &str,
+    application_id: &str,
+    environment_id: Option<&str>,
+) -> Result<u64, AppError> {
+    user.require("apps.manage", Some(application_id))?;
+    let application_id =
+        crate::security::validate_safe_identifier("applicationId", application_id)?;
+    let environment_id =
+        crate::security::validate_optional_safe_identifier("environmentId", environment_id)?;
+    let target = match kind {
+        "events" => "events",
+        "metrics" => "metric_points",
+        "logs" => "logs",
+        "all" => "all",
+        _ => {
+            return Err(AppError::Validation(
+                "unsupported explorer reset kind".into(),
+            ));
+        }
+    };
+
+    let count = explorer::reset_records(
+        &installed.database,
+        target,
+        &application_id,
+        environment_id.as_deref(),
+    )
+    .await?;
+    Ok(count)
+}

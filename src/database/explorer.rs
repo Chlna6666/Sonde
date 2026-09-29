@@ -308,3 +308,77 @@ where
         has_more,
     })
 }
+
+const DELETE_ID_CHUNK: usize = 500;
+
+pub async fn delete_records(
+    database: &DatabaseConnection,
+    table: &str,
+    application_id: &str,
+    environment_id: Option<&str>,
+    ids: &[String],
+) -> Result<u64, DbErr> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    match table {
+        "events" | "metric_points" | "logs" => {}
+        _ => {
+            return Err(DbErr::Custom(format!(
+                "unsupported explorer table: {table}"
+            )));
+        }
+    }
+
+    let mut total_deleted: u64 = 0;
+    for chunk in ids.chunks(DELETE_ID_CHUNK) {
+        let mut delete = Query::delete();
+        delete
+            .from_table(Alias::new(table))
+            .and_where(Expr::col(Alias::new("application_id")).eq(application_id))
+            .and_where(Expr::col(Alias::new("id")).is_in(chunk.iter().cloned()));
+        if let Some(env_id) = environment_id {
+            delete.and_where(Expr::col(Alias::new("environment_id")).eq(env_id));
+        }
+        let statement = delete.to_owned();
+        let affected = database.execute(&statement).await?.rows_affected();
+        total_deleted = total_deleted.saturating_add(affected);
+    }
+
+    Ok(total_deleted)
+}
+
+pub async fn reset_records(
+    database: &DatabaseConnection,
+    table_or_scope: &str,
+    application_id: &str,
+    environment_id: Option<&str>,
+) -> Result<u64, DbErr> {
+    let tables: &[&str] = match table_or_scope {
+        "events" => &["events"],
+        "metric_points" => &["metric_points"],
+        "logs" => &["logs"],
+        "all" => &["events", "metric_points", "logs"],
+        _ => {
+            return Err(DbErr::Custom(format!(
+                "unsupported explorer reset scope: {table_or_scope}"
+            )));
+        }
+    };
+
+    let mut total_deleted: u64 = 0;
+    for &table in tables {
+        let mut delete = Query::delete();
+        delete
+            .from_table(Alias::new(table))
+            .and_where(Expr::col(Alias::new("application_id")).eq(application_id));
+        if let Some(env_id) = environment_id {
+            delete.and_where(Expr::col(Alias::new("environment_id")).eq(env_id));
+        }
+        let statement = delete.to_owned();
+        let affected = database.execute(&statement).await?.rows_affected();
+        total_deleted = total_deleted.saturating_add(affected);
+    }
+
+    Ok(total_deleted)
+}

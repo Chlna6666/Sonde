@@ -5,12 +5,7 @@ use sonde::{
     domain::telemetry::{Attributes, EventInput},
 };
 
-fn event(
-    timestamp: i64,
-    idempotency_key: &str,
-    app_version: &str,
-    os: &str,
-) -> EventInput {
+fn event(timestamp: i64, idempotency_key: &str, app_version: &str, os: &str) -> EventInput {
     EventInput {
         name: "application.start".into(),
         timestamp: Some(timestamp),

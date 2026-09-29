@@ -133,10 +133,7 @@ pub async fn recompute_claimed_day_dimensions(
 
     let now = chrono::Utc::now().timestamp_millis();
     let mut rows = Vec::new();
-    for dimension in [
-        DIMENSION_APP_VERSION,
-        DIMENSION_OS,
-    ] {
+    for dimension in [DIMENSION_APP_VERSION, DIMENSION_OS] {
         let mut query = Query::select();
         query
             .expr_as(
