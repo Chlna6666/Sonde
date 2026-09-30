@@ -14,12 +14,14 @@ import {
   Copy,
   ChevronLeft,
   ChevronRight,
+  Eye,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import QRCode from "qrcode";
 import { api } from "../lib/api";
 import type { User } from "../App";
 import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input, EmptyState, Select } from "../components/ui";
+import { Modal } from "../components/Modal";
 
 type SystemSettings = {
   timezone: string;
@@ -84,6 +86,8 @@ export function SettingsPage() {
   const [auditPage, setAuditPage] = useState(1);
   const [auditHasMore, setAuditHasMore] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [auditResourceType, setAuditResourceType] = useState<string>("all");
+  const [inspectLog, setInspectLog] = useState<AuditLog | null>(null);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
 
@@ -93,9 +97,10 @@ export function SettingsPage() {
       .catch(() => {});
   };
 
-  const loadAuditLogs = (page: number) => {
+  const loadAuditLogs = (page: number, resourceType = auditResourceType) => {
     setAuditLoading(true);
-    api<AuditLogPage>(`/api/v1/admin/audit?page=${page}&pageSize=15`)
+    const rtQuery = resourceType && resourceType !== "all" ? `&resourceType=${encodeURIComponent(resourceType)}` : "";
+    api<AuditLogPage>(`/api/v1/admin/audit?page=${page}&pageSize=15${rtQuery}`)
       .then((response) => {
         setAuditLogs(response.items);
         setAuditPage(response.page);
@@ -103,6 +108,11 @@ export function SettingsPage() {
       })
       .catch(() => {})
       .finally(() => setAuditLoading(false));
+  };
+
+  const handleResourceTypeChange = (newType: string) => {
+    setAuditResourceType(newType);
+    loadAuditLogs(1, newType);
   };
 
   useEffect(() => {
@@ -496,7 +506,7 @@ export function SettingsPage() {
       </Card>
 
       <Card className="p-5 mb-6">
-        <div className="flex items-center justify-between gap-4 mb-4 pb-3 border-b border-[var(--border-soft)]">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 pb-3 border-b border-[var(--border-soft)]">
           <div className="flex items-center gap-3">
             <div className="p-1.5 rounded-[var(--radius-sm)] icon-squircle-purple font-bold"><FileText size={18} /></div>
             <div>
@@ -504,14 +514,35 @@ export function SettingsPage() {
               <p className="text-xs text-[var(--muted)] m-0 mt-0.5">{t("settings.auditDesc")}</p>
             </div>
           </div>
-          <Button
-            variant="secondary"
-            size="icon-sm"
-            onClick={() => loadAuditLogs(auditPage)}
-            disabled={auditLoading}
-            icon={<RefreshCw size={13} className={auditLoading ? "animate-spin" : ""} />}
-            title="Refresh logs"
-          />
+          <div className="flex items-center gap-2 self-end sm:self-auto w-full sm:w-auto">
+            <div className="w-full sm:w-[200px]">
+              <Select
+                label={t("settings.auditFilterAll")}
+                value={auditResourceType}
+                onChange={handleResourceTypeChange}
+                fullWidth
+                options={[
+                  { value: "all", label: t("settings.auditFilterAll") },
+                  { value: "application", label: t("settings.auditFilterApp") },
+                  { value: "telemetry", label: t("settings.auditFilterTelem") },
+                  { value: "user", label: t("settings.auditFilterUser") },
+                  { value: "alert_rule", label: t("settings.auditFilterAlert") },
+                  { value: "notification_channel", label: t("settings.auditFilterChannel") },
+                  { value: "api_key", label: t("settings.auditFilterKey") },
+                  { value: "system", label: t("settings.auditFilterSystem") },
+                  { value: "migration", label: t("settings.auditFilterMigration") },
+                ]}
+              />
+            </div>
+            <Button
+              variant="secondary"
+              size="icon-sm"
+              onClick={() => loadAuditLogs(auditPage)}
+              disabled={auditLoading}
+              icon={<RefreshCw size={13} className={auditLoading ? "animate-spin" : ""} />}
+              title="Refresh logs"
+            />
+          </div>
         </div>
 
         {auditLogs.length === 0 ? (
@@ -527,27 +558,87 @@ export function SettingsPage() {
                 <TableHead>{t("settings.auditAction")}</TableHead>
                 <TableHead>{t("settings.auditResource")}</TableHead>
                 <TableHead>{t("settings.auditTime")}</TableHead>
+                <TableHead className="w-[60px] text-right">{t("settings.auditDetails")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {auditLogs.map((log) => (
-                <TableRow key={log.id}>
-                  <TableCell className="font-medium">
-                    {log.actorUsername || log.actorUserId || "System"}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline" size="sm" className="font-mono text-[11px] text-[var(--signal)]">
-                      {log.action}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-[var(--muted)] font-mono text-[11px]">
-                    {log.resourceType}{log.resourceId ? `:${log.resourceId.slice(0, 8)}` : ""}
-                  </TableCell>
-                  <TableCell className="text-[var(--muted)]">
-                    {new Date(log.createdAt).toLocaleString()}
-                  </TableCell>
-                </TableRow>
-              ))}
+              {auditLogs.map((log) => {
+                const meta = (log.metadata && typeof log.metadata === "object") ? log.metadata as Record<string, any> : {};
+                const displayName = meta.name || meta.username || meta.applicationName;
+                
+                let badgeVariant: "danger" | "success" | "info" | "warning" | "outline" = "outline";
+                if (
+                  log.action.endsWith(".deleted") ||
+                  log.action.endsWith(".records_deleted") ||
+                  log.action.endsWith(".records_reset") ||
+                  log.action.endsWith(".revoked") ||
+                  log.action.endsWith(".cleared_revoked")
+                ) {
+                  badgeVariant = "danger";
+                } else if (
+                  log.action.endsWith(".created") ||
+                  log.action.endsWith(".imported") ||
+                  log.action.endsWith(".setup_completed") ||
+                  log.action.endsWith(".2fa_enabled") ||
+                  log.action.endsWith(".member_granted")
+                ) {
+                  badgeVariant = "success";
+                } else if (
+                  log.action.endsWith(".updated") ||
+                  log.action.endsWith(".regenerated") ||
+                  log.action.endsWith(".applications_assigned") ||
+                  log.action.endsWith(".settings_updated")
+                ) {
+                  badgeVariant = "info";
+                } else if (
+                  log.action.endsWith(".password_reset") ||
+                  log.action.endsWith(".2fa_disabled") ||
+                  log.action.endsWith(".backup_restored") ||
+                  log.action.endsWith(".backup_export_requested")
+                ) {
+                  badgeVariant = "warning";
+                }
+
+                return (
+                  <TableRow key={log.id}>
+                    <TableCell className="font-medium">
+                      <span className="font-semibold text-xs text-[var(--text)]">
+                        {log.actorUsername || (log.actorUserId ? log.actorUserId.slice(0, 8) : "System")}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={badgeVariant} size="sm" className="font-mono text-[11px]">
+                        {log.action}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col">
+                        {displayName ? (
+                          <span className="font-semibold text-xs text-[var(--text)]">{displayName}</span>
+                        ) : null}
+                        <span className="text-[var(--muted)] font-mono text-[11px]">
+                          {log.resourceType}
+                          {log.resourceId ? `:${log.resourceId.slice(0, 8)}` : ""}
+                          {meta.kind ? ` • ${meta.kind}` : ""}
+                          {meta.count !== undefined ? ` (${meta.count} items)` : ""}
+                        </span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-[var(--muted)] text-xs whitespace-nowrap">
+                      {new Date(log.createdAt).toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => setInspectLog(log)}
+                        icon={<Eye size={14} />}
+                        title={t("settings.auditDetails")}
+                      />
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         )}
@@ -572,6 +663,54 @@ export function SettingsPage() {
           </div>
         </div>
       </Card>
+
+      {inspectLog && (
+        <Modal
+          isOpen={!!inspectLog}
+          onClose={() => setInspectLog(null)}
+          title={t("settings.auditDetailsTitle")}
+          size="lg"
+          icon={<FileText size={18} />}
+        >
+          <div className="flex flex-col gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 bg-[var(--input-bg)] border border-[var(--border-soft)] rounded-lg text-xs">
+              <div>
+                <span className="text-[var(--muted)]">{t("settings.auditActor")}:</span>{" "}
+                <span className="font-semibold text-[var(--text)] ml-1">
+                  {inspectLog.actorUsername || inspectLog.actorUserId || "System"}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[var(--muted)]">{t("settings.auditAction")}:</span>
+                <Badge variant="outline" size="sm" className="font-mono text-[11px] text-[var(--signal)]">
+                  {inspectLog.action}
+                </Badge>
+              </div>
+              <div>
+                <span className="text-[var(--muted)]">{t("settings.auditResource")}:</span>{" "}
+                <span className="font-mono text-[var(--text)] ml-1">
+                  {inspectLog.resourceType}{inspectLog.resourceId ? `:${inspectLog.resourceId}` : ""}
+                </span>
+              </div>
+              <div>
+                <span className="text-[var(--muted)]">{t("settings.auditTime")}:</span>{" "}
+                <span className="text-[var(--text)] ml-1">{new Date(inspectLog.createdAt).toLocaleString()}</span>
+              </div>
+              <div className="sm:col-span-2 flex items-center gap-2">
+                <span className="text-[var(--muted)]">{t("settings.auditId")}:</span>
+                <span className="font-mono text-[11px] text-[var(--muted)] select-all">{inspectLog.id}</span>
+              </div>
+            </div>
+
+            <div>
+              <h4 className="text-xs font-bold text-[var(--text)] mb-1.5">{t("settings.auditMetadata")}</h4>
+              <pre className="p-3 bg-[var(--input-bg)] border border-[var(--border-soft)] rounded-lg text-xs font-mono text-[var(--signal)] overflow-x-auto max-h-[320px] select-all">
+                {JSON.stringify(inspectLog.metadata, null, 2)}
+              </pre>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "16px", marginBottom: "24px" }}>
         <div style={{ background: "var(--panel)", border: "1px solid var(--border-soft)", borderRadius: "10px", padding: "20px", display: "flex", flexDirection: "column", gap: "14px" }}>
