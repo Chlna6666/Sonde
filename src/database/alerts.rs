@@ -359,23 +359,23 @@ pub async fn list_deliveries(
             (Alias::new("ad"), Alias::new("created_at")),
         ])
         .expr_as(
-            Expr::col((Alias::new("ar"), Alias::new("name"))),
+            Expr::col((Alias::new("alert_rules"), Alias::new("name"))),
             Alias::new("rule_name"),
         )
         .expr_as(
-            Expr::col((Alias::new("nc"), Alias::new("name"))),
+            Expr::col((Alias::new("notification_channels"), Alias::new("name"))),
             Alias::new("channel_name"),
         )
         .from_as(Alias::new("alert_deliveries"), Alias::new("ad"))
         .left_join(
             Alias::new("alert_rules"),
             Expr::col((Alias::new("ad"), Alias::new("rule_id")))
-                .equals((Alias::new("ar"), Alias::new("id"))),
+                .equals((Alias::new("alert_rules"), Alias::new("id"))),
         )
         .left_join(
             Alias::new("notification_channels"),
             Expr::col((Alias::new("ad"), Alias::new("channel_id")))
-                .equals((Alias::new("nc"), Alias::new("id"))),
+                .equals((Alias::new("notification_channels"), Alias::new("id"))),
         )
         .order_by(
             (Alias::new("ad"), Alias::new("created_at")),
