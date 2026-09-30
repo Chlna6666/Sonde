@@ -19,6 +19,7 @@ pub(crate) struct ImportResult {
 
 pub(crate) async fn execute_d1_import(
     installed: &InstalledState,
+    actor: Option<&str>,
     sql: &str,
     application_id: &str,
     environment_id: &str,
@@ -62,6 +63,21 @@ pub(crate) async fn execute_d1_import(
         created_at: chrono::Utc::now().timestamp_millis(),
     };
     imports::create(&installed.database, &run).await?;
+    crate::database::applications::audit_with_metadata(
+        &installed.database,
+        actor,
+        "migration.d1_imported",
+        "migration",
+        Some(&run.id),
+        Some(serde_json::json!({
+            "applicationId": application_id,
+            "environmentId": environment_id,
+            "inserted": inserted,
+            "deduped": deduped,
+        })),
+    )
+    .await?;
+
     Ok(ImportResult {
         run,
         already_imported: false,

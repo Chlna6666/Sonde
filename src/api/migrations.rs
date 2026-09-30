@@ -53,6 +53,7 @@ async fn execute(
     user.require("migrations.manage", Some(&body.application_id))?;
     let result = migrations::execute_d1_import(
         &installed,
+        Some(&user.id),
         &body.sql,
         &body.application_id,
         &body.environment_id,

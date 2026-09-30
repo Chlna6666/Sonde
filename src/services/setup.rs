@@ -61,6 +61,27 @@ pub async fn complete(state: &AppState, input: SetupInput<'_>) -> Result<(), App
         input.locale,
     )
     .await?;
+
+    let admin_user = auth_store::user_by_identifier(&database, input.username)
+        .await
+        .ok()
+        .flatten();
+    let _ = database::applications::audit_with_metadata(
+        &database,
+        admin_user.as_ref().map(|u| u.id.as_str()),
+        "system.setup_completed",
+        "system",
+        None,
+        Some(serde_json::json!({
+            "username": input.username,
+            "email": input.email,
+            "databaseType": input.database_type,
+            "locale": input.locale,
+            "timezone": input.timezone,
+        })),
+    )
+    .await;
+
     let secure_cookie = resolve_secure_cookie(state, input.secure_cookie);
     let config = InstallationConfig {
         database_url,

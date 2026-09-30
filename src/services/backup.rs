@@ -28,12 +28,16 @@ pub async fn export_application(
         return Err(AppError::NotFound);
     };
 
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "application.exported",
         "application",
         Some(application_id),
+        Some(serde_json::json!({
+            "name": export_data.application.name,
+            "slug": export_data.application.slug,
+        })),
     )
     .await?;
 
@@ -48,16 +52,22 @@ pub async fn import_application(
     user.require("apps.manage", None)?;
     validate_application_backup_header(&payload.format_version, &payload.export_type)?;
     validate_application_backup_metrics(&payload)?;
+    let app_name = payload.application.name.clone();
+    let app_slug = payload.application.slug.clone();
     let new_app_id =
         application_backup::import_single_application(&installed.database, Some(&user.id), payload)
             .await?;
 
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "application.imported",
         "application",
         Some(&new_app_id),
+        Some(serde_json::json!({
+            "name": app_name,
+            "slug": app_slug,
+        })),
     )
     .await?;
 
@@ -106,12 +116,15 @@ pub async fn restore_system_backup(
     dimension_restore::reset_after_full_restore(&installed.database).await?;
 
     // Exact restore clears sessions and may replace the initiating account, so audit as system.
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         None,
         "system.backup_restored",
         "system",
         None,
+        Some(serde_json::json!({
+            "recordsRestored": restored,
+        })),
     )
     .await?;
 

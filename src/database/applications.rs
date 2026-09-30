@@ -331,6 +331,21 @@ pub async fn audit(
     resource_type: &str,
     resource_id: Option<&str>,
 ) -> Result<(), DbErr> {
+    audit_with_metadata(database, actor, action, resource_type, resource_id, None).await
+}
+
+pub async fn audit_with_metadata(
+    database: &DatabaseConnection,
+    actor: Option<&str>,
+    action: &str,
+    resource_type: &str,
+    resource_id: Option<&str>,
+    metadata: Option<serde_json::Value>,
+) -> Result<(), DbErr> {
+    let metadata_str = match metadata {
+        Some(val) => serde_json::to_string(&val).unwrap_or_else(|_| "{}".into()),
+        None => "{}".into(),
+    };
     insert(
         database,
         "audit_log",
@@ -349,7 +364,7 @@ pub async fn audit(
             action.into(),
             resource_type.into(),
             resource_id.map(str::to_owned).into(),
-            "{}".into(),
+            metadata_str.into(),
             chrono::Utc::now().timestamp_millis().into(),
         ],
     )
@@ -398,14 +413,14 @@ pub async fn list_audit_logs(
             (Alias::new("al"), Alias::new("created_at")),
         ])
         .expr_as(
-            Expr::col((Alias::new("u"), Alias::new("username"))),
+            Expr::col((Alias::new("users"), Alias::new("username"))),
             Alias::new("actor_username"),
         )
         .from_as(Alias::new("audit_log"), Alias::new("al"))
         .left_join(
             Alias::new("users"),
             Expr::col((Alias::new("al"), Alias::new("actor_user_id")))
-                .equals((Alias::new("u"), Alias::new("id"))),
+                .equals((Alias::new("users"), Alias::new("id"))),
         )
         .order_by(
             (Alias::new("al"), Alias::new("created_at")),

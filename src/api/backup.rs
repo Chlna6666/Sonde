@@ -107,6 +107,19 @@ async fn update_system_settings(
         })
         .await?;
 
+    crate::database::applications::audit_with_metadata(
+        &installed.database,
+        Some(&user.id),
+        "system.settings_updated",
+        "system",
+        None,
+        Some(serde_json::json!({
+            "timezone": updated.timezone,
+            "locale": updated.locale,
+        })),
+    )
+    .await?;
+
     let now = chrono::Utc::now().timestamp_millis();
     let database_backend = format_database_backend(installed.database.get_database_backend());
     Ok(HttpResponse::Ok().json(SystemSettingsResponse {

@@ -65,12 +65,17 @@ pub async fn create_user(
     )
     .await?;
 
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "user.created",
         "user",
         Some(&user_id),
+        Some(serde_json::json!({
+            "username": input.username,
+            "email": input.email,
+            "role": input.role,
+        })),
     )
     .await?;
 
@@ -112,12 +117,18 @@ pub async fn update_user(
         auth_state::revoke_sessions_for_user(&installed.database, target_user_id).await?;
     }
 
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "user.updated",
         "user",
         Some(target_user_id),
+        Some(serde_json::json!({
+            "username": input.username,
+            "email": input.email,
+            "role": input.role,
+            "active": input.active,
+        })),
     )
     .await?;
 
@@ -134,16 +145,23 @@ pub async fn reset_password(
     user.require("members.manage", None)?;
     ensure_target_manageable(installed, user, target_user_id).await?;
     auth::validate_password(new_password)?;
+    let target_user = auth_store::user_by_id(&installed.database, target_user_id)
+        .await
+        .ok()
+        .flatten();
     let password_hash = hash_password_off_thread(new_password, pepper).await?;
     auth_store::update_password_hash(&installed.database, target_user_id, &password_hash).await?;
     auth_state::revoke_sessions_for_user(&installed.database, target_user_id).await?;
 
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "user.password_reset",
         "user",
         Some(target_user_id),
+        Some(serde_json::json!({
+            "username": target_user.as_ref().map(|u| &u.username),
+        })),
     )
     .await?;
 
@@ -162,16 +180,24 @@ pub async fn delete_user(
         ));
     }
     ensure_target_manageable(installed, user, target_user_id).await?;
+    let target_user = auth_store::user_by_id(&installed.database, target_user_id)
+        .await
+        .ok()
+        .flatten();
     let outcome = auth_store::delete_user(&installed.database, target_user_id).await?;
     require_user_mutation_applied(outcome)?;
     auth_state::revoke_sessions_for_user(&installed.database, target_user_id).await?;
 
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "user.deleted",
         "user",
         Some(target_user_id),
+        Some(serde_json::json!({
+            "username": target_user.as_ref().map(|u| &u.username),
+            "email": target_user.as_ref().map(|u| &u.email),
+        })),
     )
     .await?;
 
@@ -217,12 +243,16 @@ pub async fn set_user_assigned_applications(
     )
     .await?;
 
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "user.applications_assigned",
         "user",
         Some(target_user_id),
+        Some(serde_json::json!({
+            "count": app_ids.len(),
+            "role": role,
+        })),
     )
     .await?;
 

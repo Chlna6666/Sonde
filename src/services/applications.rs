@@ -56,12 +56,16 @@ pub async fn create(
     let created =
         application_store::create_application(&installed.database, name, slug, Some(&user.id))
             .await?;
-    application_store::audit(
+    application_store::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "application.created",
         "application",
         Some(&created.0),
+        Some(serde_json::json!({
+            "name": name,
+            "slug": slug,
+        })),
     )
     .await?;
     Ok(created)
@@ -115,12 +119,17 @@ pub async fn create_key(
         scopes,
     )
     .await?;
-    application_store::audit(
+    application_store::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "api_key.created",
         "api_key",
         Some(&id),
+        Some(serde_json::json!({
+            "name": name,
+            "scopes": scopes,
+            "applicationId": application_id,
+        })),
     )
     .await?;
     Ok(raw_key)
@@ -133,17 +142,26 @@ pub async fn revoke_key(
     key_id: &str,
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
+    let key_name = application_store::get_api_key(&installed.database, application_id, key_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|k| k.name);
     let revoked =
         application_store::revoke_api_key(&installed.database, application_id, key_id).await?;
     if !revoked {
         return Err(AppError::NotFound);
     }
-    application_store::audit(
+    application_store::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "api_key.revoked",
         "api_key",
         Some(key_id),
+        Some(serde_json::json!({
+            "name": key_name,
+            "applicationId": application_id,
+        })),
     )
     .await?;
     Ok(())
@@ -156,17 +174,26 @@ pub async fn delete_key(
     key_id: &str,
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
+    let key_name = application_store::get_api_key(&installed.database, application_id, key_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|k| k.name);
     let deleted =
         application_store::delete_api_key(&installed.database, application_id, key_id).await?;
     if !deleted {
         return Err(AppError::NotFound);
     }
-    application_store::audit(
+    application_store::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "api_key.deleted",
         "api_key",
         Some(key_id),
+        Some(serde_json::json!({
+            "name": key_name,
+            "applicationId": application_id,
+        })),
     )
     .await?;
     Ok(())
@@ -180,12 +207,16 @@ pub async fn clear_revoked_keys(
     ensure_app_access(&installed.database, user, application_id, true).await?;
     let count =
         application_store::delete_revoked_api_keys(&installed.database, application_id).await?;
-    application_store::audit(
+    application_store::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "api_key.cleared_revoked",
         "application",
         Some(application_id),
+        Some(serde_json::json!({
+            "count": count,
+            "applicationId": application_id,
+        })),
     )
     .await?;
     Ok(count)
@@ -232,12 +263,16 @@ pub async fn regenerate_key(
     )
     .await?;
 
-    application_store::audit(
+    application_store::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "api_key.regenerated",
         "api_key",
         Some(&new_id),
+        Some(serde_json::json!({
+            "name": old_key.name,
+            "applicationId": application_id,
+        })),
     )
     .await?;
     Ok(raw_key)
@@ -268,12 +303,16 @@ pub async fn update(
         },
     )
     .await?;
-    application_store::audit(
+    application_store::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "application.updated",
         "application",
         Some(application_id),
+        Some(serde_json::json!({
+            "name": params.name,
+            "slug": params.slug,
+        })),
     )
     .await?;
     Ok(())
@@ -285,13 +324,21 @@ pub async fn delete(
     application_id: &str,
 ) -> Result<(), AppError> {
     ensure_app_access(&installed.database, user, application_id, true).await?;
+    let app = application_store::get_application(&installed.database, application_id)
+        .await
+        .ok()
+        .flatten();
     application_delete::delete_application_exact(&installed.database, application_id).await?;
-    application_store::audit(
+    application_store::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "application.deleted",
         "application",
         Some(application_id),
+        Some(serde_json::json!({
+            "name": app.as_ref().map(|a| &a.name),
+            "slug": app.as_ref().map(|a| &a.slug),
+        })),
     )
     .await?;
     Ok(())
@@ -328,12 +375,17 @@ pub async fn grant_member(
         role,
     )
     .await?;
-    application_store::audit(
+    application_store::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "application.member_granted",
         "application",
         Some(application_id),
+        Some(serde_json::json!({
+            "targetUserId": target_user_id,
+            "role": role,
+            "applicationId": application_id,
+        })),
     )
     .await?;
     Ok(())
@@ -352,12 +404,16 @@ pub async fn revoke_member(
         target_user_id,
     )
     .await?;
-    application_store::audit(
+    application_store::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "application.member_revoked",
         "application",
         Some(application_id),
+        Some(serde_json::json!({
+            "targetUserId": target_user_id,
+            "applicationId": application_id,
+        })),
     )
     .await?;
     Ok(())

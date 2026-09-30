@@ -1,5 +1,7 @@
 use crate::{
-    database::explorer, error::AppError, services::authentication::AuthenticatedUser,
+    database::{applications, explorer},
+    error::AppError,
+    services::authentication::AuthenticatedUser,
     state::InstalledState,
 };
 
@@ -153,6 +155,30 @@ pub async fn delete_records(
         &validated_ids,
     )
     .await?;
+
+    if count > 0 {
+        let app_name = applications::get_application(&installed.database, &application_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|a| a.name);
+        applications::audit_with_metadata(
+            &installed.database,
+            Some(&user.id),
+            "telemetry.records_deleted",
+            "telemetry",
+            Some(&application_id),
+            Some(serde_json::json!({
+                "kind": kind,
+                "count": count,
+                "applicationId": application_id,
+                "applicationName": app_name,
+                "environmentId": environment_id,
+            })),
+        )
+        .await?;
+    }
+
     Ok(count)
 }
 
@@ -187,5 +213,27 @@ pub async fn reset_records(
         environment_id.as_deref(),
     )
     .await?;
+
+    let app_name = applications::get_application(&installed.database, &application_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|a| a.name);
+    applications::audit_with_metadata(
+        &installed.database,
+        Some(&user.id),
+        "telemetry.records_reset",
+        "telemetry",
+        Some(&application_id),
+        Some(serde_json::json!({
+            "kind": kind,
+            "count": count,
+            "applicationId": application_id,
+            "applicationName": app_name,
+            "environmentId": environment_id,
+        })),
+    )
+    .await?;
+
     Ok(count)
 }

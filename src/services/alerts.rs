@@ -68,12 +68,16 @@ pub async fn create(
     )
     .await?;
 
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "alert_rule.created",
         "alert_rule",
         Some(&id),
+        Some(serde_json::json!({
+            "name": name,
+            "applicationId": application_id,
+        })),
     )
     .await?;
 
@@ -116,12 +120,16 @@ pub async fn update(
     )
     .await?;
 
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "alert_rule.updated",
         "alert_rule",
         Some(id),
+        Some(serde_json::json!({
+            "name": name,
+            "applicationId": rule.application_id,
+        })),
     )
     .await?;
 
@@ -143,12 +151,16 @@ pub async fn delete(
         return Err(AppError::NotFound);
     }
 
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "alert_rule.deleted",
         "alert_rule",
         Some(id),
+        Some(serde_json::json!({
+            "name": rule.name,
+            "applicationId": rule.application_id,
+        })),
     )
     .await?;
 
@@ -184,12 +196,16 @@ pub async fn create_channel(
     validate_channel_config(kind, config).map_err(AppError::Validation)?;
     let id = alert_store::create_channel(&installed.database, name, kind, config, enabled).await?;
 
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "notification_channel.created",
         "notification_channel",
         Some(&id),
+        Some(serde_json::json!({
+            "name": name,
+            "kind": kind,
+        })),
     )
     .await?;
 
@@ -214,12 +230,16 @@ pub async fn update_channel(
     validate_channel_config(kind, config).map_err(AppError::Validation)?;
     alert_store::update_channel(&installed.database, id, name, kind, config, enabled).await?;
 
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "notification_channel.updated",
         "notification_channel",
         Some(id),
+        Some(serde_json::json!({
+            "name": name,
+            "kind": kind,
+        })),
     )
     .await?;
 
@@ -232,17 +252,25 @@ pub async fn delete_channel(
     id: &str,
 ) -> Result<(), AppError> {
     user.require("alerts.manage", None)?;
+    let channel = alert_store::list_channels(&installed.database)
+        .await
+        .ok()
+        .and_then(|chs| chs.into_iter().find(|c| c.id == id));
     let deleted = alert_store::delete_channel(&installed.database, id).await?;
     if !deleted {
         return Err(AppError::NotFound);
     }
 
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "notification_channel.deleted",
         "notification_channel",
         Some(id),
+        Some(serde_json::json!({
+            "name": channel.as_ref().map(|c| &c.name),
+            "kind": channel.as_ref().map(|c| &c.kind),
+        })),
     )
     .await?;
 

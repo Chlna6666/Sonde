@@ -310,12 +310,15 @@ pub async fn enable_2fa(
         &installed.secret_cipher.seal(secret)?,
     )
     .await?;
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "user.2fa_enabled",
         "user",
         Some(&user.id),
+        Some(serde_json::json!({
+            "username": user.username,
+        })),
     )
     .await?;
 
@@ -353,12 +356,15 @@ pub async fn disable_2fa(
     auth_store::disable_totp(&installed.database, &user.id).await?;
     auth_state::clear_totp_replay(&installed.database, &user.id).await?;
     auth_state::revoke_sessions_for_user(&installed.database, &user.id).await?;
-    applications::audit(
+    applications::audit_with_metadata(
         &installed.database,
         Some(&user.id),
         "user.2fa_disabled",
         "user",
         Some(&user.id),
+        Some(serde_json::json!({
+            "username": user.username,
+        })),
     )
     .await?;
 
