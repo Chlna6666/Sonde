@@ -2,6 +2,7 @@ use sea_orm_migration::prelude::*;
 
 mod alert_delivery_queue;
 mod auth_shared_state;
+mod cleanup_launcher_version;
 mod columns;
 mod daily_rollups;
 mod device_activity_days;
@@ -28,6 +29,7 @@ mod user_rollups;
 
 use alert_delivery_queue::AlertDeliveryQueue;
 use auth_shared_state::SharedAuthState;
+use cleanup_launcher_version::CleanupLauncherVersion;
 use columns::{bigint, create_index, create_table, string};
 use daily_rollups::DailyRollups;
 use device_activity_days::DeviceActivityDays;
@@ -90,6 +92,7 @@ impl MigratorTrait for Migrator {
             Box::new(DeviceActivityHours),
             Box::new(DeviceSessions),
             Box::new(UserIdentityUniqueness),
+            Box::new(CleanupLauncherVersion),
         ]
     }
 }

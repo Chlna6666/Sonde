@@ -181,3 +181,49 @@ async fn loads_device_facts_for_telemetry_enrichment() -> Result<(), Box<dyn std
     assert_eq!(facts.os.as_deref(), Some("windows"));
     Ok(())
 }
+
+#[tokio::test]
+async fn drops_legacy_launcher_version_column_and_allows_observe() -> Result<(), Box<dyn std::error::Error>> {
+    let database = database::connect("sqlite::memory:").await?;
+    database::migrate(&database).await?;
+
+    database
+        .execute_unprepared(
+            "ALTER TABLE telemetry_devices ADD COLUMN launcher_version_changes INTEGER NOT NULL",
+        )
+        .await?;
+
+    let manager = sea_orm_migration::prelude::SchemaManager::new(&database);
+    assert!(manager.has_column("telemetry_devices", "launcher_version_changes").await?);
+
+    manager
+        .alter_table(
+            sea_orm_migration::prelude::Table::alter()
+                .table(Alias::new("telemetry_devices"))
+                .drop_column(Alias::new("launcher_version_changes"))
+                .to_owned(),
+        )
+        .await?;
+    assert!(!manager.has_column("telemetry_devices", "launcher_version_changes").await?);
+
+    let scope = TelemetryScope {
+        application_id: "app-device-state".into(),
+        environment_id: "env-device-state".into(),
+    };
+    let device_hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let now = chrono::Utc::now().timestamp_millis();
+    device_state::observe(
+        &database,
+        &scope,
+        device_hash,
+        &observation(
+            device_state::DeviceTelemetryKind::Heartbeat,
+            now,
+            now,
+            Some("1.0.0"),
+            Some("windows"),
+        ),
+    )
+    .await?;
+    Ok(())
+}

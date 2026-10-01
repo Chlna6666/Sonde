@@ -442,7 +442,11 @@ impl SondeClientBuilder {
         });
 
         // Fail fast on credentials/signature compatibility before opening durable queues.
-        transport.heartbeat().await?;
+        if let Err(error) = transport.heartbeat().await {
+            if !error.is_retryable() {
+                return Err(error);
+            }
+        }
 
         let heartbeat_interval = self.heartbeat_interval;
         let delivery = self.delivery;
