@@ -99,6 +99,16 @@ impl SondeClient {
         }
     }
 
+    /// Create a client builder using an in-memory, tamper-resistant platform machine identifier.
+    pub fn from_machine(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        salt: Option<&str>,
+    ) -> Result<SondeClientBuilder> {
+        let device_id = crate::device_id::machine_device_id(salt)?;
+        Ok(Self::builder(base_url, api_key, device_id))
+    }
+
     /// Send a heartbeat immediately. Normal heartbeat scheduling remains automatic after connect.
     pub async fn heartbeat(&self) -> Result<()> {
         self.ensure_running()?;

@@ -1,60 +1,101 @@
-use std::{
-    fs::{self, OpenOptions},
-    io::Write,
-    path::Path,
-    thread,
-    time::Duration,
-};
-
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::error::{Error, Result};
 
 const DEVICE_ID_MIN_BYTES: usize = 4;
 const DEVICE_ID_MAX_BYTES: usize = 128;
-const CREATE_RACE_READ_ATTEMPTS: usize = 20;
-const CREATE_RACE_READ_DELAY: Duration = Duration::from_millis(5);
+const DEFAULT_MACHINE_SALT: &str = "sonde-machine-id-v1";
 
 /// Generate a high-entropy pseudonymous installation/device identifier.
 ///
 /// The identifier is a random UUID v4 and therefore contains no hardware, account, or creation-time
-/// information. Persist it and reuse it for the lifetime of the installation.
+/// information.
 pub fn generate_device_id() -> String {
     Uuid::new_v4().to_string()
 }
 
-/// Load a stable installation/device identifier from `path`, creating it on first launch.
+/// Derive a stable, tamper-resistant pseudonymous device identifier from the host machine.
 ///
-/// Creation uses `create_new` so concurrent processes cannot overwrite an identifier that another
-/// process has already claimed. A malformed existing file is reported instead of silently rotating
-/// identity, because replacing it would make Sonde count the same installation as a new device.
-pub fn load_or_create_device_id(path: impl AsRef<Path>) -> Result<String> {
-    let path = path.as_ref();
-    if let Some(device_id) = read_device_id(path, false)? {
-        return Ok(device_id);
-    }
+/// The identifier is derived in-memory by computing a salted SHA-256 hash of the platform's
+/// hardware or OS installation identifier (e.g. Windows MachineGuid, Linux /etc/machine-id, or macOS
+/// platform UUID). It does NOT write any files to disk, preventing users or malicious scripts
+/// from resetting, duplicating, or spoofing identities by modifying or deleting local files.
+pub fn machine_device_id(salt: Option<&str>) -> Result<String> {
+    let raw = platform_machine_code()
+        .ok_or_else(|| Error::InvalidConfiguration("failed to detect platform machine identifier".into()))?;
+    let salt = salt.unwrap_or(DEFAULT_MACHINE_SALT);
+    let mut hasher = Sha256::new();
+    hasher.update(salt.as_bytes());
+    hasher.update(b":");
+    hasher.update(raw.as_bytes());
+    let hash = hex::encode(hasher.finalize());
+    Ok(hash)
+}
 
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent).map_err(|source| storage_error(parent, source))?;
-    }
+#[cfg(target_os = "windows")]
+fn platform_machine_code() -> Option<String> {
+    use winreg::RegKey;
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
 
-    let generated = generate_device_id();
-    match OpenOptions::new().write(true).create_new(true).open(path) {
-        Ok(mut file) => {
-            file.write_all(generated.as_bytes())
-                .map_err(|source| storage_error(path, source))?;
-            file.sync_all()
-                .map_err(|source| storage_error(path, source))?;
-            Ok(generated)
-        }
-        Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
-            read_after_create_race(path)
-        }
-        Err(source) => Err(storage_error(path, source)),
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let key = hklm
+        .open_subkey_with_flags(
+            "SOFTWARE\\Microsoft\\Cryptography",
+            KEY_READ | KEY_WOW64_64KEY,
+        )
+        .ok()?;
+    let guid: String = key.get_value("MachineGuid").ok()?;
+    let guid = guid.trim().to_string();
+    if guid.is_empty() {
+        None
+    } else {
+        Some(format!("win:{}", guid))
     }
+}
+
+#[cfg(target_os = "linux")]
+fn platform_machine_code() -> Option<String> {
+    if let Ok(id) = std::fs::read_to_string("/etc/machine-id") {
+        let id = id.trim();
+        if !id.is_empty() {
+            return Some(format!("linux:{}", id));
+        }
+    }
+    if let Ok(id) = std::fs::read_to_string("/var/lib/dbus/machine-id") {
+        let id = id.trim();
+        if !id.is_empty() {
+            return Some(format!("linux:{}", id));
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn platform_machine_code() -> Option<String> {
+    let output = std::process::Command::new("ioreg")
+        .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            if line.contains("IOPlatformUUID") {
+                if let Some(pos) = line.find('=') {
+                    let uuid = line[pos + 1..].trim().trim_matches('"').trim();
+                    if !uuid.is_empty() {
+                        return Some(format!("macos:{}", uuid));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+fn platform_machine_code() -> Option<String> {
+    None
 }
 
 pub(crate) fn validate_device_id(value: &str) -> std::result::Result<&str, &'static str> {
@@ -70,49 +111,9 @@ pub(crate) fn validate_device_id(value: &str) -> std::result::Result<&str, &'sta
     Ok(value)
 }
 
-fn read_after_create_race(path: &Path) -> Result<String> {
-    for _ in 0..CREATE_RACE_READ_ATTEMPTS {
-        if let Some(device_id) = read_device_id(path, true)? {
-            return Ok(device_id);
-        }
-        thread::sleep(CREATE_RACE_READ_DELAY);
-    }
-
-    read_device_id(path, false)?.ok_or_else(|| Error::InvalidStoredDeviceId {
-        path: path.to_path_buf(),
-        reason: "device ID file disappeared during concurrent creation",
-    })
-}
-
-fn read_device_id(path: &Path, tolerate_empty: bool) -> Result<Option<String>> {
-    let contents = match fs::read_to_string(path) {
-        Ok(contents) => contents,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => return Err(storage_error(path, source)),
-    };
-    let device_id = contents.trim();
-    if tolerate_empty && device_id.is_empty() {
-        return Ok(None);
-    }
-    validate_device_id(device_id).map_err(|reason| Error::InvalidStoredDeviceId {
-        path: path.to_path_buf(),
-        reason,
-    })?;
-    Ok(Some(device_id.to_owned()))
-}
-
-fn storage_error(path: &Path, source: std::io::Error) -> Error {
-    Error::DeviceIdStorage {
-        path: path.to_path_buf(),
-        source,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
-    use super::{generate_device_id, load_or_create_device_id, validate_device_id};
+    use super::{generate_device_id, machine_device_id, validate_device_id};
 
     #[test]
     fn generated_device_id_matches_server_contract() {
@@ -121,13 +122,17 @@ mod tests {
     }
 
     #[test]
-    fn persists_and_reuses_device_id() -> crate::Result<()> {
-        let root = std::env::temp_dir().join(format!("sonde-sdk-test-{}", generate_device_id()));
-        let path = root.join("device-id");
-        let first = load_or_create_device_id(&path)?;
-        let second = load_or_create_device_id(&path)?;
-        assert_eq!(first, second);
-        let _ = fs::remove_dir_all(root);
-        Ok(())
+    fn machine_device_id_is_stable_and_valid() {
+        let id1 = machine_device_id(None);
+        if let Ok(id1) = id1 {
+            assert_eq!(id1.len(), 64);
+            assert_eq!(validate_device_id(&id1), Ok(id1.as_str()));
+
+            let id2 = machine_device_id(None).unwrap();
+            assert_eq!(id1, id2, "machine_device_id must be stable across multiple calls");
+
+            let id_custom_salt = machine_device_id(Some("custom-salt")).unwrap();
+            assert_ne!(id1, id_custom_salt, "different salts must produce different IDs");
+        }
     }
 }
