@@ -3,6 +3,8 @@
 /sdk/rust/target/
 /web/dist/
 /web/node_modules/
+[Bb]in/
+[Oo]bj/
 
 # Runtime data: configuration, database files, and generated password pepper
 /data/

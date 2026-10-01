@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>Sonde</RootNamespace>
+    <AssemblyName>Sonde</AssemblyName>
+
+    <PackageId>Sonde.SDK</PackageId>
+    <Version>0.1.7</Version>
+    <Authors>Chlna6666</Authors>
+    <Description>Official .NET 10 SDK for Sonde telemetry ingest</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/Chlna6666/Sonde</RepositoryUrl>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Sonde.Tests" />
+  </ItemGroup>
+
+</Project>
