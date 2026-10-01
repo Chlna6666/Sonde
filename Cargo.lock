@@ -21,9 +21,9 @@ dependencies = [
 
 [[package]]
 name = "actix-http"
-version = "3.13.6"
+version = "3.18.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c4f07a021937af76abef4c458a0d6b25f63f82eec5394354deeb7de0551f523"
+checksum = "e2ab7d72c0bb26f10df574ea560177b4de2f27ee8f421b2c1e9b75628bd9db23"
 dependencies = [
  "actix-codec",
  "actix-service",
@@ -2539,7 +2539,7 @@ dependencies = [
  "bytes",
  "getrandom 0.4.3",
  "lru-slab",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rand_pcg",
  "ring",
  "rustc-hash",
@@ -2610,9 +2610,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
+checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
 dependencies = [
  "chacha20",
  "getrandom 0.4.3",
@@ -2952,9 +2952,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm"
-version = "2.0.3"
+version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e01d46a6e22b8ce84aba64fe97011669859bc7f7120a47f5b58839dcaaa4545c"
+checksum = "40bc08e0aa1963295a30473f98d9b4c9c2b0b3a028381e0143cb2647d0a59a32"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3000,9 +3000,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm-cli"
-version = "2.0.3"
+version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2479056c3f9c96c8ec5b9091103050b5f3a0532c615d8ab01d3edb81af5c65a8"
+checksum = "04469c4a54e7271fe3fe2b8140102a2cd2eb7e48129a3afcd013b9909ddebc3c"
 dependencies = [
  "chrono",
  "clap",
@@ -3020,9 +3020,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm-macros"
-version = "2.0.3"
+version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e24c82fc1e76c014dffe5ecdac8f654da73161d703a16ea13414581e07459c83"
+checksum = "91fa8c81c20fc8cfe78d22d9a2721ca5ef151dc4a8a7b372de218aaba33733fa"
 dependencies = [
  "heck 0.5.0",
  "itertools 0.14.0",
@@ -3036,9 +3036,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm-migration"
-version = "2.0.3"
+version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9acbadc98b17aa94657122dae4b5a840c7cebe6359a5ba15d8eaa233768942a5"
+checksum = "07970137dbbed6daf56a2429db349abfb68ed1c79206957c30d4a0e9ea808c08"
 dependencies = [
  "async-trait",
  "clap",
@@ -3287,7 +3287,7 @@ dependencies = [
  "hmac",
  "mimalloc",
  "mime_guess",
- "rand 0.10.2",
+ "rand 0.10.3",
  "reqwest",
  "rust-embed",
  "sea-orm",
@@ -3459,7 +3459,7 @@ dependencies = [
  "log",
  "md-5",
  "memchr",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rust_decimal",
  "serde",
  "serde_json",
@@ -3599,18 +3599,18 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
