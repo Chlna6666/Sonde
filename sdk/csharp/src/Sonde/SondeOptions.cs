@@ -20,7 +20,7 @@ public sealed class SondeOptions
     public required string BaseUrl { get; set; }
     public required string ApiKey { get; set; }
     public string? DeviceId { get; set; }
-    public string UserAgent { get; set; } = "sonde-csharp-sdk/0.1.8";
+    public string UserAgent { get; set; } = "sonde-csharp-sdk/0.1.9";
     public DeviceFacts Facts { get; set; } = DeviceFacts.CreatePlatformDefaults();
     public TimeSpan? HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(60);
     public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(10);
