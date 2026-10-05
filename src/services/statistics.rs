@@ -28,14 +28,18 @@ pub fn validate_days(days: Option<u32>) -> Result<Option<u32>, AppError> {
 pub async fn overview(
     installed: &InstalledState,
     user: &AuthenticatedUser,
+    application_id: Option<&str>,
     days: Option<u32>,
 ) -> Result<Overview, AppError> {
-    user.require("telemetry.read", None)?;
+    user.require("telemetry.read", application_id)?;
+    if let Some(app_id) = application_id {
+        crate::security::validate_safe_identifier("applicationId", app_id)?;
+    }
     let days = validate_days(days)?;
-    let record = stats::overview(&installed.database, days).await?;
+    let record = stats::overview(&installed.database, application_id, days).await?;
     let activity = activity_stats::query(
         &installed.database,
-        None,
+        application_id,
         None,
         statistics_since(days),
         days,

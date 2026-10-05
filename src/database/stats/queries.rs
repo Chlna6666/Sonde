@@ -147,17 +147,33 @@ pub struct AppTelemetryStats {
     pub system_languages: Vec<DistributionItem>,
 }
 
-pub async fn overview(database: &DatabaseConnection, days: Option<u32>) -> Result<Overview, DbErr> {
+pub async fn overview(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+    days: Option<u32>,
+) -> Result<Overview, DbErr> {
     let now = chrono::Utc::now().timestamp_millis();
     let since_24h = now - 86_400_000;
     let since_7d = now - 7 * 86_400_000;
     let since_30d = now - 30 * 86_400_000;
 
-    let applications = count(database, "applications", None).await?;
+    let applications = match application_id {
+        Some(app_id) => {
+            if crate::database::applications::get_application(database, app_id)
+                .await?
+                .is_some()
+            {
+                1
+            } else {
+                0
+            }
+        }
+        None => count(database, "applications", None).await?,
+    };
     let events_24h = telemetry_count(
         database,
         crate::database::telemetry_count::RollupCountKind::Events,
-        None,
+        application_id,
         None,
         Some(since_24h),
         None,
@@ -166,7 +182,7 @@ pub async fn overview(database: &DatabaseConnection, days: Option<u32>) -> Resul
     let metrics_24h = telemetry_count(
         database,
         crate::database::telemetry_count::RollupCountKind::Metrics,
-        None,
+        application_id,
         None,
         Some(since_24h),
         None,
@@ -175,7 +191,7 @@ pub async fn overview(database: &DatabaseConnection, days: Option<u32>) -> Resul
     let logs_24h = telemetry_count(
         database,
         crate::database::telemetry_count::RollupCountKind::Logs,
-        None,
+        application_id,
         None,
         Some(since_24h),
         None,
@@ -184,44 +200,52 @@ pub async fn overview(database: &DatabaseConnection, days: Option<u32>) -> Resul
     let errors_24h = telemetry_count(
         database,
         crate::database::telemetry_count::RollupCountKind::ErrorLogs,
-        None,
+        application_id,
         None,
         Some(since_24h),
         None,
     )
     .await?;
 
-    let active_users_24h = distinct_users(database, since_24h, None, None).await?;
-    let total_users = count_distinct_users(database, None, None, None).await?;
+    let active_users_24h = distinct_users(database, since_24h, application_id, None).await?;
+    let total_users = count_distinct_users(database, application_id, None, None).await?;
     let dau = active_users_24h;
-    let wau = distinct_users(database, since_7d, None, None).await?;
-    let mau = distinct_users(database, since_30d, None, None).await?;
+    let wau = distinct_users(database, since_7d, application_id, None).await?;
+    let mau = distinct_users(database, since_30d, application_id, None).await?;
 
     let bucket_expr = time_bucket_expr(database.get_database_backend(), days);
     let (since_ts, prev_since_ts, prev_until_ts) = statistics_window(now, days);
-    let growth =
-        compute_growth(database, None, None, since_ts, prev_since_ts, prev_until_ts).await?;
-    let user_growth = compute_user_growth(database, None, None, since_ts, days).await?;
-    let event_trend = event_trend(database, None, None, days, since_ts, &bucket_expr).await?;
+    let growth = compute_growth(
+        database,
+        application_id,
+        None,
+        since_ts,
+        prev_since_ts,
+        prev_until_ts,
+    )
+    .await?;
+    let user_growth = compute_user_growth(database, application_id, None, since_ts, days).await?;
+    let event_trend =
+        event_trend(database, application_id, None, days, since_ts, &bucket_expr).await?;
     let trend = merge_activity_trend(event_trend, &user_growth);
 
     let total_events = telemetry_count(
         database,
         crate::database::telemetry_count::RollupCountKind::Events,
-        None,
+        application_id,
         None,
         since_ts,
         None,
     )
     .await?;
     let version_timeline =
-        compute_version_timeline(database, None, None, since_ts, &bucket_expr).await?;
+        compute_version_timeline(database, application_id, None, since_ts, &bucket_expr).await?;
     let version_series =
-        compute_version_series(database, None, None, since_ts, &bucket_expr).await?;
+        compute_version_series(database, application_id, None, since_ts, &bucket_expr).await?;
 
     let os_dimension = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
         database,
-        None,
+        application_id,
         None,
         since_ts,
         crate::database::dimension_rollup::DIMENSION_OS,
@@ -244,12 +268,13 @@ pub async fn overview(database: &DatabaseConnection, days: Option<u32>) -> Resul
         )
     } else {
         (
-            os_family_distribution(database, None, None, since_ts, total_events).await?,
-            distribution_all(database, None, None, since_ts, "os", total_events).await?,
-            build_distribution(database, None, None, since_ts, total_events).await?,
+            os_family_distribution(database, application_id, None, since_ts, total_events).await?,
+            distribution_all(database, application_id, None, since_ts, "os", total_events).await?,
+            build_distribution(database, application_id, None, since_ts, total_events).await?,
         )
     };
-    let system_languages = system_language_distribution(database, None, None, since_ts).await?;
+    let system_languages =
+        system_language_distribution(database, application_id, None, since_ts).await?;
 
     Ok(Overview {
         applications,
@@ -1044,7 +1069,7 @@ async fn build_distribution(
     total_events: u64,
 ) -> Result<Vec<DistributionItem>, DbErr> {
     let build_expr = "CASE WHEN os LIKE 'Windows % Build %' THEN 'Win ' || SUBSTR(os, 9, INSTR(SUBSTR(os, 9), ' Build ') - 1) || ' (' || SUBSTR(os, INSTR(os, 'Build ') + 6) || ')' WHEN os LIKE 'Windows %' THEN os WHEN os LIKE 'Linux (% Linux %)' THEN REPLACE(SUBSTR(os, 8, LENGTH(os) - 8), ' Linux', '') WHEN os LIKE 'Linux (%)' THEN SUBSTR(os, 8, LENGTH(os) - 8) WHEN os LIKE 'Mac OS X %' THEN REPLACE(os, 'Mac OS X ', 'macOS ') WHEN os LIKE 'Darwin %' THEN REPLACE(os, 'Darwin ', 'macOS ') WHEN os LIKE 'Android%' THEN os WHEN os LIKE 'iOS%' THEN os ELSE COALESCE(os, 'Unknown') END";
-    grouped_distribution(
+    let items = grouped_distribution(
         database,
         application_id,
         environment_id,
@@ -1054,7 +1079,11 @@ async fn build_distribution(
         total_events,
         Some(100),
     )
-    .await
+    .await?;
+    Ok(items
+        .into_iter()
+        .filter(|item| !item.name.trim().is_empty() && !item.name.eq_ignore_ascii_case("unknown"))
+        .collect())
 }
 
 async fn distribution_all(

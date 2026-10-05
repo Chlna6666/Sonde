@@ -183,7 +183,8 @@ async fn loads_device_facts_for_telemetry_enrichment() -> Result<(), Box<dyn std
 }
 
 #[tokio::test]
-async fn drops_legacy_launcher_version_column_and_allows_observe() -> Result<(), Box<dyn std::error::Error>> {
+async fn drops_legacy_launcher_version_column_and_allows_observe()
+-> Result<(), Box<dyn std::error::Error>> {
     let database = database::connect("sqlite::memory:").await?;
     database::migrate(&database).await?;
 
@@ -194,7 +195,11 @@ async fn drops_legacy_launcher_version_column_and_allows_observe() -> Result<(),
         .await?;
 
     let manager = sea_orm_migration::prelude::SchemaManager::new(&database);
-    assert!(manager.has_column("telemetry_devices", "launcher_version_changes").await?);
+    assert!(
+        manager
+            .has_column("telemetry_devices", "launcher_version_changes")
+            .await?
+    );
 
     manager
         .alter_table(
@@ -204,7 +209,11 @@ async fn drops_legacy_launcher_version_column_and_allows_observe() -> Result<(),
                 .to_owned(),
         )
         .await?;
-    assert!(!manager.has_column("telemetry_devices", "launcher_version_changes").await?);
+    assert!(
+        !manager
+            .has_column("telemetry_devices", "launcher_version_changes")
+            .await?
+    );
 
     let scope = TelemetryScope {
         application_id: "app-device-state".into(),

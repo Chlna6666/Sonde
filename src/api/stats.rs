@@ -10,8 +10,11 @@ use crate::{
 };
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct OverviewQuery {
     days: Option<u32>,
+    #[serde(alias = "application_id")]
+    application_id: Option<String>,
 }
 
 pub fn configure(config: &mut web::ServiceConfig) {
@@ -26,5 +29,6 @@ async fn overview(
     let _permit = state.try_acquire_analytics()?;
     let installed = state.installed().await?;
     let user = authentication::authenticate(&installed, &request).await?;
-    Ok(HttpResponse::Ok().json(statistics::overview(&installed, &user, query.days).await?))
+    let app_id = query.application_id.as_deref().filter(|s| !s.is_empty());
+    Ok(HttpResponse::Ok().json(statistics::overview(&installed, &user, app_id, query.days).await?))
 }

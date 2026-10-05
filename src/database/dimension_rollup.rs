@@ -333,7 +333,9 @@ pub fn aggregate_os_families(points: &[DimensionDayCount]) -> Vec<DimensionCount
 }
 
 pub fn aggregate_os_builds(points: &[DimensionDayCount]) -> Vec<DimensionCount> {
-    aggregate_transformed(points, os_build_name)
+    let mut builds = aggregate_transformed(points, os_build_name);
+    builds.retain(|b| !b.value.trim().is_empty() && !b.value.eq_ignore_ascii_case("unknown"));
+    builds
 }
 
 fn aggregate_transformed<F>(points: &[DimensionDayCount], transform: F) -> Vec<DimensionCount>
