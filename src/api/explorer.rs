@@ -41,6 +41,13 @@ struct ResetRecordsRequest {
     environment_id: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CleanInvalidRequest {
+    #[serde(alias = "application_id")]
+    application_id: Option<String>,
+}
+
 pub fn configure(config: &mut web::ServiceConfig) {
     config.service(
         web::scope("/api/v1/admin/explorer")
@@ -50,7 +57,8 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{kind}/delete", web::post().to(delete_records))
             .route("/{kind}", web::delete().to(delete_records))
             .route("/{kind}/reset", web::post().to(reset_records))
-            .route("/{kind}/reset", web::delete().to(reset_records)),
+            .route("/{kind}/reset", web::delete().to(reset_records))
+            .route("/clean-invalid", web::post().to(clean_invalid_data)),
     );
 }
 
@@ -125,6 +133,18 @@ async fn reset_records(
     )
     .await?;
     Ok(HttpResponse::Ok().json(serde_json::json!({ "deleted": deleted })))
+}
+
+async fn clean_invalid_data(
+    state: web::Data<Arc<AppState>>,
+    request: HttpRequest,
+    body: web::Json<CleanInvalidRequest>,
+) -> Result<HttpResponse, AppError> {
+    let installed = state.installed().await?;
+    let user = authentication::authenticate(&installed, &request).await?;
+    let app_id = body.application_id.as_deref().filter(|s| !s.is_empty());
+    let result = explorer::clean_invalid_data(&installed, &user, app_id).await?;
+    Ok(HttpResponse::Ok().json(result))
 }
 
 async fn authorize(

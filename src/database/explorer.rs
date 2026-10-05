@@ -1,6 +1,6 @@
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbErr, QueryResult,
-    sea_query::{Alias, Expr, ExprTrait, Order, Query},
+    sea_query::{Alias, Condition, Expr, ExprTrait, Func, Order, Query},
 };
 use serde::Serialize;
 use serde_json::value::RawValue;
@@ -381,4 +381,150 @@ pub async fn reset_records(
     }
 
     Ok(total_deleted)
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanInvalidResult {
+    pub deleted_events: u64,
+    pub deleted_dimensions: u64,
+    pub deleted_metrics: u64,
+    pub deleted_logs: u64,
+    pub deleted_devices: u64,
+    pub total_deleted: u64,
+}
+
+pub async fn clean_invalid_data(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+) -> Result<CleanInvalidResult, DbErr> {
+    let mut result = CleanInvalidResult::default();
+
+    // 1. Delete invalid events (missing os, empty os, unknown os, missing/empty anonymous_id, or orphaned)
+    {
+        let mut delete = Query::delete();
+        delete.from_table(Alias::new("events"));
+        let mut cond = Condition::any()
+            .add(Expr::col(Alias::new("os")).is_null())
+            .add(Expr::col(Alias::new("os")).eq(""))
+            .add(Expr::expr(Func::lower(Expr::col(Alias::new("os")))).eq("unknown"))
+            .add(Expr::col(Alias::new("anonymous_id")).is_null())
+            .add(Expr::col(Alias::new("anonymous_id")).eq(""))
+            .add(Expr::expr(Func::lower(Expr::col(Alias::new("anonymous_id")))).eq("unknown"));
+        if application_id.is_none() {
+            let subquery = Query::select()
+                .column(Alias::new("id"))
+                .from(Alias::new("applications"))
+                .to_owned();
+            cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
+        }
+        delete.cond_where(cond);
+        if let Some(app_id) = application_id {
+            delete.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+        }
+        let statement = delete.to_owned();
+        result.deleted_events = database.execute(&statement).await?.rows_affected();
+    }
+
+    // 2. Delete invalid telemetry_daily_dimensions (empty/unknown dimension_value or orphaned)
+    {
+        let mut delete = Query::delete();
+        delete.from_table(Alias::new("telemetry_daily_dimensions"));
+        let mut cond = Condition::any()
+            .add(Expr::col(Alias::new("dimension_value")).is_null())
+            .add(Expr::col(Alias::new("dimension_value")).eq(""))
+            .add(Expr::expr(Func::lower(Expr::col(Alias::new("dimension_value")))).eq("unknown"));
+        if application_id.is_none() {
+            let subquery = Query::select()
+                .column(Alias::new("id"))
+                .from(Alias::new("applications"))
+                .to_owned();
+            cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
+        }
+        delete.cond_where(cond);
+        if let Some(app_id) = application_id {
+            delete.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+        }
+        let statement = delete.to_owned();
+        result.deleted_dimensions = database.execute(&statement).await?.rows_affected();
+    }
+
+    // 3. Delete invalid metric_points (empty name or orphaned)
+    {
+        let mut delete = Query::delete();
+        delete.from_table(Alias::new("metric_points"));
+        let mut cond = Condition::any()
+            .add(Expr::col(Alias::new("name")).is_null())
+            .add(Expr::col(Alias::new("name")).eq(""));
+        if application_id.is_none() {
+            let subquery = Query::select()
+                .column(Alias::new("id"))
+                .from(Alias::new("applications"))
+                .to_owned();
+            cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
+        }
+        delete.cond_where(cond);
+        if let Some(app_id) = application_id {
+            delete.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+        }
+        let statement = delete.to_owned();
+        result.deleted_metrics = database.execute(&statement).await?.rows_affected();
+    }
+
+    // 4. Delete invalid logs (empty level or orphaned)
+    {
+        let mut delete = Query::delete();
+        delete.from_table(Alias::new("logs"));
+        let mut cond = Condition::any()
+            .add(Expr::col(Alias::new("level")).is_null())
+            .add(Expr::col(Alias::new("level")).eq(""));
+        if application_id.is_none() {
+            let subquery = Query::select()
+                .column(Alias::new("id"))
+                .from(Alias::new("applications"))
+                .to_owned();
+            cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
+        }
+        delete.cond_where(cond);
+        if let Some(app_id) = application_id {
+            delete.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+        }
+        let statement = delete.to_owned();
+        result.deleted_logs = database.execute(&statement).await?.rows_affected();
+    }
+
+    // 5. Delete invalid telemetry_devices (empty/unknown last_os, empty/unknown id, or orphaned)
+    {
+        let mut delete = Query::delete();
+        delete.from_table(Alias::new("telemetry_devices"));
+        let mut cond = Condition::any()
+            .add(Expr::col(Alias::new("last_os")).is_null())
+            .add(Expr::col(Alias::new("last_os")).eq(""))
+            .add(Expr::expr(Func::lower(Expr::col(Alias::new("last_os")))).eq("unknown"))
+            .add(Expr::col(Alias::new("id")).is_null())
+            .add(Expr::col(Alias::new("id")).eq(""))
+            .add(Expr::expr(Func::lower(Expr::col(Alias::new("id")))).eq("unknown"));
+        if application_id.is_none() {
+            let subquery = Query::select()
+                .column(Alias::new("id"))
+                .from(Alias::new("applications"))
+                .to_owned();
+            cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
+        }
+        delete.cond_where(cond);
+        if let Some(app_id) = application_id {
+            delete.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+        }
+        let statement = delete.to_owned();
+        result.deleted_devices = database.execute(&statement).await?.rows_affected();
+    }
+
+    result.total_deleted = result
+        .deleted_events
+        .saturating_add(result.deleted_dimensions)
+        .saturating_add(result.deleted_metrics)
+        .saturating_add(result.deleted_logs)
+        .saturating_add(result.deleted_devices);
+
+    Ok(result)
 }

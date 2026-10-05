@@ -8,6 +8,7 @@ use crate::{
 pub use super::explorer_models::{
     EventRecord, ExplorerFilter, HistogramRecord, LogRecord, MetricRecord, Page,
 };
+pub use crate::database::explorer::CleanInvalidResult;
 
 pub async fn events(
     installed: &InstalledState,
@@ -236,4 +237,48 @@ pub async fn reset_records(
     .await?;
 
     Ok(count)
+}
+
+pub async fn clean_invalid_data(
+    installed: &InstalledState,
+    user: &AuthenticatedUser,
+    application_id: Option<&str>,
+) -> Result<CleanInvalidResult, AppError> {
+    user.require("apps.manage", application_id)?;
+    if let Some(app_id) = application_id {
+        crate::security::validate_safe_identifier("applicationId", app_id)?;
+    }
+
+    let result = explorer::clean_invalid_data(&installed.database, application_id).await?;
+
+    let app_name = if let Some(app_id) = application_id {
+        applications::get_application(&installed.database, app_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|a| a.name)
+    } else {
+        None
+    };
+
+    applications::audit_with_metadata(
+        &installed.database,
+        Some(&user.id),
+        "telemetry.invalid_data_deleted",
+        "telemetry",
+        application_id,
+        Some(serde_json::json!({
+            "totalDeleted": result.total_deleted,
+            "eventsDeleted": result.deleted_events,
+            "dimensionsDeleted": result.deleted_dimensions,
+            "metricsDeleted": result.deleted_metrics,
+            "logsDeleted": result.deleted_logs,
+            "devicesDeleted": result.deleted_devices,
+            "applicationId": application_id,
+            "applicationName": app_name,
+        })),
+    )
+    .await?;
+
+    Ok(result)
 }

@@ -240,3 +240,204 @@ async fn test_explorer_batch_delete_and_reset() -> Result<(), Box<dyn std::error
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_explorer_clean_invalid_data() -> Result<(), Box<dyn std::error::Error>> {
+    let database = database::connect("sqlite::memory:").await?;
+    database::migrate(&database).await?;
+
+    let config = InstallationConfig {
+        database_url: "sqlite::memory:".into(),
+        locale: "zh-CN".into(),
+        timezone: "Asia/Shanghai".into(),
+        secure_cookie: false,
+    };
+    let pepper = b"test-secret-pepper-32-bytes-long!";
+    let master_key = MasterKey::from_bytes([9_u8; 32]);
+    let state = InstalledState::new(
+        database.clone(),
+        config,
+        Arc::new(AuthSecurity::new(pepper)?),
+        &master_key,
+    )?;
+
+    let app_id = "test-clean-app";
+    let env_id = "test-clean-env";
+    let scope = IngestScope::for_test(app_id, env_id, "device-1");
+
+    let events = vec![
+        EventInput {
+            name: "valid_event".into(),
+            timestamp: None,
+            anonymous_id: None,
+            session_id: None,
+            app_version: Some("1.0.0".into()),
+            os: Some("Windows 11 Build 22631".into()),
+            system_language: None,
+            architecture: None,
+            attributes: Attributes::default(),
+            idempotency_key: None,
+        },
+        EventInput {
+            name: "invalid_event_null_os".into(),
+            timestamp: None,
+            anonymous_id: None,
+            session_id: None,
+            app_version: None,
+            os: None,
+            system_language: None,
+            architecture: None,
+            attributes: Attributes::default(),
+            idempotency_key: None,
+        },
+        EventInput {
+            name: "invalid_event_unknown_os".into(),
+            timestamp: None,
+            anonymous_id: None,
+            session_id: None,
+            app_version: None,
+            os: Some("unknown".into()),
+            system_language: None,
+            architecture: None,
+            attributes: Attributes::default(),
+            idempotency_key: None,
+        },
+    ];
+    let ev_receipt = telemetry::events(&state, &scope, events).await?;
+    assert_eq!(ev_receipt.accepted, 3);
+
+    let admin_user = AuthenticatedUser {
+        id: "user-admin".into(),
+        email: "admin@test.com".into(),
+        username: "admin".into(),
+        locale: "zh-CN".into(),
+        roles: vec!["Admin".into()],
+        grants: vec![PermissionGrant {
+            application_id: None,
+            permissions: vec!["*".into()],
+        }],
+        totp_enabled: false,
+    };
+
+    let result = explorer_service::clean_invalid_data(&state, &admin_user, Some(app_id)).await?;
+    assert_eq!(result.deleted_events, 2);
+    assert!(result.total_deleted >= 2);
+
+    let query_filter = ServiceFilter {
+        application_id: app_id.into(),
+        environment_id: Some(env_id.into()),
+        from: None,
+        to: None,
+        name: None,
+        level: None,
+        text: None,
+        page: 1,
+        page_size: 50,
+    };
+    let remaining_events = explorer_service::events(&state, &admin_user, &query_filter).await?;
+    assert_eq!(remaining_events.items.len(), 1);
+    assert_eq!(remaining_events.items[0].name, "valid_event");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_overview_filter_by_application() -> Result<(), Box<dyn std::error::Error>> {
+    let database = database::connect("sqlite::memory:").await?;
+    database::migrate(&database).await?;
+
+    let config = InstallationConfig {
+        database_url: "sqlite::memory:".into(),
+        locale: "zh-CN".into(),
+        timezone: "Asia/Shanghai".into(),
+        secure_cookie: false,
+    };
+    let pepper = b"test-secret-pepper-32-bytes-long!";
+    let master_key = MasterKey::from_bytes([9_u8; 32]);
+    let state = InstalledState::new(
+        database.clone(),
+        config,
+        Arc::new(AuthSecurity::new(pepper)?),
+        &master_key,
+    )?;
+
+    let app_a = "app-a";
+    let app_b = "app-b";
+    let env_id = "test-env";
+
+    // Ingest events for app A
+    let scope_a = IngestScope::for_test(app_a, env_id, "device-a");
+    let events_a = vec![EventInput {
+        name: "event_a".into(),
+        timestamp: None,
+        anonymous_id: None,
+        session_id: None,
+        app_version: Some("1.0.0".into()),
+        os: Some("Windows 11 Build 22631".into()),
+        system_language: None,
+        architecture: None,
+        attributes: Attributes::default(),
+        idempotency_key: None,
+    }];
+    telemetry::events(&state, &scope_a, events_a).await?;
+
+    // Ingest events for app B
+    let scope_b = IngestScope::for_test(app_b, env_id, "device-b");
+    let events_b = vec![
+        EventInput {
+            name: "event_b1".into(),
+            timestamp: None,
+            anonymous_id: None,
+            session_id: None,
+            app_version: Some("2.0.0".into()),
+            os: Some("Linux (Ubuntu 24.04 Linux)".into()),
+            system_language: None,
+            architecture: None,
+            attributes: Attributes::default(),
+            idempotency_key: None,
+        },
+        EventInput {
+            name: "event_b2".into(),
+            timestamp: None,
+            anonymous_id: None,
+            session_id: None,
+            app_version: Some("2.0.0".into()),
+            os: Some("Linux (Ubuntu 24.04 Linux)".into()),
+            system_language: None,
+            architecture: None,
+            attributes: Attributes::default(),
+            idempotency_key: None,
+        },
+    ];
+    telemetry::events(&state, &scope_b, events_b).await?;
+
+    let admin_user = AuthenticatedUser {
+        id: "user-admin".into(),
+        email: "admin@test.com".into(),
+        username: "admin".into(),
+        locale: "zh-CN".into(),
+        roles: vec!["Admin".into()],
+        grants: vec![PermissionGrant {
+            application_id: None,
+            permissions: vec!["*".into()],
+        }],
+        totp_enabled: false,
+    };
+
+    // Global overview (all applications)
+    let overview_all =
+        sonde::services::statistics::overview(&state, &admin_user, None, Some(30)).await?;
+    assert_eq!(overview_all.events_24h, 3);
+
+    // Filter by App A
+    let overview_a =
+        sonde::services::statistics::overview(&state, &admin_user, Some(app_a), Some(30)).await?;
+    assert_eq!(overview_a.events_24h, 1);
+
+    // Filter by App B
+    let overview_b =
+        sonde::services::statistics::overview(&state, &admin_user, Some(app_b), Some(30)).await?;
+    assert_eq!(overview_b.events_24h, 2);
+
+    Ok(())
+}
