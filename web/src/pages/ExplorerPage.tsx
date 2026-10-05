@@ -67,6 +67,10 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
   const [resetScope, setResetScope] = useState<"kind" | "all">("kind");
   const [resetting, setResetting] = useState(false);
 
+  // Clean Invalid Data
+  const [cleanModalOpen, setCleanModalOpen] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+
   useEffect(() => {
     void api<Application[]>("/api/v1/admin/applications")
       .then((items) => {
@@ -213,6 +217,28 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
     }
   }
 
+  async function executeCleanInvalid() {
+    setCleaning(true);
+    try {
+      const res = await api<{ totalDeleted: number }>("/api/v1/admin/explorer/clean-invalid", {
+        method: "POST",
+        body: JSON.stringify({
+          applicationId: applicationId || undefined,
+        }),
+      });
+      setSelectedIds(new Set());
+      setSuccessMsg(t("overview.cleanInvalidSuccess", { count: res.totalDeleted }));
+      setTimeout(() => setSuccessMsg(""), 4000);
+      setCleanModalOpen(false);
+      setPage(1);
+      void load();
+    } catch (cause) {
+      showError(cause);
+    } finally {
+      setCleaning(false);
+    }
+  }
+
   const kinds: { value: Kind; label: string; icon: typeof Activity }[] = [
     { value: "events", label: t("explorer.events"), icon: Activity },
     { value: "metrics", label: t("explorer.metrics"), icon: Radio },
@@ -261,6 +287,16 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
             })}
           </div>
 
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCleanModalOpen(true)}
+            icon={<Trash2 size={14} className="text-[var(--danger)]" />}
+            className="text-[var(--danger)] hover:bg-[var(--danger-subtle)] hover:border-[var(--danger)]/40 text-xs font-semibold"
+            title={t("explorer.cleanInvalid")}
+          >
+            {t("explorer.cleanInvalid")}
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -735,6 +771,42 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
               {t("explorer.confirmResetWarning")}
             </div>
           </div>
+        </Modal>
+      ) : null}
+
+      {/* Clean Invalid Data Modal */}
+      {cleanModalOpen ? (
+        <Modal
+          isOpen={true}
+          onClose={() => setCleanModalOpen(false)}
+          title={t("overview.cleanInvalidTitle")}
+          icon={<Trash2 size={18} className="text-[var(--danger)]" />}
+          size="sm"
+          actions={
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setCleanModalOpen(false)}
+                disabled={cleaning}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => void executeCleanInvalid()}
+                disabled={cleaning}
+                icon={cleaning ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
+              >
+                {cleaning ? t("overview.cleaning") : t("overview.confirmClean")}
+              </Button>
+            </div>
+          }
+        >
+          <p className="text-xs text-[var(--muted)] leading-relaxed m-0">
+            {t("explorer.cleanInvalidPrompt")}
+          </p>
         </Modal>
       ) : null}
     </div>

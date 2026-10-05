@@ -284,7 +284,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             className="page-container"
           >
-            <Outlet />
+            <Outlet context={{ user }} />
           </motion.div>
         </main>
       </div>

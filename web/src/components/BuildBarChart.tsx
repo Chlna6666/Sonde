@@ -36,6 +36,11 @@ export function BuildBarChart({
   const { t } = useTranslation();
   const [activeFamily, setActiveFamily] = useState<PlatformFamily | "all">("all");
 
+  const filteredItems = useMemo(
+    () => (items ?? []).filter((item) => item.name && item.name.trim() !== "" && item.name.toLowerCase() !== "unknown"),
+    [items]
+  );
+
   // Group items by platform family
   const { windowsItems, linuxItems, macosItems, mobileItems, hasWindows, hasLinux, hasMac, hasMobile } =
     useMemo(() => {
@@ -44,13 +49,12 @@ export function BuildBarChart({
       const mac: BuildItem[] = [];
       const mob: BuildItem[] = [];
 
-      for (const item of items ?? []) {
+      for (const item of filteredItems) {
         const fam = getPlatformFamily(item.name);
         if (fam === "windows") win.push(item);
         else if (fam === "linux") lin.push(item);
         else if (fam === "macos") mac.push(item);
         else if (fam === "mobile") mob.push(item);
-        else lin.push(item);
       }
 
       return {
@@ -63,11 +67,11 @@ export function BuildBarChart({
         hasMac: mac.length > 0,
         hasMobile: mob.length > 0,
       };
-    }, [items]);
+    }, [filteredItems]);
 
   // Compute items to display
   const chartData = useMemo(() => {
-    if (!items || items.length === 0) return [];
+    if (!filteredItems || filteredItems.length === 0) return [];
 
     let targetItems: BuildItem[] = [];
 
@@ -87,7 +91,7 @@ export function BuildBarChart({
         const topOther = [...macosItems, ...mobileItems].slice(0, 2);
         targetItems = [...topWin, ...topLin, ...topOther];
       } else {
-        targetItems = items.slice(0, 10);
+        targetItems = filteredItems.slice(0, 10);
       }
     }
 
@@ -99,9 +103,9 @@ export function BuildBarChart({
       fill: getPlatformColor(b.name),
       family: getPlatformFamily(b.name),
     }));
-  }, [items, activeFamily, windowsItems, linuxItems, macosItems, mobileItems, hasWindows, hasLinux]);
+  }, [filteredItems, activeFamily, windowsItems, linuxItems, macosItems, mobileItems, hasWindows, hasLinux]);
 
-  if (!items || items.length === 0) {
+  if (!filteredItems || filteredItems.length === 0) {
     return (
       <div
         className="w-full flex items-center justify-center text-xs text-[var(--muted)]"
@@ -129,7 +133,7 @@ export function BuildBarChart({
           onClick={() => setActiveFamily("all")}
         >
           <span>{t("builds.allSystems")}</span>
-          <span className="opacity-75 font-mono text-[10px]">({items.length})</span>
+          <span className="opacity-75 font-mono text-[10px]">({filteredItems.length})</span>
         </button>
 
         {hasWindows ? (

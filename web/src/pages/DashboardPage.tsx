@@ -1,14 +1,24 @@
 import { useEffect, useState } from "react";
-import { Activity, AppWindow, CircleAlert, Gauge, Radio, ScrollText, Sparkles, TrendingUp } from "lucide-react";
+import { Activity, AppWindow, CheckCircle2, CircleAlert, Gauge, Radio, RefreshCw, ScrollText, Sparkles, Trash2, TrendingUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useOutletContext } from "react-router-dom";
 import { motion } from "motion/react";
 import { MetricCard } from "../components/MetricCard";
+import { CustomSelect } from "../components/CustomSelect";
+import { Modal } from "../components/Modal";
 import { api } from "../lib/api";
 import { SplineAreaChart } from "../components/SplineAreaChart";
 import { DonutChart } from "../components/DonutChart";
 import { MultiLineChart, VersionSeriesData } from "../components/MultiLineChart";
 import { BuildBarChart } from "../components/BuildBarChart";
 import { Button, Card, Badge, Skeleton } from "../components/ui";
+import type { User } from "../App";
+
+type Application = {
+  id: string;
+  name: string;
+  ownerUserId?: string | null;
+};
 
 type VersionShare = {
   version: string;
@@ -72,15 +82,80 @@ type Overview = {
 
 export function DashboardPage() {
   const { t } = useTranslation();
+  const outletContext = useOutletContext<{ user?: User }>();
+  const [user, setUser] = useState<User | null>(outletContext?.user ?? null);
+  const [applications, setApplications] = useState<Application[]>([]);
+  const [selectedAppId, setSelectedAppId] = useState<string>("all");
+  const [appInitialized, setAppInitialized] = useState(false);
   const [data, setData] = useState<Overview | null>(null);
   const [selectedDays, setSelectedDays] = useState<number | "all">(30);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [cleanModalOpen, setCleanModalOpen] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  const [cleanSuccess, setCleanSuccess] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const init = async () => {
+      try {
+        let currentUser = outletContext?.user;
+        if (!currentUser) {
+          currentUser = await api<User>("/api/v1/auth/me").catch(() => null as unknown as User);
+          if (active && currentUser) setUser(currentUser);
+        } else if (active) {
+          setUser(currentUser);
+        }
+        const apps = await api<Application[]>("/api/v1/admin/applications");
+        if (!active) return;
+        setApplications(apps);
+
+        // Determine default application:
+        // Prioritize saved per-user preference, else user's owned application
+        const storageKey = currentUser?.id ? `sonde_overview_app_${currentUser.id}` : null;
+        const saved = storageKey ? localStorage.getItem(storageKey) : null;
+        if (saved && (saved === "all" || apps.some((a) => a.id === saved))) {
+          setSelectedAppId(saved);
+        } else {
+          const myApps = currentUser?.id ? apps.filter((a) => a.ownerUserId === currentUser.id) : [];
+          if (myApps.length > 0) {
+            setSelectedAppId(myApps[0].id);
+          } else {
+            setSelectedAppId("all");
+          }
+        }
+        setAppInitialized(true);
+      } catch {
+        if (active) {
+          setAppInitialized(true);
+        }
+      }
+    };
+    void init();
+    return () => {
+      active = false;
+    };
+  }, [outletContext?.user]);
+
+  const handleAppChange = (newAppId: string) => {
+    setSelectedAppId(newAppId);
+    if (user?.id) {
+      localStorage.setItem(`sonde_overview_app_${user.id}`, newAppId);
+    }
+  };
 
   const load = () => {
     setLoading(true);
-    const query = selectedDays === "all" ? "" : `?days=${selectedDays}`;
-    api<Overview>(`/api/v1/admin/overview${query}`)
+    setError("");
+    const params = new URLSearchParams();
+    if (selectedDays !== "all") {
+      params.set("days", String(selectedDays));
+    }
+    if (selectedAppId && selectedAppId !== "all") {
+      params.set("applicationId", selectedAppId);
+    }
+    const qs = params.toString();
+    api<Overview>(`/api/v1/admin/overview${qs ? `?${qs}` : ""}`)
       .then((res) => {
         setData(res);
         setLoading(false);
@@ -92,8 +167,31 @@ export function DashboardPage() {
   };
 
   useEffect(() => {
-    load();
-  }, [selectedDays]);
+    if (appInitialized) {
+      load();
+    }
+  }, [appInitialized, selectedDays, selectedAppId]);
+
+  const handleCleanInvalid = async () => {
+    setCleaning(true);
+    setError("");
+    setCleanSuccess("");
+    try {
+      const res = await api<{ totalDeleted: number }>("/api/v1/admin/explorer/clean-invalid", {
+        method: "POST",
+        body: JSON.stringify({
+          applicationId: selectedAppId !== "all" ? selectedAppId : undefined,
+        }),
+      });
+      setCleanModalOpen(false);
+      setCleanSuccess(t("overview.cleanInvalidSuccess", { count: res.totalDeleted }));
+      load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("common.error"));
+    } finally {
+      setCleaning(false);
+    }
+  };
 
   const timeRanges: { value: number | "all"; label: string }[] = [
     { value: 1, label: t("apps.stats24h") },
@@ -104,8 +202,8 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header Bar: Title + range switcher */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      {/* Header Bar: Title + application switcher + range switcher + clean button */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <span className="eyebrow">{t("overview.eyebrow")}</span>
           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[var(--text)] m-0 mt-0.5">
@@ -116,29 +214,76 @@ export function DashboardPage() {
           </p>
         </div>
 
-        <div className="segmented-control self-start sm:self-auto flex-shrink-0">
-          {timeRanges.map((range) => {
-            const active = selectedDays === range.value;
-            return (
-              <button
-                key={String(range.value)}
-                type="button"
-                className={`segmented-control-item ${active ? "active" : ""}`}
-                onClick={() => setSelectedDays(range.value)}
-              >
-                {active ? (
-                  <motion.div
-                    layoutId="dashboard-time-pill"
-                    transition={{ type: "spring", stiffness: 400, damping: 35 }}
-                    className="segmented-control-pill"
-                  />
-                ) : null}
-                <span className="relative z-10">{range.label}</span>
-              </button>
-            );
-          })}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {applications.length > 0 ? (
+            <div className="min-w-[170px] sm:min-w-[210px]">
+              <CustomSelect
+                label={t("overview.filterApp")}
+                value={selectedAppId}
+                onChange={handleAppChange}
+                icon={<AppWindow size={14} />}
+                options={[
+                  { value: "all", label: t("overview.allApps") },
+                  ...applications.map((app) => ({
+                    value: app.id,
+                    label: `${app.name}${app.ownerUserId === user?.id ? ` (${t("overview.myApp")})` : ""}`,
+                  })),
+                ]}
+              />
+            </div>
+          ) : null}
+
+          <div className="segmented-control self-start sm:self-auto flex-shrink-0">
+            {timeRanges.map((range) => {
+              const active = selectedDays === range.value;
+              return (
+                <button
+                  key={String(range.value)}
+                  type="button"
+                  className={`segmented-control-item ${active ? "active" : ""}`}
+                  onClick={() => setSelectedDays(range.value)}
+                >
+                  {active ? (
+                    <motion.div
+                      layoutId="dashboard-time-pill"
+                      transition={{ type: "spring", stiffness: 400, damping: 35 }}
+                      className="segmented-control-pill"
+                    />
+                  ) : null}
+                  <span className="relative z-10">{range.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCleanModalOpen(true)}
+            icon={<Trash2 size={13} className="text-[var(--danger)]" />}
+            className="h-[34px] border-[var(--border)] hover:border-[var(--danger)] hover:text-[var(--danger)] text-xs font-semibold whitespace-nowrap"
+            title={t("overview.cleanInvalid")}
+          >
+            <span className="hidden sm:inline">{t("overview.cleanInvalid")}</span>
+          </Button>
         </div>
       </div>
+
+      {cleanSuccess ? (
+        <div className="p-3.5 rounded-[var(--radius-lg)] bg-[var(--signal-subtle)] border border-[var(--signal)]/30 text-[var(--signal)] text-xs font-semibold flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 size={16} />
+            <span>{cleanSuccess}</span>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setCleanSuccess("")}
+          >
+            {t("common.close")}
+          </Button>
+        </div>
+      ) : null}
 
       {error ? (
         <div className="p-4 rounded-[var(--radius-lg)] bg-[var(--danger-subtle)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-semibold flex items-center justify-between">
@@ -328,6 +473,41 @@ export function DashboardPage() {
             </Card>
           </div>
         </>
+      ) : null}
+
+      {cleanModalOpen ? (
+        <Modal
+          isOpen={true}
+          onClose={() => setCleanModalOpen(false)}
+          title={t("overview.cleanInvalidTitle")}
+          icon={<Trash2 size={18} className="text-[var(--danger)]" />}
+          size="sm"
+          actions={
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setCleanModalOpen(false)}
+                disabled={cleaning}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => void handleCleanInvalid()}
+                disabled={cleaning}
+                icon={cleaning ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
+              >
+                {cleaning ? t("overview.cleaning") : t("overview.confirmClean")}
+              </Button>
+            </div>
+          }
+        >
+          <p className="text-xs text-[var(--muted)] leading-relaxed m-0">
+            {t("overview.cleanInvalidPrompt")}
+          </p>
+        </Modal>
       ) : null}
     </div>
   );
