@@ -58,6 +58,14 @@ pub fn configure(config: &mut web::ServiceConfig) {
             .route("/{kind}", web::delete().to(delete_records))
             .route("/{kind}/reset", web::post().to(reset_records))
             .route("/{kind}/reset", web::delete().to(reset_records))
+            .route(
+                "/clean-invalid/preview",
+                web::post().to(preview_clean_invalid_data),
+            )
+            .route(
+                "/clean-invalid/preview",
+                web::get().to(preview_clean_invalid_data_query),
+            )
             .route("/clean-invalid", web::post().to(clean_invalid_data)),
     );
 }
@@ -99,7 +107,7 @@ async fn delete_records(
     body: web::Json<DeleteRecordsRequest>,
 ) -> Result<HttpResponse, AppError> {
     let installed = state.installed().await?;
-    let user = authentication::authenticate(&installed, &request).await?;
+    let user = authentication::authenticate_mutation(&installed, &request).await?;
     let kind = path.into_inner();
     let body = body.into_inner();
     let deleted = explorer::delete_records(
@@ -121,7 +129,7 @@ async fn reset_records(
     body: web::Json<ResetRecordsRequest>,
 ) -> Result<HttpResponse, AppError> {
     let installed = state.installed().await?;
-    let user = authentication::authenticate(&installed, &request).await?;
+    let user = authentication::authenticate_mutation(&installed, &request).await?;
     let kind = path.into_inner();
     let body = body.into_inner();
     let deleted = explorer::reset_records(
@@ -135,13 +143,37 @@ async fn reset_records(
     Ok(HttpResponse::Ok().json(serde_json::json!({ "deleted": deleted })))
 }
 
-async fn clean_invalid_data(
+async fn preview_clean_invalid_data(
     state: web::Data<Arc<AppState>>,
     request: HttpRequest,
     body: web::Json<CleanInvalidRequest>,
 ) -> Result<HttpResponse, AppError> {
     let installed = state.installed().await?;
     let user = authentication::authenticate(&installed, &request).await?;
+    let app_id = body.application_id.as_deref().filter(|s| !s.is_empty());
+    let preview = explorer::preview_clean_invalid_data(&installed, &user, app_id).await?;
+    Ok(HttpResponse::Ok().json(preview))
+}
+
+async fn preview_clean_invalid_data_query(
+    state: web::Data<Arc<AppState>>,
+    request: HttpRequest,
+    query: web::Query<CleanInvalidRequest>,
+) -> Result<HttpResponse, AppError> {
+    let installed = state.installed().await?;
+    let user = authentication::authenticate(&installed, &request).await?;
+    let app_id = query.application_id.as_deref().filter(|s| !s.is_empty());
+    let preview = explorer::preview_clean_invalid_data(&installed, &user, app_id).await?;
+    Ok(HttpResponse::Ok().json(preview))
+}
+
+async fn clean_invalid_data(
+    state: web::Data<Arc<AppState>>,
+    request: HttpRequest,
+    body: web::Json<CleanInvalidRequest>,
+) -> Result<HttpResponse, AppError> {
+    let installed = state.installed().await?;
+    let user = authentication::authenticate_mutation(&installed, &request).await?;
     let app_id = body.application_id.as_deref().filter(|s| !s.is_empty());
     let result = explorer::clean_invalid_data(&installed, &user, app_id).await?;
     Ok(HttpResponse::Ok().json(result))

@@ -394,31 +394,373 @@ pub struct CleanInvalidResult {
     pub total_deleted: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvalidRecordSample {
+    pub kind: String,
+    pub id: String,
+    pub reason: String,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanInvalidPreview {
+    pub invalid_events: u64,
+    pub invalid_dimensions: u64,
+    pub invalid_metrics: u64,
+    pub invalid_logs: u64,
+    pub invalid_devices: u64,
+    pub total_invalid: u64,
+    pub samples: Vec<InvalidRecordSample>,
+}
+
+fn events_invalid_condition(application_id: Option<&str>) -> Condition {
+    let mut cond = Condition::any()
+        .add(Expr::col(Alias::new("os")).is_null())
+        .add(Expr::col(Alias::new("os")).eq(""))
+        .add(Expr::expr(Func::lower(Expr::col(Alias::new("os")))).eq("unknown"))
+        .add(Expr::col(Alias::new("anonymous_id")).is_null())
+        .add(Expr::col(Alias::new("anonymous_id")).eq(""))
+        .add(Expr::expr(Func::lower(Expr::col(Alias::new("anonymous_id")))).eq("unknown"));
+    if application_id.is_none() {
+        let subquery = Query::select()
+            .column(Alias::new("id"))
+            .from(Alias::new("applications"))
+            .to_owned();
+        cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
+    }
+    cond
+}
+
+fn dimensions_invalid_condition(application_id: Option<&str>) -> Condition {
+    let mut cond = Condition::any()
+        .add(Expr::col(Alias::new("dimension_value")).is_null())
+        .add(Expr::col(Alias::new("dimension_value")).eq(""))
+        .add(Expr::expr(Func::lower(Expr::col(Alias::new("dimension_value")))).eq("unknown"));
+    if application_id.is_none() {
+        let subquery = Query::select()
+            .column(Alias::new("id"))
+            .from(Alias::new("applications"))
+            .to_owned();
+        cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
+    }
+    cond
+}
+
+fn metrics_invalid_condition(application_id: Option<&str>) -> Condition {
+    let mut cond = Condition::any()
+        .add(Expr::col(Alias::new("name")).is_null())
+        .add(Expr::col(Alias::new("name")).eq(""));
+    if application_id.is_none() {
+        let subquery = Query::select()
+            .column(Alias::new("id"))
+            .from(Alias::new("applications"))
+            .to_owned();
+        cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
+    }
+    cond
+}
+
+fn logs_invalid_condition(application_id: Option<&str>) -> Condition {
+    let mut cond = Condition::any()
+        .add(Expr::col(Alias::new("level")).is_null())
+        .add(Expr::col(Alias::new("level")).eq(""));
+    if application_id.is_none() {
+        let subquery = Query::select()
+            .column(Alias::new("id"))
+            .from(Alias::new("applications"))
+            .to_owned();
+        cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
+    }
+    cond
+}
+
+fn devices_invalid_condition(application_id: Option<&str>) -> Condition {
+    let mut cond = Condition::any()
+        .add(Expr::col(Alias::new("last_os")).is_null())
+        .add(Expr::col(Alias::new("last_os")).eq(""))
+        .add(Expr::expr(Func::lower(Expr::col(Alias::new("last_os")))).eq("unknown"))
+        .add(Expr::col(Alias::new("id")).is_null())
+        .add(Expr::col(Alias::new("id")).eq(""))
+        .add(Expr::expr(Func::lower(Expr::col(Alias::new("id")))).eq("unknown"));
+    if application_id.is_none() {
+        let subquery = Query::select()
+            .column(Alias::new("id"))
+            .from(Alias::new("applications"))
+            .to_owned();
+        cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
+    }
+    cond
+}
+
+pub async fn preview_clean_invalid_data(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+) -> Result<CleanInvalidPreview, DbErr> {
+    let mut preview = CleanInvalidPreview::default();
+
+    // 1. Preview invalid events
+    {
+        let cond = events_invalid_condition(application_id);
+        let mut count_query = Query::select();
+        count_query
+            .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("cnt"))
+            .from(Alias::new("events"))
+            .cond_where(cond.clone());
+        if let Some(app_id) = application_id {
+            count_query.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+        }
+        let row = database.query_one(&count_query).await?;
+        let count = row
+            .and_then(|r| r.try_get::<i64>("", "cnt").ok())
+            .unwrap_or(0);
+        preview.invalid_events = u64::try_from(std::cmp::max(count, 0)).unwrap_or(0);
+
+        if preview.invalid_events > 0 {
+            let mut sample_query = Query::select();
+            sample_query
+                .columns(["id", "name", "os", "anonymous_id", "application_id"].map(Alias::new))
+                .from(Alias::new("events"))
+                .cond_where(cond);
+            if let Some(app_id) = application_id {
+                sample_query.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+            }
+            sample_query.limit(5);
+            let rows = database.query_all(&sample_query).await?;
+            for r in rows {
+                let id: String = r.try_get("", "id").unwrap_or_default();
+                let name: String = r.try_get("", "name").unwrap_or_default();
+                let os: Option<String> = r.try_get("", "os").ok().flatten();
+                let anon: Option<String> = r.try_get("", "anonymous_id").ok().flatten();
+                let reason = if os.as_deref().unwrap_or("").trim().is_empty() {
+                    "操作系统信息缺失".to_string()
+                } else if os.as_deref().unwrap_or("").eq_ignore_ascii_case("unknown") {
+                    "操作系统为 unknown".to_string()
+                } else if anon.as_deref().unwrap_or("").trim().is_empty() {
+                    "设备标识 (anonymousId) 缺失".to_string()
+                } else if anon
+                    .as_deref()
+                    .unwrap_or("")
+                    .eq_ignore_ascii_case("unknown")
+                {
+                    "设备标识为 unknown".to_string()
+                } else {
+                    "关联应用不存在 (孤立数据)".to_string()
+                };
+                let detail = format!("name: {}, os: {:?}, device: {:?}", name, os, anon);
+                preview.samples.push(InvalidRecordSample {
+                    kind: "events".to_string(),
+                    id,
+                    reason,
+                    detail: Some(detail),
+                });
+            }
+        }
+    }
+
+    // 2. Preview invalid dimensions
+    {
+        let cond = dimensions_invalid_condition(application_id);
+        let mut count_query = Query::select();
+        count_query
+            .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("cnt"))
+            .from(Alias::new("telemetry_daily_dimensions"))
+            .cond_where(cond.clone());
+        if let Some(app_id) = application_id {
+            count_query.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+        }
+        let row = database.query_one(&count_query).await?;
+        let count = row
+            .and_then(|r| r.try_get::<i64>("", "cnt").ok())
+            .unwrap_or(0);
+        preview.invalid_dimensions = u64::try_from(std::cmp::max(count, 0)).unwrap_or(0);
+
+        if preview.invalid_dimensions > 0 && preview.samples.len() < 10 {
+            let mut sample_query = Query::select();
+            sample_query
+                .columns(["id", "dimension_key", "dimension_value", "day"].map(Alias::new))
+                .from(Alias::new("telemetry_daily_dimensions"))
+                .cond_where(cond);
+            if let Some(app_id) = application_id {
+                sample_query.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+            }
+            sample_query.limit(3);
+            let rows = database.query_all(&sample_query).await?;
+            for r in rows {
+                let id: String = r.try_get("", "id").unwrap_or_default();
+                let key: String = r.try_get("", "dimension_key").unwrap_or_default();
+                let val: Option<String> = r.try_get("", "dimension_value").ok().flatten();
+                let day: String = r.try_get("", "day").unwrap_or_default();
+                preview.samples.push(InvalidRecordSample {
+                    kind: "dimensions".to_string(),
+                    id,
+                    reason: "维度值为空或 unknown".to_string(),
+                    detail: Some(format!("key: {}, value: {:?}, day: {}", key, val, day)),
+                });
+            }
+        }
+    }
+
+    // 3. Preview invalid metrics
+    {
+        let cond = metrics_invalid_condition(application_id);
+        let mut count_query = Query::select();
+        count_query
+            .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("cnt"))
+            .from(Alias::new("metric_points"))
+            .cond_where(cond.clone());
+        if let Some(app_id) = application_id {
+            count_query.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+        }
+        let row = database.query_one(&count_query).await?;
+        let count = row
+            .and_then(|r| r.try_get::<i64>("", "cnt").ok())
+            .unwrap_or(0);
+        preview.invalid_metrics = u64::try_from(std::cmp::max(count, 0)).unwrap_or(0);
+
+        if preview.invalid_metrics > 0 && preview.samples.len() < 10 {
+            let mut sample_query = Query::select();
+            sample_query
+                .columns(["id", "name"].map(Alias::new))
+                .from(Alias::new("metric_points"))
+                .cond_where(cond);
+            if let Some(app_id) = application_id {
+                sample_query.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+            }
+            sample_query.limit(3);
+            let rows = database.query_all(&sample_query).await?;
+            for r in rows {
+                let id: String = r.try_get("", "id").unwrap_or_default();
+                let name: Option<String> = r.try_get("", "name").ok().flatten();
+                preview.samples.push(InvalidRecordSample {
+                    kind: "metrics".to_string(),
+                    id,
+                    reason: "指标名称缺失或孤立".to_string(),
+                    detail: Some(format!("name: {:?}", name)),
+                });
+            }
+        }
+    }
+
+    // 4. Preview invalid logs
+    {
+        let cond = logs_invalid_condition(application_id);
+        let mut count_query = Query::select();
+        count_query
+            .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("cnt"))
+            .from(Alias::new("logs"))
+            .cond_where(cond.clone());
+        if let Some(app_id) = application_id {
+            count_query.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+        }
+        let row = database.query_one(&count_query).await?;
+        let count = row
+            .and_then(|r| r.try_get::<i64>("", "cnt").ok())
+            .unwrap_or(0);
+        preview.invalid_logs = u64::try_from(std::cmp::max(count, 0)).unwrap_or(0);
+
+        if preview.invalid_logs > 0 && preview.samples.len() < 10 {
+            let mut sample_query = Query::select();
+            sample_query
+                .columns(["id", "level", "message"].map(Alias::new))
+                .from(Alias::new("logs"))
+                .cond_where(cond);
+            if let Some(app_id) = application_id {
+                sample_query.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+            }
+            sample_query.limit(3);
+            let rows = database.query_all(&sample_query).await?;
+            for r in rows {
+                let id: String = r.try_get("", "id").unwrap_or_default();
+                let level: Option<String> = r.try_get("", "level").ok().flatten();
+                let message: String = r.try_get("", "message").unwrap_or_default();
+                preview.samples.push(InvalidRecordSample {
+                    kind: "logs".to_string(),
+                    id,
+                    reason: "日志级别缺失或孤立".to_string(),
+                    detail: Some(format!("level: {:?}, msg: {}", level, message)),
+                });
+            }
+        }
+    }
+
+    // 5. Preview invalid devices
+    {
+        let cond = devices_invalid_condition(application_id);
+        let mut count_query = Query::select();
+        count_query
+            .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("cnt"))
+            .from(Alias::new("telemetry_devices"))
+            .cond_where(cond.clone());
+        if let Some(app_id) = application_id {
+            count_query.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+        }
+        let row = database.query_one(&count_query).await?;
+        let count = row
+            .and_then(|r| r.try_get::<i64>("", "cnt").ok())
+            .unwrap_or(0);
+        preview.invalid_devices = u64::try_from(std::cmp::max(count, 0)).unwrap_or(0);
+
+        if preview.invalid_devices > 0 && preview.samples.len() < 10 {
+            let mut sample_query = Query::select();
+            sample_query
+                .columns(["id", "last_os"].map(Alias::new))
+                .from(Alias::new("telemetry_devices"))
+                .cond_where(cond);
+            if let Some(app_id) = application_id {
+                sample_query.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
+            }
+            sample_query.limit(3);
+            let rows = database.query_all(&sample_query).await?;
+            for r in rows {
+                let id: String = r.try_get("", "id").unwrap_or_default();
+                let last_os: Option<String> = r.try_get("", "last_os").ok().flatten();
+                let reason = if last_os.as_deref().unwrap_or("").trim().is_empty() {
+                    "设备操作系统信息缺失".to_string()
+                } else if last_os
+                    .as_deref()
+                    .unwrap_or("")
+                    .eq_ignore_ascii_case("unknown")
+                {
+                    "设备操作系统为 unknown".to_string()
+                } else if id.eq_ignore_ascii_case("unknown") {
+                    "设备 ID 为 unknown".to_string()
+                } else {
+                    "孤立设备记录".to_string()
+                };
+                preview.samples.push(InvalidRecordSample {
+                    kind: "devices".to_string(),
+                    id,
+                    reason,
+                    detail: Some(format!("last_os: {:?}", last_os)),
+                });
+            }
+        }
+    }
+
+    preview.total_invalid = preview
+        .invalid_events
+        .saturating_add(preview.invalid_dimensions)
+        .saturating_add(preview.invalid_metrics)
+        .saturating_add(preview.invalid_logs)
+        .saturating_add(preview.invalid_devices);
+
+    Ok(preview)
+}
+
 pub async fn clean_invalid_data(
     database: &DatabaseConnection,
     application_id: Option<&str>,
 ) -> Result<CleanInvalidResult, DbErr> {
     let mut result = CleanInvalidResult::default();
 
-    // 1. Delete invalid events (missing os, empty os, unknown os, missing/empty anonymous_id, or orphaned)
+    // 1. Delete invalid events
     {
         let mut delete = Query::delete();
-        delete.from_table(Alias::new("events"));
-        let mut cond = Condition::any()
-            .add(Expr::col(Alias::new("os")).is_null())
-            .add(Expr::col(Alias::new("os")).eq(""))
-            .add(Expr::expr(Func::lower(Expr::col(Alias::new("os")))).eq("unknown"))
-            .add(Expr::col(Alias::new("anonymous_id")).is_null())
-            .add(Expr::col(Alias::new("anonymous_id")).eq(""))
-            .add(Expr::expr(Func::lower(Expr::col(Alias::new("anonymous_id")))).eq("unknown"));
-        if application_id.is_none() {
-            let subquery = Query::select()
-                .column(Alias::new("id"))
-                .from(Alias::new("applications"))
-                .to_owned();
-            cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
-        }
-        delete.cond_where(cond);
+        delete
+            .from_table(Alias::new("events"))
+            .cond_where(events_invalid_condition(application_id));
         if let Some(app_id) = application_id {
             delete.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
         }
@@ -426,22 +768,12 @@ pub async fn clean_invalid_data(
         result.deleted_events = database.execute(&statement).await?.rows_affected();
     }
 
-    // 2. Delete invalid telemetry_daily_dimensions (empty/unknown dimension_value or orphaned)
+    // 2. Delete invalid telemetry_daily_dimensions
     {
         let mut delete = Query::delete();
-        delete.from_table(Alias::new("telemetry_daily_dimensions"));
-        let mut cond = Condition::any()
-            .add(Expr::col(Alias::new("dimension_value")).is_null())
-            .add(Expr::col(Alias::new("dimension_value")).eq(""))
-            .add(Expr::expr(Func::lower(Expr::col(Alias::new("dimension_value")))).eq("unknown"));
-        if application_id.is_none() {
-            let subquery = Query::select()
-                .column(Alias::new("id"))
-                .from(Alias::new("applications"))
-                .to_owned();
-            cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
-        }
-        delete.cond_where(cond);
+        delete
+            .from_table(Alias::new("telemetry_daily_dimensions"))
+            .cond_where(dimensions_invalid_condition(application_id));
         if let Some(app_id) = application_id {
             delete.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
         }
@@ -449,21 +781,12 @@ pub async fn clean_invalid_data(
         result.deleted_dimensions = database.execute(&statement).await?.rows_affected();
     }
 
-    // 3. Delete invalid metric_points (empty name or orphaned)
+    // 3. Delete invalid metric_points
     {
         let mut delete = Query::delete();
-        delete.from_table(Alias::new("metric_points"));
-        let mut cond = Condition::any()
-            .add(Expr::col(Alias::new("name")).is_null())
-            .add(Expr::col(Alias::new("name")).eq(""));
-        if application_id.is_none() {
-            let subquery = Query::select()
-                .column(Alias::new("id"))
-                .from(Alias::new("applications"))
-                .to_owned();
-            cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
-        }
-        delete.cond_where(cond);
+        delete
+            .from_table(Alias::new("metric_points"))
+            .cond_where(metrics_invalid_condition(application_id));
         if let Some(app_id) = application_id {
             delete.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
         }
@@ -471,21 +794,12 @@ pub async fn clean_invalid_data(
         result.deleted_metrics = database.execute(&statement).await?.rows_affected();
     }
 
-    // 4. Delete invalid logs (empty level or orphaned)
+    // 4. Delete invalid logs
     {
         let mut delete = Query::delete();
-        delete.from_table(Alias::new("logs"));
-        let mut cond = Condition::any()
-            .add(Expr::col(Alias::new("level")).is_null())
-            .add(Expr::col(Alias::new("level")).eq(""));
-        if application_id.is_none() {
-            let subquery = Query::select()
-                .column(Alias::new("id"))
-                .from(Alias::new("applications"))
-                .to_owned();
-            cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
-        }
-        delete.cond_where(cond);
+        delete
+            .from_table(Alias::new("logs"))
+            .cond_where(logs_invalid_condition(application_id));
         if let Some(app_id) = application_id {
             delete.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
         }
@@ -493,25 +807,12 @@ pub async fn clean_invalid_data(
         result.deleted_logs = database.execute(&statement).await?.rows_affected();
     }
 
-    // 5. Delete invalid telemetry_devices (empty/unknown last_os, empty/unknown id, or orphaned)
+    // 5. Delete invalid telemetry_devices
     {
         let mut delete = Query::delete();
-        delete.from_table(Alias::new("telemetry_devices"));
-        let mut cond = Condition::any()
-            .add(Expr::col(Alias::new("last_os")).is_null())
-            .add(Expr::col(Alias::new("last_os")).eq(""))
-            .add(Expr::expr(Func::lower(Expr::col(Alias::new("last_os")))).eq("unknown"))
-            .add(Expr::col(Alias::new("id")).is_null())
-            .add(Expr::col(Alias::new("id")).eq(""))
-            .add(Expr::expr(Func::lower(Expr::col(Alias::new("id")))).eq("unknown"));
-        if application_id.is_none() {
-            let subquery = Query::select()
-                .column(Alias::new("id"))
-                .from(Alias::new("applications"))
-                .to_owned();
-            cond = cond.add(Expr::col(Alias::new("application_id")).not_in_subquery(subquery));
-        }
-        delete.cond_where(cond);
+        delete
+            .from_table(Alias::new("telemetry_devices"))
+            .cond_where(devices_invalid_condition(application_id));
         if let Some(app_id) = application_id {
             delete.and_where(Expr::col(Alias::new("application_id")).eq(app_id));
         }

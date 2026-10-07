@@ -1,21 +1,21 @@
 use crate::{
     database::{applications, explorer},
     error::AppError,
-    services::authentication::AuthenticatedUser,
+    services::{applications::ensure_app_access, authentication::AuthenticatedUser},
     state::InstalledState,
 };
 
 pub use super::explorer_models::{
     EventRecord, ExplorerFilter, HistogramRecord, LogRecord, MetricRecord, Page,
 };
-pub use crate::database::explorer::CleanInvalidResult;
+pub use crate::database::explorer::{CleanInvalidPreview, CleanInvalidResult, InvalidRecordSample};
 
 pub async fn events(
     installed: &InstalledState,
     user: &AuthenticatedUser,
     filter: &ExplorerFilter,
 ) -> Result<Page<EventRecord>, AppError> {
-    authorize(user, filter)?;
+    authorize(installed, user, filter).await?;
     let record = explorer::events(&installed.database, &database_filter(filter)).await?;
     Ok(map_page(record, map_event))
 }
@@ -25,7 +25,7 @@ pub async fn metrics(
     user: &AuthenticatedUser,
     filter: &ExplorerFilter,
 ) -> Result<Page<MetricRecord>, AppError> {
-    authorize(user, filter)?;
+    authorize(installed, user, filter).await?;
     let record = explorer::metrics(&installed.database, &database_filter(filter)).await?;
     Ok(map_page(record, map_metric))
 }
@@ -35,13 +35,17 @@ pub async fn logs(
     user: &AuthenticatedUser,
     filter: &ExplorerFilter,
 ) -> Result<Page<LogRecord>, AppError> {
-    authorize(user, filter)?;
+    authorize(installed, user, filter).await?;
     let record = explorer::logs(&installed.database, &database_filter(filter)).await?;
     Ok(map_page(record, map_log))
 }
 
-fn authorize(user: &AuthenticatedUser, filter: &ExplorerFilter) -> Result<(), AppError> {
-    user.require("telemetry.read", Some(&filter.application_id))
+async fn authorize(
+    installed: &InstalledState,
+    user: &AuthenticatedUser,
+    filter: &ExplorerFilter,
+) -> Result<(), AppError> {
+    ensure_app_access(&installed.database, user, &filter.application_id, false).await
 }
 
 fn database_filter(filter: &ExplorerFilter) -> explorer::ExplorerFilter {
@@ -124,7 +128,7 @@ pub async fn delete_records(
     environment_id: Option<&str>,
     ids: &[String],
 ) -> Result<u64, AppError> {
-    user.require("apps.manage", Some(application_id))?;
+    ensure_app_access(&installed.database, user, application_id, true).await?;
     let application_id =
         crate::security::validate_safe_identifier("applicationId", application_id)?;
     let environment_id =
@@ -190,7 +194,7 @@ pub async fn reset_records(
     application_id: &str,
     environment_id: Option<&str>,
 ) -> Result<u64, AppError> {
-    user.require("apps.manage", Some(application_id))?;
+    ensure_app_access(&installed.database, user, application_id, true).await?;
     let application_id =
         crate::security::validate_safe_identifier("applicationId", application_id)?;
     let environment_id =
@@ -239,14 +243,32 @@ pub async fn reset_records(
     Ok(count)
 }
 
+pub async fn preview_clean_invalid_data(
+    installed: &InstalledState,
+    user: &AuthenticatedUser,
+    application_id: Option<&str>,
+) -> Result<CleanInvalidPreview, AppError> {
+    if let Some(app_id) = application_id {
+        crate::security::validate_safe_identifier("applicationId", app_id)?;
+        ensure_app_access(&installed.database, user, app_id, true).await?;
+    } else {
+        user.require("apps.manage", None)?;
+    }
+
+    let preview = explorer::preview_clean_invalid_data(&installed.database, application_id).await?;
+    Ok(preview)
+}
+
 pub async fn clean_invalid_data(
     installed: &InstalledState,
     user: &AuthenticatedUser,
     application_id: Option<&str>,
 ) -> Result<CleanInvalidResult, AppError> {
-    user.require("apps.manage", application_id)?;
     if let Some(app_id) = application_id {
         crate::security::validate_safe_identifier("applicationId", app_id)?;
+        ensure_app_access(&installed.database, user, app_id, true).await?;
+    } else {
+        user.require("apps.manage", None)?;
     }
 
     let result = explorer::clean_invalid_data(&installed.database, application_id).await?;
