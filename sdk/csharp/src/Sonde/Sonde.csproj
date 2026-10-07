@@ -9,7 +9,7 @@
     <AssemblyName>Sonde</AssemblyName>
 
     <PackageId>Sonde.SDK</PackageId>
-    <Version>0.1.9</Version>
+    <Version>0.1.10</Version>
     <Authors>Chlna6666</Authors>
     <Description>Official .NET 10 SDK for Sonde telemetry ingest</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
