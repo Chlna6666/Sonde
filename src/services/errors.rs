@@ -1,5 +1,7 @@
 use crate::{
-    database::error_query, error::AppError, services::authentication::AuthenticatedUser,
+    database::error_query,
+    error::AppError,
+    services::{applications, authentication::AuthenticatedUser},
     state::InstalledState,
 };
 
@@ -12,7 +14,8 @@ pub async fn groups(
     user: &AuthenticatedUser,
     filter: &ErrorGroupFilter,
 ) -> Result<ErrorGroupPage, AppError> {
-    user.require("telemetry.read", Some(&filter.application_id))?;
+    applications::ensure_app_access(&installed.database, user, &filter.application_id, false)
+        .await?;
     let record = error_query::groups(
         &installed.database,
         &error_query::ErrorGroupFilter {
@@ -37,7 +40,8 @@ pub async fn group(
     let group = error_query::group(&installed.database, group_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    user.require("telemetry.read", Some(&group.application_id))?;
+    applications::ensure_app_access(&installed.database, user, &group.application_id, false)
+        .await?;
     Ok(map_group(group))
 }
 
@@ -53,7 +57,8 @@ pub async fn occurrences(
     let group = error_query::group(&installed.database, group_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    user.require("telemetry.read", Some(&group.application_id))?;
+    applications::ensure_app_access(&installed.database, user, &group.application_id, false)
+        .await?;
     let record =
         error_query::occurrences(&installed.database, group_id, page, page_size, from, to).await?;
     Ok(map_occurrence_page(record))

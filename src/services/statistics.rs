@@ -1,7 +1,7 @@
 use crate::{
     database::{activity_stats, device_activity, stats},
     error::AppError,
-    services::authentication::AuthenticatedUser,
+    services::{applications, authentication::AuthenticatedUser},
     state::InstalledState,
 };
 
@@ -31,9 +31,11 @@ pub async fn overview(
     application_id: Option<&str>,
     days: Option<u32>,
 ) -> Result<Overview, AppError> {
-    user.require("telemetry.read", application_id)?;
     if let Some(app_id) = application_id {
         crate::security::validate_safe_identifier("applicationId", app_id)?;
+        applications::ensure_app_access(&installed.database, user, app_id, false).await?;
+    } else {
+        user.require("telemetry.read", None)?;
     }
     let days = validate_days(days)?;
     let record = stats::overview(&installed.database, application_id, days).await?;
@@ -55,7 +57,7 @@ pub async fn application_stats(
     environment_id: Option<&str>,
     days: Option<u32>,
 ) -> Result<AppTelemetryStats, AppError> {
-    user.require("telemetry.read", Some(application_id))?;
+    applications::ensure_app_access(&installed.database, user, application_id, false).await?;
     query_application_stats(installed, application_id, environment_id, days).await
 }
 

@@ -56,6 +56,13 @@ pub async fn create(
     let created =
         application_store::create_application(&installed.database, name, slug, Some(&user.id))
             .await?;
+    let _ = application_store::grant_application_access(
+        &installed.database,
+        &created.0,
+        &user.id,
+        "Manager",
+    )
+    .await;
     application_store::audit_with_metadata(
         &installed.database,
         Some(&user.id),

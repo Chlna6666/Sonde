@@ -20,7 +20,7 @@ use crate::{
         outbound,
     },
     error::AppError,
-    services::authentication::AuthenticatedUser,
+    services::{applications::ensure_app_access, authentication::AuthenticatedUser},
     state::InstalledState,
 };
 
@@ -34,8 +34,13 @@ pub async fn list(
     user: &AuthenticatedUser,
     application_id: Option<&str>,
 ) -> Result<Vec<AlertRuleRecord>, AppError> {
-    user.require("alerts.read", application_id)?;
-    Ok(alert_store::list_rules(&installed.database, application_id).await?)
+    if let Some(app_id) = application_id {
+        ensure_app_access(&installed.database, user, app_id, false).await?;
+        Ok(alert_store::list_rules(&installed.database, Some(app_id)).await?)
+    } else {
+        user.require("alerts.read", None)?;
+        Ok(alert_store::list_rules(&installed.database, None).await?)
+    }
 }
 
 pub async fn create(
@@ -46,7 +51,7 @@ pub async fn create(
     expression: &AlertExpression,
     cooldown_seconds: i32,
 ) -> Result<String, AppError> {
-    user.require("alerts.manage", Some(application_id))?;
+    ensure_app_access(&installed.database, user, application_id, true).await?;
     expression
         .validate()
         .map_err(|message| AppError::Validation(message.into()))?;
@@ -96,7 +101,7 @@ pub async fn update(
     let rule = alert_store::get_rule(&installed.database, id)
         .await?
         .ok_or(AppError::NotFound)?;
-    user.require("alerts.manage", Some(&rule.application_id))?;
+    ensure_app_access(&installed.database, user, &rule.application_id, true).await?;
 
     expression
         .validate()
@@ -144,7 +149,7 @@ pub async fn delete(
     let rule = alert_store::get_rule(&installed.database, id)
         .await?
         .ok_or(AppError::NotFound)?;
-    user.require("alerts.manage", Some(&rule.application_id))?;
+    ensure_app_access(&installed.database, user, &rule.application_id, true).await?;
 
     let deleted = alert_store::delete_rule(&installed.database, id).await?;
     if !deleted {

@@ -60,6 +60,7 @@ struct UserResponse {
     roles: Vec<String>,
     csrf_token: String,
     totp_enabled: bool,
+    is_unscoped_admin: bool,
 }
 
 #[derive(Serialize)]
@@ -299,6 +300,7 @@ async fn logout(
 }
 
 fn user_response(user: authentication::AuthenticatedUser, csrf_token: String) -> UserResponse {
+    let is_unscoped_admin = user.is_unscoped_admin();
     UserResponse {
         id: user.id,
         email: user.email,
@@ -307,6 +309,7 @@ fn user_response(user: authentication::AuthenticatedUser, csrf_token: String) ->
         roles: user.roles,
         csrf_token,
         totp_enabled: user.totp_enabled,
+        is_unscoped_admin,
     }
 }
 
