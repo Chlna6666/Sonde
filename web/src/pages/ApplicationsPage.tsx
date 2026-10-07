@@ -18,6 +18,7 @@ import {
   Upload,
   UserPlus,
   Users,
+  UserCheck,
   ScrollText,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -30,6 +31,8 @@ import { ActivityStatsPanel, type ActivityStats } from "../components/ActivitySt
 import { PlatformIcon } from "../components/PlatformIcon";
 import { Button, Card, Badge, EmptyState, Input, Select } from "../components/ui";
 import { api } from "../lib/api";
+import { useCurrentUser } from "../lib/useCurrentUser";
+import { sortAppsForUser } from "../lib/applicationPreferences";
 
 type Application = {
   id: string;
@@ -133,7 +136,9 @@ type AppTelemetryStats = {
 
 export function ApplicationsPage() {
   const { t } = useTranslation();
+  const user = useCurrentUser();
   const [applications, setApplications] = useState<Application[]>([]);
+  const [filterTab, setFilterTab] = useState<"all" | "my">("all");
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState("");
@@ -260,87 +265,116 @@ export function ApplicationsPage() {
         </Card>
       ) : null}
 
+      {applications.length > 0 ? (
+        <div className="flex items-center gap-2 mb-4">
+          <div className="segmented-control">
+            <button
+              type="button"
+              className={`segmented-control-item ${filterTab === "all" ? "active" : ""}`}
+              onClick={() => setFilterTab("all")}
+            >
+              {t("apps.allApps")} ({applications.length})
+            </button>
+            <button
+              type="button"
+              className={`segmented-control-item ${filterTab === "my" ? "active" : ""}`}
+              onClick={() => setFilterTab("my")}
+            >
+              {t("apps.myApps")} ({applications.filter((a) => a.ownerUserId === user?.id).length})
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {applications.map((application) => {
-          const isPermanent = !application.retentionDays || application.retentionDays <= 0;
-          return (
-            <Card key={application.id} hover className="p-5 flex flex-col justify-between group overflow-hidden">
-              <div>
-                <div className="flex items-start justify-between gap-2 mb-3">
-                  <div className="flex items-center gap-3.5 min-w-0">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-[var(--radius-lg)] bg-[var(--signal-subtle)] text-[var(--signal)] border border-[var(--signal)]/25 shadow-xs flex-shrink-0 font-black text-lg">
-                      {application.name.slice(0, 2).toUpperCase()}
+        {sortAppsForUser(applications, user)
+          .filter((app) => (filterTab === "my" ? app.ownerUserId === user?.id : true))
+          .map((application) => {
+            const isPermanent = !application.retentionDays || application.retentionDays <= 0;
+            const isMy = Boolean(user?.id && application.ownerUserId === user.id);
+            return (
+              <Card key={application.id} hover className="p-5 flex flex-col justify-between group overflow-hidden">
+                <div>
+                  <div className="flex items-start justify-between gap-2 mb-3">
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-[var(--radius-lg)] bg-[var(--signal-subtle)] text-[var(--signal)] border border-[var(--signal)]/25 shadow-xs flex-shrink-0 font-black text-lg">
+                        {application.name.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="text-base font-bold text-[var(--text)] m-0 leading-tight truncate">{application.name}</h3>
+                          {isMy ? (
+                            <Badge variant="info" size="sm" className="gap-1 font-semibold">
+                              <UserCheck size={10} /> {t("apps.myApp")}
+                            </Badge>
+                          ) : null}
+                          {application.isPublic ? (
+                            <Badge variant="success" size="sm" className="gap-1">
+                              <Globe size={10} /> {t("apps.public")}
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" size="sm">
+                              {t("apps.private")}
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <code className="text-xs font-mono text-[var(--muted)]">{application.slug}</code>
+                          <button type="button" className="text-[var(--muted)] hover:text-[var(--text)] p-0.5 cursor-pointer rounded" onClick={() => navigator.clipboard.writeText(application.slug)}>
+                            <Copy size={11} />
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="text-base font-bold text-[var(--text)] m-0 leading-tight truncate">{application.name}</h3>
-                        {application.isPublic ? (
-                          <Badge variant="success" size="sm" className="gap-1">
-                            <Globe size={10} /> {t("apps.public")}
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" size="sm">
-                            {t("apps.private")}
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1.5 mt-1">
-                        <code className="text-xs font-mono text-[var(--muted)]">{application.slug}</code>
-                        <button type="button" className="text-[var(--muted)] hover:text-[var(--text)] p-0.5 cursor-pointer rounded" onClick={() => navigator.clipboard.writeText(application.slug)}>
-                          <Copy size={11} />
-                        </button>
-                      </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {application.isPublic ? (
+                        <a href={`/p/${application.slug}`} target="_blank" rel="noreferrer" className="p-1.5 rounded-lg text-[var(--muted)] hover:text-[var(--signal)] hover:bg-[var(--signal-subtle)]">
+                          <ExternalLink size={15} />
+                        </a>
+                      ) : null}
+                      <Button variant="ghost" size="icon-sm" onClick={() => handleExportApp(application)} icon={<Download size={14} />} />
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    {application.isPublic ? (
-                      <a href={`/p/${application.slug}`} target="_blank" rel="noreferrer" className="p-1.5 rounded-lg text-[var(--muted)] hover:text-[var(--signal)] hover:bg-[var(--signal-subtle)]">
-                        <ExternalLink size={15} />
-                      </a>
-                    ) : null}
-                    <Button variant="ghost" size="icon-sm" onClick={() => handleExportApp(application)} icon={<Download size={14} />} />
+
+                  <div className="grid grid-cols-2 gap-3 my-4">
+                    <div className="p-3 rounded-[var(--radius-lg)] bg-[var(--input-bg)] border border-[var(--border-soft)]">
+                      <span className="text-[11px] font-medium text-[var(--muted)] block mb-1">{t("apps.retention")}</span>
+                      {isPermanent ? (
+                        <strong className="text-xs font-bold text-[var(--signal)] inline-flex items-center gap-1 mt-0.5"><InfinityIcon size={14} />{t("apps.permanentRetention")}</strong>
+                      ) : (
+                        <div className="flex items-baseline gap-1">
+                          <strong className="text-base font-extrabold font-mono text-[var(--text)]">{application.retentionDays}</strong>
+                          <span className="text-xs text-[var(--muted)]">{t("common.days")}</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="p-3 rounded-[var(--radius-lg)] bg-[var(--input-bg)] border border-[var(--border-soft)]">
+                      <span className="text-[11px] font-medium text-[var(--muted)] block mb-1">{t("apps.status")}</span>
+                      <div className="flex items-center gap-2 mt-1">
+                        <Badge variant="success" dot pulse size="sm">{t("apps.active")}</Badge>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3 my-4">
-                  <div className="p-3 rounded-[var(--radius-lg)] bg-[var(--input-bg)] border border-[var(--border-soft)]">
-                    <span className="text-[11px] font-medium text-[var(--muted)] block mb-1">{t("apps.retention")}</span>
-                    {isPermanent ? (
-                      <strong className="text-xs font-bold text-[var(--signal)] inline-flex items-center gap-1 mt-0.5"><InfinityIcon size={14} />{t("apps.permanentRetention")}</strong>
-                    ) : (
-                      <div className="flex items-baseline gap-1">
-                        <strong className="text-base font-extrabold font-mono text-[var(--text)]">{application.retentionDays}</strong>
-                        <span className="text-xs text-[var(--muted)]">{t("common.days")}</span>
-                      </div>
-                    )}
-                  </div>
-                  <div className="p-3 rounded-[var(--radius-lg)] bg-[var(--input-bg)] border border-[var(--border-soft)]">
-                    <span className="text-[11px] font-medium text-[var(--muted)] block mb-1">{t("apps.status")}</span>
-                    <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="success" dot pulse size="sm">{t("apps.active")}</Badge>
-                    </div>
-                  </div>
+                <div className="grid grid-cols-2 gap-2 pt-3 border-t border-[var(--border-soft)]">
+                  <Button variant="default" size="sm" onClick={() => setStatsApp(application)} icon={<BarChart3 size={14} />}>
+                    {t("apps.stats")}
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => setManagingApp(application)} icon={<Settings size={14} />}>
+                    {t("apps.configureAndSdk")}
+                  </Button>
                 </div>
-              </div>
+              </Card>
+            );
+          })}
 
-              <div className="grid grid-cols-2 gap-2 pt-3 border-t border-[var(--border-soft)]">
-                <Button variant="default" size="sm" onClick={() => setStatsApp(application)} icon={<BarChart3 size={14} />}>
-                  {t("apps.stats")}
-                </Button>
-                <Button variant="secondary" size="sm" onClick={() => setManagingApp(application)} icon={<Settings size={14} />}>
-                  {t("apps.configureAndSdk")}
-                </Button>
-              </div>
-            </Card>
-          );
-        })}
-
-        {applications.length === 0 && !creating ? (
+        {((filterTab === "my" && applications.filter((a) => a.ownerUserId === user?.id).length === 0) || (applications.length === 0)) && !creating ? (
           <div className="col-span-full">
             <EmptyState
               icon={<Activity size={28} />}
-              title={t("apps.empty")}
-              description={t("apps.emptyDesc")}
+              title={filterTab === "my" ? t("apps.noMyApps") : t("apps.empty")}
+              description={filterTab === "my" ? "" : t("apps.emptyDesc")}
               action={<Button variant="default" size="sm" onClick={() => setCreating(true)} icon={<Plus size={14} />}>{t("apps.new")}</Button>}
             />
           </div>

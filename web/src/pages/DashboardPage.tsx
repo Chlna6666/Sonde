@@ -1,12 +1,17 @@
 import { useEffect, useState } from "react";
 import { Activity, AppWindow, CheckCircle2, CircleAlert, Gauge, Radio, RefreshCw, ScrollText, Sparkles, Trash2, TrendingUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useOutletContext } from "react-router-dom";
 import { motion } from "motion/react";
 import { MetricCard } from "../components/MetricCard";
 import { CustomSelect } from "../components/CustomSelect";
-import { Modal } from "../components/Modal";
+import { CleanInvalidModal } from "../components/CleanInvalidModal";
 import { api } from "../lib/api";
+import { useCurrentUser } from "../lib/useCurrentUser";
+import {
+  resolveInitialAppId,
+  setUserPreferredAppId,
+  formatAppOptions,
+} from "../lib/applicationPreferences";
 import { SplineAreaChart } from "../components/SplineAreaChart";
 import { DonutChart } from "../components/DonutChart";
 import { MultiLineChart, VersionSeriesData } from "../components/MultiLineChart";
@@ -82,8 +87,7 @@ type Overview = {
 
 export function DashboardPage() {
   const { t } = useTranslation();
-  const outletContext = useOutletContext<{ user?: User }>();
-  const [user, setUser] = useState<User | null>(outletContext?.user ?? null);
+  const user = useCurrentUser();
   const [applications, setApplications] = useState<Application[]>([]);
   const [selectedAppId, setSelectedAppId] = useState<string>("all");
   const [appInitialized, setAppInitialized] = useState(false);
@@ -92,38 +96,23 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [cleanModalOpen, setCleanModalOpen] = useState(false);
-  const [cleaning, setCleaning] = useState(false);
   const [cleanSuccess, setCleanSuccess] = useState("");
 
   useEffect(() => {
     let active = true;
     const init = async () => {
       try {
-        let currentUser = outletContext?.user;
-        if (!currentUser) {
-          currentUser = await api<User>("/api/v1/auth/me").catch(() => null as unknown as User);
-          if (active && currentUser) setUser(currentUser);
-        } else if (active) {
-          setUser(currentUser);
-        }
         const apps = await api<Application[]>("/api/v1/admin/applications");
         if (!active) return;
         setApplications(apps);
 
-        // Determine default application:
-        // Prioritize saved per-user preference, else user's owned application
-        const storageKey = currentUser?.id ? `sonde_overview_app_${currentUser.id}` : null;
-        const saved = storageKey ? localStorage.getItem(storageKey) : null;
-        if (saved && (saved === "all" || apps.some((a) => a.id === saved))) {
-          setSelectedAppId(saved);
-        } else {
-          const myApps = currentUser?.id ? apps.filter((a) => a.ownerUserId === currentUser.id) : [];
-          if (myApps.length > 0) {
-            setSelectedAppId(myApps[0].id);
-          } else {
-            setSelectedAppId("all");
-          }
-        }
+        const canViewAll = user?.isUnscopedAdmin !== false;
+        const defaultAppId = resolveInitialAppId(apps, user, {
+          allowAll: canViewAll,
+          allValue: "all",
+          pagePrefix: "sonde_overview_app",
+        });
+        setSelectedAppId(defaultAppId);
         setAppInitialized(true);
       } catch {
         if (active) {
@@ -135,12 +124,13 @@ export function DashboardPage() {
     return () => {
       active = false;
     };
-  }, [outletContext?.user]);
+  }, [user]);
 
   const handleAppChange = (newAppId: string) => {
     setSelectedAppId(newAppId);
-    if (user?.id) {
-      localStorage.setItem(`sonde_overview_app_${user.id}`, newAppId);
+    setUserPreferredAppId(user, newAppId, "sonde_overview_app");
+    if (newAppId !== "all") {
+      setUserPreferredAppId(user, newAppId, "sonde_preferred_app");
     }
   };
 
@@ -172,27 +162,6 @@ export function DashboardPage() {
     }
   }, [appInitialized, selectedDays, selectedAppId]);
 
-  const handleCleanInvalid = async () => {
-    setCleaning(true);
-    setError("");
-    setCleanSuccess("");
-    try {
-      const res = await api<{ totalDeleted: number }>("/api/v1/admin/explorer/clean-invalid", {
-        method: "POST",
-        body: JSON.stringify({
-          applicationId: selectedAppId !== "all" ? selectedAppId : undefined,
-        }),
-      });
-      setCleanModalOpen(false);
-      setCleanSuccess(t("overview.cleanInvalidSuccess", { count: res.totalDeleted }));
-      load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("common.error"));
-    } finally {
-      setCleaning(false);
-    }
-  };
-
   const timeRanges: { value: number | "all"; label: string }[] = [
     { value: 1, label: t("apps.stats24h") },
     { value: 7, label: t("apps.stats7d") },
@@ -222,13 +191,12 @@ export function DashboardPage() {
                 value={selectedAppId}
                 onChange={handleAppChange}
                 icon={<AppWindow size={14} />}
-                options={[
-                  { value: "all", label: t("overview.allApps") },
-                  ...applications.map((app) => ({
-                    value: app.id,
-                    label: `${app.name}${app.ownerUserId === user?.id ? ` (${t("overview.myApp")})` : ""}`,
-                  })),
-                ]}
+                options={formatAppOptions(applications, user, {
+                  includeAll: user?.isUnscopedAdmin !== false,
+                  allValue: "all",
+                  allLabel: t("overview.allApps"),
+                  myAppLabel: t("overview.myApp"),
+                })}
               />
             </div>
           ) : null}
@@ -476,38 +444,20 @@ export function DashboardPage() {
       ) : null}
 
       {cleanModalOpen ? (
-        <Modal
+        <CleanInvalidModal
           isOpen={true}
           onClose={() => setCleanModalOpen(false)}
-          title={t("overview.cleanInvalidTitle")}
-          icon={<Trash2 size={18} className="text-[var(--danger)]" />}
-          size="sm"
-          actions={
-            <div className="flex items-center justify-end gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setCleanModalOpen(false)}
-                disabled={cleaning}
-              >
-                {t("common.cancel")}
-              </Button>
-              <Button
-                variant="danger"
-                size="sm"
-                onClick={() => void handleCleanInvalid()}
-                disabled={cleaning}
-                icon={cleaning ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
-              >
-                {cleaning ? t("overview.cleaning") : t("overview.confirmClean")}
-              </Button>
-            </div>
+          applicationId={selectedAppId}
+          appName={
+            selectedAppId !== "all"
+              ? applications.find((a) => a.id === selectedAppId)?.name
+              : undefined
           }
-        >
-          <p className="text-xs text-[var(--muted)] leading-relaxed m-0">
-            {t("overview.cleanInvalidPrompt")}
-          </p>
-        </Modal>
+          onSuccess={(deletedCount) => {
+            setCleanSuccess(t("overview.cleanInvalidSuccess", { count: deletedCount }));
+            load();
+          }}
+        />
       ) : null}
     </div>
   );

@@ -14,9 +14,15 @@ import { motion } from "motion/react";
 import { CustomSelect } from "../components/CustomSelect";
 import { Button, Card, Badge, Input, EmptyState } from "../components/ui";
 import { api } from "../lib/api";
+import { useCurrentUser } from "../lib/useCurrentUser";
+import {
+  resolveInitialAppId,
+  setUserPreferredAppId,
+  formatAppOptions,
+} from "../lib/applicationPreferences";
 import "../styles/migration.css";
 
-type Application = { id: string; name: string; slug: string };
+type Application = { id: string; name: string; slug: string; ownerUserId?: string | null };
 type Environment = { id: string; applicationId: string; name: string; slug: string };
 type Preview = {
   sourceHash: string;
@@ -44,6 +50,7 @@ type ImportResult = { run: ImportRun; alreadyImported: boolean };
 
 export function MigrationPage() {
   const { t } = useTranslation();
+  const user = useCurrentUser();
   const [activeTab, setActiveTab] = useState<"d1" | "app">("d1");
   const [applications, setApplications] = useState<Application[]>([]);
   const [environments, setEnvironments] = useState<Environment[]>([]);
@@ -69,13 +76,14 @@ export function MigrationPage() {
       .then(([apps, history]) => {
         setApplications(apps);
         setRuns(history);
-        if (apps[0]) {
-          setApplicationId(apps[0].id);
-          setSelectedExportAppId(apps[0].id);
+        const defaultAppId = resolveInitialAppId(apps, user, { pagePrefix: "sonde_migration_app" });
+        if (defaultAppId) {
+          setApplicationId((curr) => curr || defaultAppId);
+          setSelectedExportAppId((curr) => curr || defaultAppId);
         }
       })
       .catch(showError);
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (!applicationId) return;
@@ -286,7 +294,7 @@ export function MigrationPage() {
                     value={applicationId}
                     options={[
                       { value: "", label: "—" },
-                      ...applications.map((item) => ({ value: item.id, label: item.name })),
+                      ...formatAppOptions(applications, user, { myAppLabel: t("overview.myApp") }),
                     ]}
                     onChange={setApplicationId}
                   />
@@ -405,7 +413,7 @@ export function MigrationPage() {
               <CustomSelect
                 label={t("migration.application")}
                 value={selectedExportAppId}
-                options={applications.map((item) => ({ value: item.id, label: item.name }))}
+                options={formatAppOptions(applications, user, { myAppLabel: t("overview.myApp") })}
                 onChange={setSelectedExportAppId}
               />
             </div>

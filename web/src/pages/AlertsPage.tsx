@@ -18,6 +18,12 @@ import { motion } from "motion/react";
 import { CustomSelect } from "../components/CustomSelect";
 import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input, EmptyState } from "../components/ui";
 import { api } from "../lib/api";
+import { useCurrentUser } from "../lib/useCurrentUser";
+import {
+  resolveInitialAppId,
+  setUserPreferredAppId,
+  formatAppOptions,
+} from "../lib/applicationPreferences";
 
 type Rule = {
   id: string;
@@ -59,17 +65,19 @@ type Delivery = {
   createdAt: number;
 };
 
-type Application = { id: string; name: string };
+type Application = { id: string; name: string; ownerUserId?: string | null };
 
 type Tab = "rules" | "channels" | "deliveries";
 
 export function AlertsPage() {
   const { t } = useTranslation();
+  const user = useCurrentUser();
   const [activeTab, setActiveTab] = useState<Tab>("rules");
   const [rules, setRules] = useState<Rule[]>([]);
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
+  const [filterAppId, setFilterAppId] = useState<string>("all");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
@@ -103,8 +111,10 @@ export function AlertsPage() {
       if (channelsRes.status === "fulfilled") setChannels(channelsRes.value);
       if (deliveriesRes.status === "fulfilled") setDeliveries(deliveriesRes.value);
       if (appsRes.status === "fulfilled") {
-        setApplications(appsRes.value);
-        setRuleAppId((current) => current || appsRes.value[0]?.id || "");
+        const apps = appsRes.value;
+        setApplications(apps);
+        const defaultAppId = resolveInitialAppId(apps, user, { pagePrefix: "sonde_alerts_app" });
+        setRuleAppId((current) => (current && apps.some((a) => a.id === current) ? current : defaultAppId));
       }
 
       if (rulesRes.status === "rejected" && channelsRes.status === "rejected") {
@@ -356,9 +366,15 @@ export function AlertsPage() {
                     value={ruleAppId}
                     options={[
                       { value: "", label: "—" },
-                      ...applications.map((app) => ({ value: app.id, label: app.name })),
+                      ...formatAppOptions(applications, user, { myAppLabel: t("overview.myApp") }),
                     ]}
-                    onChange={setRuleAppId}
+                    onChange={(val) => {
+                      setRuleAppId(val);
+                      if (val) {
+                        setUserPreferredAppId(user, val, "sonde_alerts_app");
+                        setUserPreferredAppId(user, val, "sonde_preferred_app");
+                      }
+                    }}
                   />
                 </div>
                 <div className="field">
@@ -444,29 +460,62 @@ export function AlertsPage() {
             </form>
           ) : null}
 
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            {applications.length > 0 ? (
+              <div className="min-w-[180px]">
+                <CustomSelect
+                  label={t("alerts.filterApp")}
+                  value={filterAppId}
+                  options={formatAppOptions(applications, user, {
+                    includeAll: true,
+                    allValue: "all",
+                    allLabel: t("alerts.allApps"),
+                    myAppLabel: t("overview.myApp"),
+                  })}
+                  onChange={setFilterAppId}
+                />
+              </div>
+            ) : <div />}
+            {!creatingRule ? (
+              <Button variant="default" size="sm" onClick={() => setCreatingRule(true)} icon={<Plus size={15} />}>
+                {t("alerts.new")}
+              </Button>
+            ) : null}
+          </div>
+
           <section className="rule-list">
-            {rules.length === 0 ? (
+            {rules.filter((r) => (filterAppId === "all" ? true : r.applicationId === filterAppId)).length === 0 ? (
               <div className="empty-state">
                 <ShieldCheck aria-hidden="true" />
                 <h2>{t("alerts.noRules")}</h2>
                 <p>{t("alerts.noRulesDesc")}</p>
               </div>
             ) : (
-              rules.map((rule) => {
-                const isFiring = rule.lastState === "firing";
-                return (
-                  <article key={rule.id} className="flex items-center justify-between p-4 rounded-xl border border-[var(--border-soft)] bg-[var(--panel)]">
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2.5 rounded-xl border ${isFiring ? "bg-[var(--danger)]/15 border-[var(--danger)] text-[var(--danger)]" : "bg-[var(--panel-strong)] border-[var(--border-soft)] text-[var(--signal)]"}`}>
-                        {isFiring ? <Flame size={18} className="animate-pulse" /> : <BellRing size={18} />}
+              rules
+                .filter((r) => (filterAppId === "all" ? true : r.applicationId === filterAppId))
+                .map((rule) => {
+                  const ruleApp = applications.find((a) => a.id === rule.applicationId);
+                  const isFiring = rule.lastState === "firing";
+                  return (
+                    <article key={rule.id} className="flex items-center justify-between p-4 rounded-xl border border-[var(--border-soft)] bg-[var(--panel)]">
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2.5 rounded-xl border ${isFiring ? "bg-[var(--danger)]/15 border-[var(--danger)] text-[var(--danger)]" : "bg-[var(--panel-strong)] border-[var(--border-soft)] text-[var(--signal)]"}`}>
+                          {isFiring ? <Flame size={18} className="animate-pulse" /> : <BellRing size={18} />}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h2 className="text-sm font-bold text-[var(--text)] m-0">{rule.name}</h2>
+                            {ruleApp ? (
+                              <span className="text-[10px] font-semibold text-[var(--muted)] px-1.5 py-0.5 rounded bg-[var(--input-bg)] border border-[var(--border-soft)]">
+                                {ruleApp.name}
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="text-xs text-[var(--muted)] m-0 mt-0.5 font-mono">
+                            {rule.sourceKind.replaceAll("_", " ")} · {rule.windowMinutes}m window · {rule.cooldownSeconds}s cooldown
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <h2 className="text-sm font-bold text-[var(--text)] m-0">{rule.name}</h2>
-                        <p className="text-xs text-[var(--muted)] m-0 mt-0.5 font-mono">
-                          {rule.sourceKind.replaceAll("_", " ")} · {rule.windowMinutes}m window · {rule.cooldownSeconds}s cooldown
-                        </p>
-                      </div>
-                    </div>
 
                     <div className="flex items-center gap-3">
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[var(--radius-sm)] text-xs font-semibold uppercase tracking-wider ${isFiring ? "bg-[var(--danger)]/20 text-[var(--danger)] border border-[var(--danger)]/30" : "bg-[var(--signal)]/15 text-[var(--signal)] border border-[var(--signal)]/30"}`}>

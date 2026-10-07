@@ -23,18 +23,26 @@ import { useLocation, useSearchParams } from "react-router-dom";
 import { motion } from "motion/react";
 import { CustomSelect } from "../components/CustomSelect";
 import { Modal } from "../components/Modal";
+import { CleanInvalidModal } from "../components/CleanInvalidModal";
 import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input, EmptyState } from "../components/ui";
 import { api } from "../lib/api";
+import { useCurrentUser } from "../lib/useCurrentUser";
+import {
+  resolveInitialAppId,
+  setUserPreferredAppId,
+  formatAppOptions,
+} from "../lib/applicationPreferences";
 import "../styles/explorer.css";
 
 type Kind = "events" | "metrics" | "logs";
-type Application = { id: string; name: string };
+type Application = { id: string; name: string; ownerUserId?: string | null };
 type Environment = { id: string; name: string };
 type RecordValue = Record<string, unknown> & { id: string; timestamp: number; attributes: unknown };
 type Page = { items: RecordValue[]; page: number; pageSize: number; hasMore: boolean };
 
 export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
   const { t } = useTranslation();
+  const user = useCurrentUser();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const isLogsRoute = location.pathname.startsWith("/logs");
@@ -69,16 +77,25 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
 
   // Clean Invalid Data
   const [cleanModalOpen, setCleanModalOpen] = useState(false);
-  const [cleaning, setCleaning] = useState(false);
 
   useEffect(() => {
     void api<Application[]>("/api/v1/admin/applications")
       .then((items) => {
         setApplications(items);
-        if (!applicationId && items[0]) setApplicationId(items[0].id);
+        const explicitId = searchParams.get("applicationId") ?? searchParams.get("app");
+        const targetId = resolveInitialAppId(items, user, {
+          explicitId,
+          pagePrefix: "sonde_explorer_app",
+        });
+        if (!applicationId || !items.some((a) => a.id === applicationId)) {
+          setApplicationId(targetId);
+          if (targetId && !explicitId) {
+            setSearchParams({ kind, applicationId: targetId });
+          }
+        }
       })
       .catch(showError);
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (!applicationId) return;
@@ -217,28 +234,6 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
     }
   }
 
-  async function executeCleanInvalid() {
-    setCleaning(true);
-    try {
-      const res = await api<{ totalDeleted: number }>("/api/v1/admin/explorer/clean-invalid", {
-        method: "POST",
-        body: JSON.stringify({
-          applicationId: applicationId || undefined,
-        }),
-      });
-      setSelectedIds(new Set());
-      setSuccessMsg(t("overview.cleanInvalidSuccess", { count: res.totalDeleted }));
-      setTimeout(() => setSuccessMsg(""), 4000);
-      setCleanModalOpen(false);
-      setPage(1);
-      void load();
-    } catch (cause) {
-      showError(cause);
-    } finally {
-      setCleaning(false);
-    }
-  }
-
   const kinds: { value: Kind; label: string; icon: typeof Activity }[] = [
     { value: "events", label: t("explorer.events"), icon: Activity },
     { value: "metrics", label: t("explorer.metrics"), icon: Radio },
@@ -320,10 +315,13 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
             <CustomSelect
               label={t("migration.application")}
               value={applicationId}
-              options={applications.map((item) => ({ value: item.id, label: item.name }))}
+              options={formatAppOptions(applications, user, { myAppLabel: t("overview.myApp") })}
               onChange={(value) => {
                 setApplicationId(value);
+                setUserPreferredAppId(user, value, "sonde_explorer_app");
+                setUserPreferredAppId(user, value, "sonde_preferred_app");
                 setPage(1);
+                setSearchParams({ kind, applicationId: value });
               }}
             />
           </div>
@@ -776,38 +774,19 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
 
       {/* Clean Invalid Data Modal */}
       {cleanModalOpen ? (
-        <Modal
+        <CleanInvalidModal
           isOpen={true}
           onClose={() => setCleanModalOpen(false)}
-          title={t("overview.cleanInvalidTitle")}
-          icon={<Trash2 size={18} className="text-[var(--danger)]" />}
-          size="sm"
-          actions={
-            <div className="flex items-center justify-end gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setCleanModalOpen(false)}
-                disabled={cleaning}
-              >
-                {t("common.cancel")}
-              </Button>
-              <Button
-                variant="danger"
-                size="sm"
-                onClick={() => void executeCleanInvalid()}
-                disabled={cleaning}
-                icon={cleaning ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
-              >
-                {cleaning ? t("overview.cleaning") : t("overview.confirmClean")}
-              </Button>
-            </div>
-          }
-        >
-          <p className="text-xs text-[var(--muted)] leading-relaxed m-0">
-            {t("explorer.cleanInvalidPrompt")}
-          </p>
-        </Modal>
+          applicationId={applicationId}
+          appName={applications.find((a) => a.id === applicationId)?.name}
+          onSuccess={(deletedCount) => {
+            setSelectedIds(new Set());
+            setSuccessMsg(t("overview.cleanInvalidSuccess", { count: deletedCount }));
+            setTimeout(() => setSuccessMsg(""), 4000);
+            setPage(1);
+            void load();
+          }}
+        />
       ) : null}
     </div>
   );

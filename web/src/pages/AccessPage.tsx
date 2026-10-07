@@ -22,6 +22,8 @@ import { useTranslation } from "react-i18next";
 import { Modal } from "../components/Modal";
 import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input, EmptyState, Select } from "../components/ui";
 import { api } from "../lib/api";
+import { useCurrentUser } from "../lib/useCurrentUser";
+import { sortAppsForUser } from "../lib/applicationPreferences";
 
 type UserSummary = {
   id: string;
@@ -38,10 +40,12 @@ type Application = {
   id: string;
   name: string;
   slug: string;
+  ownerUserId?: string | null;
 };
 
 export function AccessPage() {
   const { t } = useTranslation();
+  const currentUser = useCurrentUser();
   const [users, setUsers] = useState<UserSummary[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
   const [error, setError] = useState("");
@@ -356,7 +360,7 @@ export function AccessPage() {
             {applications.length === 0 ? (
               <p className="text-xs text-muted">{t("access.noApps")}</p>
             ) : (
-              applications.map((app) => {
+              sortAppsForUser(applications, currentUser).map((app) => {
                 const isChecked = assignedAppIds.includes(app.id);
                 return (
                   <label
@@ -386,7 +390,10 @@ export function AccessPage() {
                       }}
                     />
                     <div>
-                      <strong style={{ fontSize: "0.82rem", display: "block" }}>{app.name}</strong>
+                      <strong style={{ fontSize: "0.82rem", display: "block" }}>
+                        {app.name}
+                        {app.ownerUserId === currentUser?.id ? ` (${t("overview.myApp")})` : ""}
+                      </strong>
                       <code style={{ fontSize: "0.7rem", color: "var(--muted)" }}>{app.slug}</code>
                     </div>
                   </label>

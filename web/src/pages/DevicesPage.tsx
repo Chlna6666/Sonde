@@ -14,8 +14,14 @@ import { useTranslation } from "react-i18next";
 import { CustomSelect } from "../components/CustomSelect";
 import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input } from "../components/ui";
 import { api } from "../lib/api";
+import { useCurrentUser } from "../lib/useCurrentUser";
+import {
+  resolveInitialAppId,
+  setUserPreferredAppId,
+  formatAppOptions,
+} from "../lib/applicationPreferences";
 
-type Application = { id: string; name: string };
+type Application = { id: string; name: string; ownerUserId?: string | null };
 type Environment = { id: string; name: string };
 type DeviceStatus = "active" | "recent" | "offline";
 type RiskLevel = "low" | "medium" | "high" | "critical";
@@ -65,6 +71,7 @@ type DevicePage = {
 
 export function DevicesPage() {
   const { t, i18n } = useTranslation();
+  const user = useCurrentUser();
   const zh = i18n.language.toLowerCase().startsWith("zh");
   const copy = useMemo(() => deviceCopy(zh), [zh]);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -85,10 +92,13 @@ export function DevicesPage() {
     void api<Application[]>("/api/v1/admin/applications")
       .then((items) => {
         setApplications(items);
-        if (items[0]) setApplicationId((current) => current || items[0].id);
+        const targetId = resolveInitialAppId(items, user, {
+          pagePrefix: "sonde_devices_app",
+        });
+        setApplicationId((current) => (current && items.some((a) => a.id === current) ? current : targetId));
       })
       .catch(showError);
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (!applicationId) {
@@ -168,9 +178,11 @@ export function DevicesPage() {
           <CustomSelect
             label={t("migration.application")}
             value={applicationId}
-            options={applications.map((item) => ({ value: item.id, label: item.name }))}
+            options={formatAppOptions(applications, user, { myAppLabel: t("overview.myApp") })}
             onChange={(value) => {
               setApplicationId(value);
+              setUserPreferredAppId(user, value, "sonde_devices_app");
+              setUserPreferredAppId(user, value, "sonde_preferred_app");
               setPage(1);
             }}
           />
