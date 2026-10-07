@@ -25,6 +25,7 @@ export type User = {
   roles: string[];
   csrfToken: string;
   totpEnabled?: boolean;
+  isUnscopedAdmin?: boolean;
 };
 
 export function App() {
