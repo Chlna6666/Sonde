@@ -23,7 +23,7 @@ import { Modal } from "../components/Modal";
 import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input, EmptyState, Select } from "../components/ui";
 import { api } from "../lib/api";
 import { useCurrentUser } from "../lib/useCurrentUser";
-import { sortAppsForUser } from "../lib/applicationPreferences";
+import { sortAppsForUser, isUserOwnedApp } from "../lib/applicationPreferences";
 
 type UserSummary = {
   id: string;
@@ -297,6 +297,7 @@ export function AccessPage() {
       {creatingUser ? (
         <CreateUserModal
           applications={applications}
+          currentUser={currentUser}
           canAssignPrivileged={currentUserRoles.includes("Super Admin")}
           onClose={() => setCreatingUser(false)}
           onSuccess={() => {
@@ -392,7 +393,7 @@ export function AccessPage() {
                     <div>
                       <strong style={{ fontSize: "0.82rem", display: "block" }}>
                         {app.name}
-                        {app.ownerUserId === currentUser?.id ? ` (${t("overview.myApp")})` : ""}
+                        {isUserOwnedApp(app, currentUser) ? ` (${t("overview.myApp")})` : ""}
                       </strong>
                       <code style={{ fontSize: "0.7rem", color: "var(--muted)" }}>{app.slug}</code>
                     </div>
@@ -409,11 +410,13 @@ export function AccessPage() {
 
 function CreateUserModal({
   applications,
+  currentUser,
   canAssignPrivileged,
   onClose,
   onSuccess,
 }: {
   applications: Application[];
+  currentUser?: import("../App").User | null;
   canAssignPrivileged: boolean;
   onClose: () => void;
   onSuccess: () => void;
@@ -526,34 +529,40 @@ function CreateUserModal({
               {t("access.manageApps")}
             </span>
             <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "150px", overflowY: "auto" }}>
-              {applications.map((app) => (
-                <label
-                  key={app.id}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "10px",
-                    padding: "6px 10px",
-                    background: "var(--input-bg)",
-                    borderRadius: "6px",
-                    fontSize: "0.78rem",
-                    cursor: "pointer",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedApps.includes(app.id)}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedApps([...selectedApps, app.id]);
-                      } else {
-                        setSelectedApps(selectedApps.filter((id) => id !== app.id));
-                      }
+              {sortAppsForUser(applications, currentUser).map((app) => {
+                const isMy = isUserOwnedApp(app, currentUser);
+                return (
+                  <label
+                    key={app.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      padding: "6px 10px",
+                      background: "var(--input-bg)",
+                      borderRadius: "6px",
+                      fontSize: "0.78rem",
+                      cursor: "pointer",
                     }}
-                  />
-                  <span>{app.name} ({app.slug})</span>
-                </label>
-              ))}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedApps.includes(app.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedApps([...selectedApps, app.id]);
+                        } else {
+                          setSelectedApps(selectedApps.filter((id) => id !== app.id));
+                        }
+                      }}
+                    />
+                    <span>
+                      {app.name} ({app.slug})
+                      {isMy ? ` (${t("overview.myApp")})` : ""}
+                    </span>
+                  </label>
+                );
+              })}
             </div>
           </div>
         ) : null}

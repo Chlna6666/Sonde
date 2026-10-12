@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Activity,
   AppWindow,
@@ -32,7 +33,7 @@ import { PlatformIcon } from "../components/PlatformIcon";
 import { Button, Card, Badge, EmptyState, Input, Select } from "../components/ui";
 import { api } from "../lib/api";
 import { useCurrentUser } from "../lib/useCurrentUser";
-import { sortAppsForUser } from "../lib/applicationPreferences";
+import { sortAppsForUser, setCreatedAppAsPreferred } from "../lib/applicationPreferences";
 
 type Application = {
   id: string;
@@ -173,6 +174,8 @@ export function ApplicationsPage() {
           scopes: ["ingest"],
         }),
       });
+      setCreatedAppAsPreferred(user, created.id);
+      setFilterTab("my");
       setGlobalKeyReveal(key.key);
       setCreating(false);
       load();
@@ -392,7 +395,17 @@ export function ApplicationsPage() {
         />
       ) : null}
       {statsApp ? <AppStatsModal application={statsApp} onClose={() => setStatsApp(null)} /> : null}
-      {importing ? <ImportAppModal onClose={() => setImporting(false)} onSuccess={() => { setImporting(false); load(); }} /> : null}
+      {importing ? (
+        <ImportAppModal
+          user={user}
+          onClose={() => setImporting(false)}
+          onSuccess={() => {
+            setImporting(false);
+            setFilterTab("my");
+            load();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -413,7 +426,15 @@ function Field({ name, label, placeholder, pattern, defaultValue, required }: {
   );
 }
 
-function ImportAppModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+function ImportAppModal({
+  user,
+  onClose,
+  onSuccess,
+}: {
+  user?: import("../App").User | null;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
   const { t } = useTranslation();
   const [fileContent, setFileContent] = useState<unknown | null>(null);
   const [error, setError] = useState("");
@@ -442,7 +463,13 @@ function ImportAppModal({ onClose, onSuccess }: { onClose: () => void; onSuccess
     setLoading(true);
     setError("");
     try {
-      await api("/api/v1/admin/applications/import", { method: "POST", body: JSON.stringify(fileContent) });
+      const res = await api<{ ok: boolean; applicationId: string }>("/api/v1/admin/applications/import", {
+        method: "POST",
+        body: JSON.stringify(fileContent),
+      });
+      if (res?.applicationId) {
+        setCreatedAppAsPreferred(user, res.applicationId);
+      }
       onSuccess();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("common.error"));
@@ -669,12 +696,12 @@ function ManageAppModal({ application, onClose, onExport }: {
                 <ScrollText size={18} className="text-[var(--signal)]" />
                 <strong className="text-sm text-[var(--text)]">{t("apps.logIngestGuide")}</strong>
               </div>
-              <a
-                href={`/logs?applicationId=${application.id}`}
+              <Link
+                to={`/logs?applicationId=${application.id}`}
                 className="text-xs text-[var(--signal)] hover:underline flex items-center gap-1 font-semibold"
               >
                 {t("apps.viewLogs")} &rarr;
-              </a>
+              </Link>
             </div>
             <p className="text-xs text-[var(--muted)] m-0 leading-relaxed">
               {t("apps.logIngestDescription")}
@@ -941,7 +968,7 @@ function AppStatsModal({ application, onClose }: { application: Application; onC
                 <SplineAreaChart data={stats.trend.map((point) => ({ label: point.day, value: point.events, secondaryValue: point.users }))} height={170} strokeColor="var(--signal)" fillColor="var(--signal)" valueLabel={t("explorer.events")} secondaryLabel={t("public.devices")} />
               </div>
               <div className="distribution-card">
-                <DonutChart items={stats.appVersions} title={t("stats.versionDonut")} badge={t("stats.appVersion")} centerLabel={t("apps.statsTotalEvents")} height={220} />
+                <DonutChart items={stats.appVersions} title={t("stats.versionDonut")} badge={t("stats.appVersion")} centerLabel={t("stats.totalUsers")} height={220} />
               </div>
             </div>
 

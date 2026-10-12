@@ -472,12 +472,27 @@ export function AlertsPage() {
                     allLabel: t("alerts.allApps"),
                     myAppLabel: t("overview.myApp"),
                   })}
-                  onChange={setFilterAppId}
+                  onChange={(val) => {
+                    setFilterAppId(val);
+                    if (val && val !== "all") {
+                      setUserPreferredAppId(user, val, "sonde_alerts_app");
+                    }
+                  }}
                 />
               </div>
             ) : <div />}
             {!creatingRule ? (
-              <Button variant="default" size="sm" onClick={() => setCreatingRule(true)} icon={<Plus size={15} />}>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => {
+                  if (!ruleAppId && applications.length > 0) {
+                    setRuleAppId(resolveInitialAppId(applications, user, { pagePrefix: "sonde_alerts_app" }));
+                  }
+                  setCreatingRule(true);
+                }}
+                icon={<Plus size={15} />}
+              >
                 {t("alerts.new")}
               </Button>
             ) : null}

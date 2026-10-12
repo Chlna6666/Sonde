@@ -79,6 +79,7 @@ type Overview = {
   userGrowth: UserGrowthPoint[];
   versionTimeline: VersionTimelinePoint[];
   versionSeries?: VersionSeriesData[];
+  appVersions?: DistributionItem[];
   osFamilies?: DistributionItem[];
   operatingSystems?: DistributionItem[];
   buildDistribution?: DistributionItem[];
@@ -354,18 +355,10 @@ export function DashboardPage() {
             {/* Version Distribution Donut Chart */}
             <Card className="p-5 flex flex-col justify-between min-h-[340px]">
               <DonutChart
-                items={(() => {
-                  const series = data.versionSeries ?? [];
-                  const total = series.reduce((acc, curr) => acc + curr.totalCount, 0);
-                  return series.map((s) => ({
-                    name: s.version,
-                    count: s.totalCount,
-                    percentage: total > 0 ? Math.round((s.totalCount / total) * 1000) / 10 : 0,
-                  }));
-                })()}
+                items={data.appVersions ?? []}
                 title={t("stats.versionDonut")}
                 badge={t("stats.appVersion")}
-                centerLabel={t("apps.statsTotalEvents")}
+                centerLabel={t("stats.totalUsers")}
                 height="100%"
               />
             </Card>
@@ -435,7 +428,7 @@ export function DashboardPage() {
                 items={data.osFamilies ?? []}
                 title={t("apps.osFamilies")}
                 badge="OS"
-                centerLabel={t("apps.statsTotalEvents")}
+                centerLabel={t("stats.totalUsers")}
                 height="100%"
               />
             </Card>

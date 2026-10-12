@@ -125,7 +125,7 @@ export function DonutChart({
 
             {/* Center Summary */}
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
-              <span className="text-[10px] text-[var(--muted)]">{centerLabel || t("apps.statsTotalEvents")}</span>
+              <span className="text-[10px] text-[var(--muted)]">{centerLabel || t("stats.totalUsers")}</span>
               <strong className="text-base font-extrabold font-mono text-[var(--text)]">
                 {total.toLocaleString()}
               </strong>

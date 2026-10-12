@@ -384,6 +384,7 @@ export function PublicAppPage() {
               items={data.stats.appVersions}
               title={t("stats.versionDonut")}
               badge={t("stats.appVersion")}
+              centerLabel={t("stats.totalUsers")}
               height="100%"
             />
           </Card>

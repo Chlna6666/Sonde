@@ -18,6 +18,7 @@ import { useCurrentUser } from "../lib/useCurrentUser";
 import {
   resolveInitialAppId,
   setUserPreferredAppId,
+  setCreatedAppAsPreferred,
   formatAppOptions,
 } from "../lib/applicationPreferences";
 import "../styles/migration.css";
@@ -193,14 +194,20 @@ export function MigrationPage() {
     setBusy(true);
     setError("");
     try {
-      await api("/api/v1/admin/applications/import", {
+      const res = await api<{ ok: boolean; applicationId: string }>("/api/v1/admin/applications/import", {
         method: "POST",
         body: JSON.stringify(appImportFile),
       });
+      if (res?.applicationId) {
+        setCreatedAppAsPreferred(user, res.applicationId);
+        setApplicationId(res.applicationId);
+        setSelectedExportAppId(res.applicationId);
+      }
       setAppImportSuccess(t("apps.importSuccess"));
       setAppImportFile(null);
       setAppImportFileName("");
-      setApplications(await api<Application[]>("/api/v1/admin/applications"));
+      const refreshed = await api<Application[]>("/api/v1/admin/applications");
+      setApplications(refreshed);
     } catch (cause) {
       showError(cause);
     } finally {
@@ -296,7 +303,13 @@ export function MigrationPage() {
                       { value: "", label: "—" },
                       ...formatAppOptions(applications, user, { myAppLabel: t("overview.myApp") }),
                     ]}
-                    onChange={setApplicationId}
+                    onChange={(val) => {
+                      setApplicationId(val);
+                      if (val) {
+                        setUserPreferredAppId(user, val, "sonde_migration_app");
+                        setUserPreferredAppId(user, val, "sonde_preferred_app");
+                      }
+                    }}
                   />
                 </div>
                 <div className="field">
@@ -414,7 +427,13 @@ export function MigrationPage() {
                 label={t("migration.application")}
                 value={selectedExportAppId}
                 options={formatAppOptions(applications, user, { myAppLabel: t("overview.myApp") })}
-                onChange={setSelectedExportAppId}
+                onChange={(val) => {
+                  setSelectedExportAppId(val);
+                  if (val) {
+                    setUserPreferredAppId(user, val, "sonde_migration_app");
+                    setUserPreferredAppId(user, val, "sonde_preferred_app");
+                  }
+                }}
               />
             </div>
 
