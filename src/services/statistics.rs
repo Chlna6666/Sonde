@@ -165,6 +165,11 @@ fn map_overview(record: stats::Overview, activity: activity_stats::ActivityStats
             .into_iter()
             .map(map_version_series)
             .collect(),
+        app_versions: record
+            .app_versions
+            .into_iter()
+            .map(map_distribution)
+            .collect(),
         os_families: record
             .os_families
             .into_iter()

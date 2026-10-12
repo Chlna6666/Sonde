@@ -125,6 +125,7 @@ pub struct Overview {
     pub user_growth: Vec<UserGrowthPoint>,
     pub version_timeline: Vec<VersionTimelinePoint>,
     pub version_series: Vec<VersionSeries>,
+    pub app_versions: Vec<DistributionItem>,
     pub os_families: Vec<DistributionItem>,
     pub operating_systems: Vec<DistributionItem>,
     pub build_distribution: Vec<DistributionItem>,
@@ -229,50 +230,16 @@ pub async fn overview(
         event_trend(database, application_id, None, days, since_ts, &bucket_expr).await?;
     let trend = merge_activity_trend(event_trend, &user_growth);
 
-    let total_events = telemetry_count(
-        database,
-        crate::database::telemetry_count::RollupCountKind::Events,
-        application_id,
-        None,
-        since_ts,
-        None,
-    )
-    .await?;
     let version_timeline =
         compute_version_timeline(database, application_id, None, since_ts, &bucket_expr).await?;
     let version_series =
         compute_version_series(database, application_id, None, since_ts, &bucket_expr).await?;
 
-    let os_dimension = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
-        database,
-        application_id,
-        None,
-        since_ts,
-        crate::database::dimension_rollup::DIMENSION_OS,
-    )
-    .await?;
-    let (os_families, operating_systems, build_distribution) = if let Some(points) = os_dimension {
-        (
-            distribution_items(
-                crate::database::dimension_rollup::aggregate_os_families(&points),
-                usize::MAX,
-            ),
-            distribution_items(
-                crate::database::dimension_rollup::aggregate_dimension(&points),
-                50,
-            ),
-            distribution_items(
-                crate::database::dimension_rollup::aggregate_os_builds(&points),
-                100,
-            ),
-        )
-    } else {
-        (
-            os_family_distribution(database, application_id, None, since_ts, total_events).await?,
-            distribution_all(database, application_id, None, since_ts, "os", total_events).await?,
-            build_distribution(database, application_id, None, since_ts, total_events).await?,
-        )
-    };
+    let app_versions = app_version_distribution(database, application_id, None, since_ts).await?;
+    let os_families = os_family_distribution(database, application_id, None, since_ts).await?;
+    let operating_systems =
+        operating_systems_distribution(database, application_id, None, since_ts).await?;
+    let build_distribution = build_distribution(database, application_id, None, since_ts).await?;
     let system_languages =
         system_language_distribution(database, application_id, None, since_ts).await?;
 
@@ -292,6 +259,7 @@ pub async fn overview(
         user_growth,
         version_timeline,
         version_series,
+        app_versions,
         os_families,
         operating_systems,
         build_distribution,
@@ -385,83 +353,15 @@ pub async fn application_stats(
     )
     .await?;
 
-    let app_version_dimension = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
-        database,
-        Some(application_id),
-        environment_id,
-        since_ts,
-        crate::database::dimension_rollup::DIMENSION_APP_VERSION,
-    )
-    .await?;
-    let app_versions = if let Some(points) = app_version_dimension {
-        distribution_items(
-            crate::database::dimension_rollup::aggregate_dimension(&points),
-            50,
-        )
-    } else {
-        distribution(
-            database,
-            application_id,
-            environment_id,
-            since_ts,
-            "app_version",
-            total_events,
-        )
-        .await?
-    };
-
-    let os_dimension = crate::database::dimension_rollup::event_dimension_timeline_hybrid(
-        database,
-        Some(application_id),
-        environment_id,
-        since_ts,
-        crate::database::dimension_rollup::DIMENSION_OS,
-    )
-    .await?;
-    let (os_families, operating_systems, build_distribution) = if let Some(points) = os_dimension {
-        (
-            distribution_items(
-                crate::database::dimension_rollup::aggregate_os_families(&points),
-                usize::MAX,
-            ),
-            distribution_items(
-                crate::database::dimension_rollup::aggregate_dimension(&points),
-                50,
-            ),
-            distribution_items(
-                crate::database::dimension_rollup::aggregate_os_builds(&points),
-                100,
-            ),
-        )
-    } else {
-        (
-            os_family_distribution(
-                database,
-                Some(application_id),
-                environment_id,
-                since_ts,
-                total_events,
-            )
-            .await?,
-            distribution_all(
-                database,
-                Some(application_id),
-                environment_id,
-                since_ts,
-                "os",
-                total_events,
-            )
-            .await?,
-            build_distribution(
-                database,
-                Some(application_id),
-                environment_id,
-                since_ts,
-                total_events,
-            )
-            .await?,
-        )
-    };
+    let app_versions =
+        app_version_distribution(database, Some(application_id), environment_id, since_ts).await?;
+    let os_families =
+        os_family_distribution(database, Some(application_id), environment_id, since_ts).await?;
+    let operating_systems =
+        operating_systems_distribution(database, Some(application_id), environment_id, since_ts)
+            .await?;
+    let build_distribution =
+        build_distribution(database, Some(application_id), environment_id, since_ts).await?;
     let system_languages =
         system_language_distribution(database, Some(application_id), environment_id, since_ts)
             .await?;
@@ -1040,172 +940,18 @@ fn apply_event_scope(
     }
 }
 
-async fn os_family_distribution(
-    database: &DatabaseConnection,
-    application_id: Option<&str>,
-    environment_id: Option<&str>,
-    since_ts: Option<i64>,
-    total_events: u64,
-) -> Result<Vec<DistributionItem>, DbErr> {
-    let family_expr = "CASE WHEN os LIKE 'Windows%' THEN 'Windows' WHEN os LIKE 'Linux%' OR os LIKE '%Linux%' OR os LIKE '%Fedora%' OR os LIKE '%Ubuntu%' OR os LIKE '%Debian%' OR os LIKE '%Arch%' THEN 'Linux' WHEN os LIKE 'Mac%' OR os LIKE 'Darwin%' OR os LIKE 'macOS%' THEN 'macOS' WHEN os LIKE 'Android%' THEN 'Android' WHEN os LIKE 'iOS%' THEN 'iOS' ELSE COALESCE(os, 'Unknown') END";
-    grouped_distribution(
-        database,
-        application_id,
-        environment_id,
-        since_ts,
-        family_expr,
-        "family_name",
-        total_events,
-        None,
-    )
-    .await
-}
-
-async fn build_distribution(
-    database: &DatabaseConnection,
-    application_id: Option<&str>,
-    environment_id: Option<&str>,
-    since_ts: Option<i64>,
-    total_events: u64,
-) -> Result<Vec<DistributionItem>, DbErr> {
-    let build_expr = "CASE WHEN os LIKE 'Windows % Build %' THEN 'Win ' || SUBSTR(os, 9, INSTR(SUBSTR(os, 9), ' Build ') - 1) || ' (' || SUBSTR(os, INSTR(os, 'Build ') + 6) || ')' WHEN os LIKE 'Windows %' THEN os WHEN os LIKE 'Linux (% Linux %)' THEN REPLACE(SUBSTR(os, 8, LENGTH(os) - 8), ' Linux', '') WHEN os LIKE 'Linux (%)' THEN SUBSTR(os, 8, LENGTH(os) - 8) WHEN os LIKE 'Mac OS X %' THEN REPLACE(os, 'Mac OS X ', 'macOS ') WHEN os LIKE 'Darwin %' THEN REPLACE(os, 'Darwin ', 'macOS ') WHEN os LIKE 'Android%' THEN os WHEN os LIKE 'iOS%' THEN os ELSE COALESCE(os, 'Unknown') END";
-    let items = grouped_distribution(
-        database,
-        application_id,
-        environment_id,
-        since_ts,
-        build_expr,
-        "build_name",
-        total_events,
-        Some(100),
-    )
-    .await?;
-    Ok(items
-        .into_iter()
-        .filter(|item| !item.name.trim().is_empty() && !item.name.eq_ignore_ascii_case("unknown"))
-        .collect())
-}
-
-async fn distribution_all(
-    database: &DatabaseConnection,
-    application_id: Option<&str>,
-    environment_id: Option<&str>,
-    since_ts: Option<i64>,
-    column: &str,
-    total_events: u64,
-) -> Result<Vec<DistributionItem>, DbErr> {
-    grouped_distribution(
-        database,
-        application_id,
-        environment_id,
-        since_ts,
-        &format!("COALESCE({column}, 'unknown')"),
-        "item_name",
-        total_events,
-        Some(50),
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn grouped_distribution(
+async fn device_distribution(
     database: &DatabaseConnection,
     application_id: Option<&str>,
     environment_id: Option<&str>,
     since_ts: Option<i64>,
     expression: &str,
     alias: &str,
-    total_events: u64,
     limit: Option<u64>,
 ) -> Result<Vec<DistributionItem>, DbErr> {
     let mut query = Query::select();
     query
         .expr_as(Expr::cust(expression.to_owned()), Alias::new(alias))
-        .expr_as(
-            Func::count(Expr::col(Alias::new("id"))),
-            Alias::new("item_count"),
-        )
-        .from(Alias::new("events"));
-    apply_event_scope(&mut query, application_id, environment_id, since_ts);
-    query
-        .group_by_col(Alias::new(alias))
-        .order_by(Alias::new("item_count"), sea_orm::sea_query::Order::Desc);
-    if let Some(limit) = limit {
-        query.limit(limit);
-    }
-
-    database
-        .query_all(&query)
-        .await?
-        .into_iter()
-        .map(|row| {
-            let count =
-                u64::try_from(row.try_get::<i64>("", "item_count").unwrap_or(0)).unwrap_or(0);
-            Ok(DistributionItem {
-                name: row.try_get("", alias)?,
-                count,
-                percentage: percentage(count, total_events),
-            })
-        })
-        .collect()
-}
-
-async fn distribution(
-    database: &DatabaseConnection,
-    application_id: &str,
-    environment_id: Option<&str>,
-    since_ts: Option<i64>,
-    column: &str,
-    total_events: u64,
-) -> Result<Vec<DistributionItem>, DbErr> {
-    distribution_all(
-        database,
-        Some(application_id),
-        environment_id,
-        since_ts,
-        column,
-        total_events,
-    )
-    .await
-}
-
-fn distribution_items(
-    counts: Vec<crate::database::dimension_rollup::DimensionCount>,
-    limit: usize,
-) -> Vec<DistributionItem> {
-    let total = counts
-        .iter()
-        .fold(0_u64, |sum, item| sum.saturating_add(item.count));
-    counts
-        .into_iter()
-        .take(limit)
-        .map(|item| DistributionItem {
-            name: item.value,
-            count: item.count,
-            percentage: percentage(item.count, total),
-        })
-        .collect()
-}
-
-fn percentage(count: u64, total: u64) -> f64 {
-    if total == 0 {
-        return 0.0;
-    }
-    (((count as f64 / total as f64) * 100.0) * 10.0).round() / 10.0
-}
-
-pub async fn system_language_distribution(
-    database: &DatabaseConnection,
-    application_id: Option<&str>,
-    environment_id: Option<&str>,
-    since_ts: Option<i64>,
-) -> Result<Vec<DistributionItem>, DbErr> {
-    let mut query = Query::select();
-    query
-        .expr_as(
-            Expr::cust("COALESCE(NULLIF(TRIM(last_system_language), ''), 'unknown')"),
-            Alias::new("lang"),
-        )
         .expr_as(Func::count(Expr::col(Alias::new("id"))), Alias::new("cnt"))
         .from(Alias::new("telemetry_devices"));
 
@@ -1222,15 +968,18 @@ pub async fn system_language_distribution(
 
     query
         .cond_where(condition)
-        .group_by_col(Alias::new("lang"))
-        .order_by(Alias::new("cnt"), sea_orm::sea_query::Order::Desc)
-        .limit(50);
+        .group_by_col(Alias::new(alias))
+        .order_by(Alias::new("cnt"), sea_orm::sea_query::Order::Desc);
+
+    if let Some(limit) = limit {
+        query.limit(limit);
+    }
 
     let rows = database.query_all(&query).await?;
     let mut items = Vec::with_capacity(rows.len());
     let mut total = 0_u64;
     for row in rows {
-        let name: String = row.try_get("", "lang")?;
+        let name: String = row.try_get("", alias)?;
         let count = u64::try_from(row.try_get::<i64>("", "cnt").unwrap_or(0)).unwrap_or(0);
         total = total.saturating_add(count);
         items.push((name, count));
@@ -1244,4 +993,118 @@ pub async fn system_language_distribution(
             percentage: percentage(count, total),
         })
         .collect())
+}
+
+pub async fn app_version_distribution(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since_ts: Option<i64>,
+) -> Result<Vec<DistributionItem>, DbErr> {
+    device_distribution(
+        database,
+        application_id,
+        environment_id,
+        since_ts,
+        "COALESCE(NULLIF(TRIM(last_app_version), ''), 'unknown')",
+        "ver",
+        Some(50),
+    )
+    .await
+}
+
+pub async fn os_family_distribution(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since_ts: Option<i64>,
+) -> Result<Vec<DistributionItem>, DbErr> {
+    let family_expr = "CASE WHEN last_os LIKE 'Windows%' THEN 'Windows' WHEN last_os LIKE 'Linux%' OR last_os LIKE '%Linux%' OR last_os LIKE '%Fedora%' OR last_os LIKE '%Ubuntu%' OR last_os LIKE '%Debian%' OR last_os LIKE '%Arch%' THEN 'Linux' WHEN last_os LIKE 'Mac%' OR last_os LIKE 'Darwin%' OR last_os LIKE 'macOS%' THEN 'macOS' WHEN last_os LIKE 'Android%' THEN 'Android' WHEN last_os LIKE 'iOS%' THEN 'iOS' ELSE COALESCE(last_os, 'Unknown') END";
+    device_distribution(
+        database,
+        application_id,
+        environment_id,
+        since_ts,
+        family_expr,
+        "family_name",
+        None,
+    )
+    .await
+}
+
+pub async fn operating_systems_distribution(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since_ts: Option<i64>,
+) -> Result<Vec<DistributionItem>, DbErr> {
+    device_distribution(
+        database,
+        application_id,
+        environment_id,
+        since_ts,
+        "COALESCE(NULLIF(TRIM(last_os), ''), 'unknown')",
+        "os_name",
+        Some(50),
+    )
+    .await
+}
+
+pub async fn build_distribution(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since_ts: Option<i64>,
+) -> Result<Vec<DistributionItem>, DbErr> {
+    let build_expr = "CASE WHEN last_os LIKE 'Windows % Build %' THEN 'Win ' || SUBSTR(last_os, 9, INSTR(SUBSTR(last_os, 9), ' Build ') - 1) || ' (' || SUBSTR(last_os, INSTR(last_os, 'Build ') + 6) || ')' WHEN last_os LIKE 'Windows %' THEN last_os WHEN last_os LIKE 'Linux (% Linux %)' THEN REPLACE(SUBSTR(last_os, 8, LENGTH(last_os) - 8), ' Linux', '') WHEN last_os LIKE 'Linux (%)' THEN SUBSTR(last_os, 8, LENGTH(last_os) - 8) WHEN last_os LIKE 'Mac OS X %' THEN REPLACE(last_os, 'Mac OS X ', 'macOS ') WHEN last_os LIKE 'Darwin %' THEN REPLACE(last_os, 'Darwin ', 'macOS ') WHEN last_os LIKE 'Android%' THEN last_os WHEN last_os LIKE 'iOS%' THEN last_os ELSE COALESCE(last_os, 'Unknown') END";
+    let items = device_distribution(
+        database,
+        application_id,
+        environment_id,
+        since_ts,
+        build_expr,
+        "build_name",
+        Some(100),
+    )
+    .await?;
+    let filtered: Vec<_> = items
+        .into_iter()
+        .filter(|item| !item.name.trim().is_empty() && !item.name.eq_ignore_ascii_case("unknown"))
+        .collect();
+    let total = filtered
+        .iter()
+        .fold(0_u64, |sum, item| sum.saturating_add(item.count));
+    Ok(filtered
+        .into_iter()
+        .map(|item| DistributionItem {
+            name: item.name,
+            count: item.count,
+            percentage: percentage(item.count, total),
+        })
+        .collect())
+}
+
+pub async fn system_language_distribution(
+    database: &DatabaseConnection,
+    application_id: Option<&str>,
+    environment_id: Option<&str>,
+    since_ts: Option<i64>,
+) -> Result<Vec<DistributionItem>, DbErr> {
+    device_distribution(
+        database,
+        application_id,
+        environment_id,
+        since_ts,
+        "COALESCE(NULLIF(TRIM(last_system_language), ''), 'unknown')",
+        "lang",
+        Some(50),
+    )
+    .await
+}
+
+fn percentage(count: u64, total: u64) -> f64 {
+    if total == 0 {
+        return 0.0;
+    }
+    (((count as f64 / total as f64) * 100.0) * 10.0).round() / 10.0
 }
