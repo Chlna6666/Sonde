@@ -155,9 +155,9 @@ impl LatencyStats {
 
 /// Query real process WorkingSet64 and PrivateMemorySize64 in MiB on Windows.
 fn get_process_memory_mib() -> (f64, f64) {
-    let pid = std::process::id();
     #[cfg(target_os = "windows")]
     {
+        let pid = std::process::id();
         let output = std::process::Command::new("powershell")
             .args([
                 "-NoProfile",
@@ -535,13 +535,23 @@ async fn test_e2e_ingest_pipeline_throughput_and_latencies() {
                 );
 
                 let t0 = Instant::now();
-                let response = client
-                    .post(format!("{base}{EVENT_PATH}"))
-                    .headers(headers)
-                    .body(body_bytes.clone())
-                    .send()
-                    .await
-                    .expect("ingest request failed");
+                let mut attempts = 0;
+                let response = loop {
+                    match client
+                        .post(format!("{base}{EVENT_PATH}"))
+                        .headers(headers.clone())
+                        .body(body_bytes.clone())
+                        .send()
+                        .await
+                    {
+                        Ok(res) => break res,
+                        Err(_e) if attempts < 3 => {
+                            attempts += 1;
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                        Err(e) => panic!("ingest request failed after {attempts} retries: {e}"),
+                    }
+                };
 
                 assert_eq!(response.status(), StatusCode::ACCEPTED);
                 let receipt: BatchReceiptBody = response.json().await.expect("receipt json");

@@ -22,8 +22,9 @@ pub fn generate_device_id() -> String {
 /// platform UUID). It does NOT write any files to disk, preventing users or malicious scripts
 /// from resetting, duplicating, or spoofing identities by modifying or deleting local files.
 pub fn machine_device_id(salt: Option<&str>) -> Result<String> {
-    let raw = platform_machine_code()
-        .ok_or_else(|| Error::InvalidConfiguration("failed to detect platform machine identifier".into()))?;
+    let raw = platform_machine_code().ok_or_else(|| {
+        Error::InvalidConfiguration("failed to detect platform machine identifier".into())
+    })?;
     let salt = salt.unwrap_or(DEFAULT_MACHINE_SALT);
     let mut hasher = Sha256::new();
     hasher.update(salt.as_bytes());
@@ -112,6 +113,7 @@ pub(crate) fn validate_device_id(value: &str) -> std::result::Result<&str, &'sta
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::{generate_device_id, machine_device_id, validate_device_id};
 
@@ -129,10 +131,16 @@ mod tests {
             assert_eq!(validate_device_id(&id1), Ok(id1.as_str()));
 
             let id2 = machine_device_id(None).unwrap();
-            assert_eq!(id1, id2, "machine_device_id must be stable across multiple calls");
+            assert_eq!(
+                id1, id2,
+                "machine_device_id must be stable across multiple calls"
+            );
 
             let id_custom_salt = machine_device_id(Some("custom-salt")).unwrap();
-            assert_ne!(id1, id_custom_salt, "different salts must produce different IDs");
+            assert_ne!(
+                id1, id_custom_salt,
+                "different salts must produce different IDs"
+            );
         }
     }
 }

@@ -119,7 +119,6 @@ jobs:
     timeout-minutes: 45
     env:
       SONDE_E2E_URL: http://127.0.0.1:8091
-      SONDE_E2E_SETUP_TOKEN: ci-setup-token-2026-sonde
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -140,7 +139,6 @@ jobs:
             --security-opt no-new-privileges:true \
             --publish 127.0.0.1:8091:8080 \
             --volume sonde-ci-data:/app/data \
-            --env SONDE_SETUP_TOKEN="$SONDE_E2E_SETUP_TOKEN" \
             --env SONDE_ALLOW_INSECURE_COOKIES=1 \
             "sonde-ci:${GITHUB_SHA}"
 
@@ -161,7 +159,14 @@ jobs:
           python3 -m playwright install --with-deps chromium
 
       - name: Browser smoke
-        run: python3 tests/e2e_smoke.py
+        run: |
+          SETUP_CODE=$(docker logs sonde-ci 2>&1 | grep -oE '[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}' | head -n 1)
+          if [ -z "$SETUP_CODE" ]; then
+            echo "Failed to extract setup verification code from container logs"
+            docker logs sonde-ci
+            exit 1
+          fi
+          SONDE_E2E_SETUP_CODE="$SETUP_CODE" python3 tests/e2e_smoke.py
 
       - name: Container logs
         if: failure()
