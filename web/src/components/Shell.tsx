@@ -10,6 +10,7 @@ import {
   HardDrive,
   LogOut,
   Menu,
+  MonitorSmartphone,
   Search,
   Settings,
   ShieldAlert,
@@ -43,11 +44,11 @@ const navigation = [
   },
   {
     to: "/devices",
-    label: "settings.security",
-    Icon: ShieldAlert,
+    label: "nav.devices",
+    Icon: MonitorSmartphone,
     colorClass: "icon-squircle-amber",
-    eyebrow: "settings.eyebrow",
-    title: "settings.security",
+    eyebrow: "nav.devicesEyebrow",
+    title: "nav.devices",
   },
   {
     to: "/explorer",

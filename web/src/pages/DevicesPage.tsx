@@ -11,6 +11,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { Link, useSearchParams } from "react-router-dom";
 import { CustomSelect } from "../components/CustomSelect";
 import { Button, Card, Badge, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Input } from "../components/ui";
 import { api } from "../lib/api";
@@ -71,17 +72,20 @@ type DevicePage = {
 
 export function DevicesPage() {
   const { t, i18n } = useTranslation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const user = useCurrentUser();
   const zh = i18n.language.toLowerCase().startsWith("zh");
   const copy = useMemo(() => deviceCopy(zh), [zh]);
   const [applications, setApplications] = useState<Application[]>([]);
   const [environments, setEnvironments] = useState<Environment[]>([]);
-  const [applicationId, setApplicationId] = useState("");
-  const [environmentId, setEnvironmentId] = useState("");
-  const [status, setStatus] = useState("");
-  const [risk, setRisk] = useState("");
-  const [search, setSearch] = useState("");
-  const [appliedSearch, setAppliedSearch] = useState("");
+  const initialAppId = searchParams.get("applicationId") ?? searchParams.get("app") ?? "";
+  const initialSearch = searchParams.get("search") ?? searchParams.get("text") ?? searchParams.get("deviceId") ?? "";
+  const [applicationId, setApplicationId] = useState(initialAppId);
+  const [environmentId, setEnvironmentId] = useState(searchParams.get("environmentId") ?? "");
+  const [status, setStatus] = useState(searchParams.get("status") ?? "");
+  const [risk, setRisk] = useState(searchParams.get("risk") ?? "");
+  const [search, setSearch] = useState(initialSearch);
+  const [appliedSearch, setAppliedSearch] = useState(initialSearch);
   const [page, setPage] = useState(1);
   const [data, setData] = useState<DevicePage | null>(null);
   const [loading, setLoading] = useState(false);
@@ -92,10 +96,15 @@ export function DevicesPage() {
     void api<Application[]>("/api/v1/admin/applications")
       .then((items) => {
         setApplications(items);
+        const explicitId = searchParams.get("applicationId") ?? searchParams.get("app");
         const targetId = resolveInitialAppId(items, user, {
+          explicitId,
           pagePrefix: "sonde_devices_app",
         });
-        setApplicationId((current) => (current && items.some((a) => a.id === current) ? current : targetId));
+        setApplicationId((current) => {
+          if (explicitId && items.some((a) => a.id === explicitId)) return explicitId;
+          return current && items.some((a) => a.id === current) ? current : targetId;
+        });
       })
       .catch(showError);
   }, [user]);
@@ -143,7 +152,14 @@ export function DevicesPage() {
   function applySearch(event: FormEvent) {
     event.preventDefault();
     setPage(1);
-    setAppliedSearch(search.trim());
+    const trimmed = search.trim();
+    setAppliedSearch(trimmed);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (trimmed) next.set("search", trimmed);
+      else next.delete("search");
+      return next;
+    });
   }
 
   async function copyDeviceId(value: string) {
@@ -163,7 +179,7 @@ export function DevicesPage() {
         <div>
           <span className="eyebrow">{copy.eyebrow}</span>
           <h1 className="m-0 mt-0.5 text-2xl font-extrabold tracking-tight text-[var(--text)] sm:text-3xl">
-            {t("settings.security")}
+            {t("nav.devices")}
           </h1>
           <p className="m-0 mt-1 max-w-2xl text-xs text-[var(--muted)]">{copy.subtitle}</p>
         </div>
@@ -184,6 +200,12 @@ export function DevicesPage() {
               setUserPreferredAppId(user, value, "sonde_devices_app");
               setUserPreferredAppId(user, value, "sonde_preferred_app");
               setPage(1);
+              setSearchParams((prev) => {
+                const next = new URLSearchParams(prev);
+                if (value) next.set("applicationId", value);
+                else next.delete("applicationId");
+                return next;
+              });
             }}
           />
         </FilterLabel>
@@ -291,7 +313,7 @@ export function DevicesPage() {
             {data?.items.map((device) => (
               <TableRow key={device.id} className="align-top">
                 <TableCell>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <code className="max-w-[150px] truncate text-[11px] font-bold text-[var(--text)]" title={device.id}>
                       {device.id.slice(0, 16)}…
                     </code>
@@ -303,6 +325,13 @@ export function DevicesPage() {
                     >
                       <Copy size={13} />
                     </button>
+                    <Link
+                      to={`/explorer?applicationId=${applicationId}&environmentId=${device.environmentId}&text=${encodeURIComponent(device.id)}`}
+                      className="text-[var(--muted)] hover:text-[var(--signal)] cursor-pointer inline-flex items-center"
+                      title={copy.viewEvents}
+                    >
+                      <Search size={13} />
+                    </Link>
                   </div>
                   <div className="mt-1 text-[10px] text-[var(--faint)]">
                     {environmentNames.get(device.environmentId) ?? device.environmentId}
@@ -449,22 +478,22 @@ function reasonLabel(reason: string, zh: boolean) {
 
 function deviceCopy(zh: boolean) {
   return zh ? {
-    eyebrow: "安全 / 设备防刷",
-    subtitle: "查看由可信签名遥测推导出的设备当前状态、活动轨迹和异常风险信号。风险分仅用于观察，不会自动封禁设备。",
+    eyebrow: "设备 / 画像与分析",
+    subtitle: "查看由可信遥测推导出的设备当前状态、硬件环境与异常轨迹分析。风险分仅用于观察，不会自动封禁设备。",
     observeOnly: "观察模式 · 不自动封禁",
     status: "活动状态", allStatuses: "全部状态", active: "活跃（15分钟）", recent: "近期（24小时）", offline: "离线",
     risk: "风险等级", allRisk: "全部风险", risky: "有风险（≥20）", low: "低", medium: "中", high: "高", critical: "严重",
     search: "设备检索", searchHint: "设备哈希、Session、版本、OS 或系统语言...", apply: "应用筛选",
     total: "设备总数", highRisk: "高风险设备", device: "设备", currentState: "平台推导当前状态", volume: "可信遥测量", anomalies: "异常信号", lastSeen: "最后活动",
-    session: "Session", language: "系统语言", architecture: "系统架构", copyId: "复制设备哈希", copied: "已复制", none: "无", empty: "当前筛选条件下没有设备画像。", previous: "上一页", next: "下一页",
+    session: "Session", language: "系统语言", architecture: "系统架构", copyId: "复制设备哈希", copied: "已复制", viewEvents: "在检索中查看该设备事件流", none: "无", empty: "当前筛选条件下没有设备画像。", previous: "上一页", next: "下一页",
   } : {
-    eyebrow: "SECURITY / DEVICE ABUSE",
-    subtitle: "Inspect server-derived current device state, activity and anomaly signals from trusted signed telemetry. Risk scores are observational and do not automatically block devices.",
+    eyebrow: "DEVICES / ANALYTICS",
+    subtitle: "Inspect server-derived device state, hardware environment and activity trajectories from trusted telemetry. Risk scores are observational.",
     observeOnly: "Observe only · no auto-block",
     status: "Activity", allStatuses: "All statuses", active: "Active (15m)", recent: "Recent (24h)", offline: "Offline",
     risk: "Risk", allRisk: "All risk", risky: "Risky (≥20)", low: "Low", medium: "Medium", high: "High", critical: "Critical",
     search: "Device search", searchHint: "Device hash, session, version, OS or language...", apply: "Apply filters",
     total: "Total devices", highRisk: "High risk", device: "Device", currentState: "Server-derived state", volume: "Trusted telemetry", anomalies: "Anomaly signals", lastSeen: "Last seen",
-    session: "Session", language: "System Language", architecture: "Architecture", copyId: "Copy device hash", copied: "Copied", none: "None", empty: "No device profiles match the current filters.", previous: "Previous", next: "Next",
+    session: "Session", language: "System Language", architecture: "Architecture", copyId: "Copy device hash", copied: "Copied", viewEvents: "View device events in Explorer", none: "None", empty: "No device profiles match the current filters.", previous: "Previous", next: "Next",
   };
 }

@@ -17,9 +17,10 @@ import {
   RotateCcw,
   AlertTriangle,
   RefreshCw,
+  MonitorSmartphone,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { motion } from "motion/react";
 import { CustomSelect } from "../components/CustomSelect";
 import { Modal } from "../components/Modal";
@@ -52,7 +53,7 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [applicationId, setApplicationId] = useState(searchParams.get("applicationId") ?? searchParams.get("app") ?? "");
   const [environmentId, setEnvironmentId] = useState("");
-  const [text, setText] = useState("");
+  const [text, setText] = useState(searchParams.get("text") ?? searchParams.get("search") ?? searchParams.get("q") ?? "");
   const [level, setLevel] = useState("");
   const [page, setPage] = useState(1);
   const [data, setData] = useState<Page | null>(null);
@@ -87,11 +88,17 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
           explicitId,
           pagePrefix: "sonde_explorer_app",
         });
-        if (!applicationId || !items.some((a) => a.id === applicationId)) {
-          setApplicationId(targetId);
-          if (targetId && !explicitId) {
-            setSearchParams({ kind, applicationId: targetId });
-          }
+        setApplicationId((current) => {
+          if (explicitId && items.some((a) => a.id === explicitId)) return explicitId;
+          return current && items.some((a) => a.id === current) ? current : targetId;
+        });
+        if (targetId && !explicitId) {
+          setSearchParams((prev) => {
+            const next = new URLSearchParams(prev);
+            next.set("kind", kind);
+            next.set("applicationId", targetId);
+            return next;
+          });
         }
       })
       .catch(showError);
@@ -321,7 +328,12 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
                 setUserPreferredAppId(user, value, "sonde_explorer_app");
                 setUserPreferredAppId(user, value, "sonde_preferred_app");
                 setPage(1);
-                setSearchParams({ kind, applicationId: value });
+                setSearchParams((prev) => {
+                  const next = new URLSearchParams(prev);
+                  next.set("kind", kind);
+                  next.set("applicationId", value);
+                  return next;
+                });
               }}
             />
           </div>
@@ -502,7 +514,20 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
                 {kind === "events" ? (
                   <>
                     <TableCell className="font-bold text-[var(--text)] font-sans">{String(record.name ?? "-")}</TableCell>
-                    <TableCell className="text-[var(--muted)]">{String(record.anonymousId ?? record.deviceId ?? "-")}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {record.anonymousId || record.deviceId ? (
+                        <Link
+                          to={`/devices?applicationId=${applicationId}&search=${encodeURIComponent(String(record.anonymousId ?? record.deviceId))}`}
+                          className="inline-flex items-center gap-1.5 text-[var(--signal)] hover:underline font-mono"
+                          title={t("explorer.viewDeviceProfile")}
+                        >
+                          <MonitorSmartphone size={13} className="flex-shrink-0" />
+                          <span className="truncate max-w-[150px]">{String(record.anonymousId ?? record.deviceId)}</span>
+                        </Link>
+                      ) : (
+                        <span className="text-[var(--muted)]">-</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-[var(--muted)]">{String(record.appVersion ?? "-")}</TableCell>
                     <TableCell className="text-[var(--muted)]">{String(record.os ?? "-")}</TableCell>
                   </>
@@ -600,6 +625,15 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
           size="lg"
           actions={
             <div className="flex items-center gap-2">
+              {(inspectRecord.anonymousId || inspectRecord.deviceId) ? (
+                <Link
+                  to={`/devices?applicationId=${applicationId}&search=${encodeURIComponent(String(inspectRecord.anonymousId ?? inspectRecord.deviceId))}`}
+                  className="h-[32px] text-xs px-2.5 rounded-[var(--radius-md)] border border-[var(--border)] hover:border-[var(--signal)] hover:text-[var(--signal)] text-[var(--text)] inline-flex items-center gap-1.5 transition-colors font-medium"
+                >
+                  <MonitorSmartphone size={14} />
+                  <span>{t("explorer.viewDeviceProfile")}</span>
+                </Link>
+              ) : null}
               <Button
                 variant="outline"
                 size="sm"
