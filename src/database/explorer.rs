@@ -97,7 +97,7 @@ pub async fn events(
             .map(Alias::new),
         )
         .from(Alias::new("events"));
-    apply_filter(&mut select, filter, "name", None);
+    apply_filter(&mut select, filter, "name", None, Some("anonymous_id"));
     page(database, select, filter, |row| {
         Ok(EventRecord {
             id: row.try_get("", "id")?,
@@ -137,7 +137,7 @@ pub async fn metrics(
             .map(Alias::new),
         )
         .from(Alias::new("metric_points"));
-    apply_filter(&mut select, filter, "name", None);
+    apply_filter(&mut select, filter, "name", None, None);
     page(database, select, filter, |row| {
         Ok(MetricRecord {
             id: row.try_get("", "id")?,
@@ -173,7 +173,7 @@ pub async fn logs(
             .map(Alias::new),
         )
         .from(Alias::new("logs"));
-    apply_filter(&mut select, filter, "message", Some("level"));
+    apply_filter(&mut select, filter, "message", Some("level"), None);
     page(database, select, filter, |row| {
         Ok(LogRecord {
             id: row.try_get("", "id")?,
@@ -248,6 +248,7 @@ fn apply_filter(
     filter: &ExplorerFilter,
     searchable_column: &str,
     level_column: Option<&str>,
+    device_column: Option<&str>,
 ) {
     select.and_where(Expr::col(Alias::new("application_id")).eq(&filter.application_id));
     if let Some(value) = &filter.environment_id {
@@ -266,12 +267,14 @@ fn apply_filter(
         select.and_where(Expr::col(Alias::new(column)).eq(value));
     }
     if let Some(value) = &filter.text {
-        select.and_where(
-            Expr::col(Alias::new(searchable_column))
-                .like(crate::database::query::contains_like_pattern(value))
-                .or(Expr::col(Alias::new("attributes"))
-                    .like(crate::database::query::contains_like_pattern(value))),
-        );
+        let pattern = crate::database::query::contains_like_pattern(value);
+        let mut condition = Expr::col(Alias::new(searchable_column))
+            .like(pattern.clone())
+            .or(Expr::col(Alias::new("attributes")).like(pattern.clone()));
+        if let Some(device_col) = device_column {
+            condition = condition.or(Expr::col(Alias::new(device_col)).like(pattern));
+        }
+        select.and_where(condition);
     }
 }
 
