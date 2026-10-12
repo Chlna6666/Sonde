@@ -4,6 +4,7 @@ export type BaseApplication = {
   id: string;
   name: string;
   ownerUserId?: string | null;
+  createdAt?: number;
   [key: string]: unknown;
 };
 
@@ -11,8 +12,8 @@ export type BaseApplication = {
  * Returns true if the application is owned by the current user.
  */
 export function isUserOwnedApp(app: BaseApplication, user?: User | null): boolean {
-  if (!user?.id || !app.ownerUserId) return false;
-  return app.ownerUserId === user.id;
+  if (!user?.id || !app?.ownerUserId) return false;
+  return String(app.ownerUserId).trim().toLowerCase() === String(user.id).trim().toLowerCase();
 }
 
 /**
@@ -50,6 +51,27 @@ export function setUserPreferredAppId(
   }
 }
 
+/**
+ * Sets a newly created or imported application ID as preferred across all Sonde pages.
+ */
+export function setCreatedAppAsPreferred(
+  user: User | null | undefined,
+  appId: string
+): void {
+  if (!user?.id || !appId) return;
+  const prefixes = [
+    "sonde_preferred_app",
+    "sonde_overview_app",
+    "sonde_devices_app",
+    "sonde_explorer_app",
+    "sonde_alerts_app",
+    "sonde_migration_app",
+  ];
+  for (const prefix of prefixes) {
+    setUserPreferredAppId(user, appId, prefix);
+  }
+}
+
 export type ResolveAppOptions = {
   allowAll?: boolean;
   allValue?: string;
@@ -60,11 +82,17 @@ export type ResolveAppOptions = {
 /**
  * Resolves the initial application ID for a user:
  * 1. Explicit ID (e.g. from URL search param) if valid in apps.
- * 2. Saved page-specific preference in localStorage (if provided & valid).
- * 3. Saved global user preference in localStorage (if valid).
- * 4. User's owned application (first owned app where ownerUserId === user.id).
- * 5. If allowAll is true, returns allValue (default "").
- * 6. Fallback to apps[0]?.id.
+ * 2. If user owns application(s):
+ *    a. Saved page preference if it is one of user's OWNED applications.
+ *    b. Saved global preference if it is one of user's OWNED applications.
+ *    c. If allowAll is true and page preference is explicitly saved as allValue, return allValue.
+ *    d. Default to user's newest owned application (ownedApps[0].id).
+ *    (Stale preferences for applications owned by OTHER users are ignored in favor of the user's owned app).
+ * 3. If user owns NO applications:
+ *    a. Saved page-specific preference in localStorage (if valid).
+ *    b. Saved global user preference in localStorage (if valid).
+ *    c. If allowAll is true, returns allValue.
+ *    d. Fallback to apps[0]?.id.
  */
 export function resolveInitialAppId<T extends BaseApplication>(
   apps: T[],
@@ -87,51 +115,74 @@ export function resolveInitialAppId<T extends BaseApplication>(
   }
 
   if (user?.id) {
-    // 2. Saved page-specific preference
-    if (options?.pagePrefix) {
-      const pageSaved = getUserPreferredAppId(user, options.pagePrefix);
-      if (pageSaved) {
-        if (options.allowAll && pageSaved === allVal) {
-          return pageSaved;
-        }
-        if (apps.some((a) => a.id === pageSaved)) {
-          return pageSaved;
-        }
+    const ownedApps = sortAppsForUser(
+      apps.filter((a) => isUserOwnedApp(a, user)),
+      user
+    );
+
+    const pageSaved = options?.pagePrefix ? getUserPreferredAppId(user, options.pagePrefix) : null;
+    const globalSaved = getUserPreferredAppId(user, "sonde_preferred_app");
+
+    // If user has owned applications, prioritize them over other users' apps
+    if (ownedApps.length > 0) {
+      // 2a. If page saved preference points to one of the user's owned apps
+      if (pageSaved && ownedApps.some((a) => a.id === pageSaved)) {
+        return pageSaved;
+      }
+
+      // 2b. If global saved preference points to one of the user's owned apps
+      if (globalSaved && ownedApps.some((a) => a.id === globalSaved)) {
+        return globalSaved;
+      }
+
+      // 2c. If page saved preference was explicitly allValue and allowAll is enabled
+      if (options?.allowAll && pageSaved === allVal) {
+        return allVal;
+      }
+
+      // 2d. Default to user's newest owned application
+      return ownedApps[0].id;
+    }
+
+    // User owns NO applications: fallback to saved preferences
+    if (pageSaved) {
+      if (options?.allowAll && pageSaved === allVal) {
+        return pageSaved;
+      }
+      if (apps.some((a) => a.id === pageSaved)) {
+        return pageSaved;
       }
     }
 
-    // 3. Saved global preference
-    const globalSaved = getUserPreferredAppId(user, "sonde_preferred_app");
     if (globalSaved && apps.some((a) => a.id === globalSaved)) {
       return globalSaved;
     }
-
-    // 4. User's first owned application
-    const ownedApps = apps.filter((a) => a.ownerUserId === user.id);
-    if (ownedApps.length > 0) {
-      return ownedApps[0].id;
-    }
   }
 
-  // 5. Default to all if allowAll is enabled
+  // 3. Default to all if allowAll is enabled
   if (options?.allowAll) {
     return allVal;
   }
 
-  // 6. Fallback to the first available application
+  // 4. Fallback to the first available application
   return apps[0].id;
 }
 
 /**
- * Sorts applications putting the user's owned applications first.
+ * Sorts applications putting the user's owned applications first, and within the same tier by newest createdAt descending.
  */
 export function sortAppsForUser<T extends BaseApplication>(apps: T[], user?: User | null): T[] {
   if (!user?.id) return [...apps];
   return [...apps].sort((a, b) => {
-    const aOwned = a.ownerUserId === user.id ? 1 : 0;
-    const bOwned = b.ownerUserId === user.id ? 1 : 0;
+    const aOwned = isUserOwnedApp(a, user) ? 1 : 0;
+    const bOwned = isUserOwnedApp(b, user) ? 1 : 0;
     if (aOwned !== bOwned) {
       return bOwned - aOwned;
+    }
+    const aCreated = typeof a.createdAt === "number" ? a.createdAt : 0;
+    const bCreated = typeof b.createdAt === "number" ? b.createdAt : 0;
+    if (aCreated !== bCreated) {
+      return bCreated - aCreated;
     }
     return a.name.localeCompare(b.name);
   });

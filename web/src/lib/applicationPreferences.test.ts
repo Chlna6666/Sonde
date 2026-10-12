@@ -7,6 +7,7 @@ import {
   resolveInitialAppId,
   sortAppsForUser,
   formatAppOptions,
+  setCreatedAppAsPreferred,
   type BaseApplication,
 } from "./applicationPreferences";
 import type { User } from "../App";
@@ -87,12 +88,44 @@ describe("applicationPreferences", () => {
       const resolved = resolveInitialAppId(apps, userA);
       expect(resolved).toBe("app-a2");
     });
+
+    it("ignores stale preferences of other users when current user owns applications", () => {
+      // Stale preference pointing to user B's app
+      setUserPreferredAppId(userA, "app-b", "sonde_explorer_app");
+      setUserPreferredAppId(userA, "app-b", "sonde_preferred_app");
+      const resolved = resolveInitialAppId(apps, userA, { pagePrefix: "sonde_explorer_app" });
+      expect(resolved).toBe("app-a");
+    });
+  });
+
+  describe("setCreatedAppAsPreferred", () => {
+    it("sets the newly created app as preferred across all Sonde pages", () => {
+      setCreatedAppAsPreferred(userA, "app-a2");
+      expect(getUserPreferredAppId(userA, "sonde_preferred_app")).toBe("app-a2");
+      expect(getUserPreferredAppId(userA, "sonde_overview_app")).toBe("app-a2");
+      expect(getUserPreferredAppId(userA, "sonde_devices_app")).toBe("app-a2");
+      expect(getUserPreferredAppId(userA, "sonde_explorer_app")).toBe("app-a2");
+      expect(getUserPreferredAppId(userA, "sonde_alerts_app")).toBe("app-a2");
+      expect(getUserPreferredAppId(userA, "sonde_migration_app")).toBe("app-a2");
+    });
   });
 
   describe("sortAppsForUser", () => {
     it("places user-owned applications first", () => {
       const sortedForB = sortAppsForUser(apps, userB);
       expect(sortedForB[0].id).toBe("app-b");
+    });
+
+    it("sorts by newest createdAt descending within user-owned applications", () => {
+      const datedApps: BaseApplication[] = [
+        { id: "app-1", name: "Older App", ownerUserId: "user-a", createdAt: 1000 },
+        { id: "app-2", name: "Newer App", ownerUserId: "user-a", createdAt: 2000 },
+        { id: "app-other", name: "Other App", ownerUserId: "user-b", createdAt: 3000 },
+      ];
+      const sorted = sortAppsForUser(datedApps, userA);
+      expect(sorted[0].id).toBe("app-2");
+      expect(sorted[1].id).toBe("app-1");
+      expect(sorted[2].id).toBe("app-other");
     });
   });
 
