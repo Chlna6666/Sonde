@@ -129,7 +129,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   };
 
   return (
-    <div className="flex min-h-screen w-full bg-[var(--bg)] text-[var(--text)] antialiased selection:bg-[var(--signal)] selection:text-[var(--signal-ink)]">
+    <div className="flex min-h-screen w-full bg-[var(--bg)] text-[var(--text)] antialiased selection:bg-[var(--signal)] selection:text-[var(--signal-ink)] overflow-x-hidden">
       <a className="skip-link" href="#main-content">
         {t("shell.skipToContent")}
       </a>
@@ -236,18 +236,18 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       </AnimatePresence>
 
       <div className="flex flex-1 flex-col min-w-0 lg:ml-64">
-        <header className="sticky top-0 z-20 flex h-14 w-full items-center justify-between border-b border-[var(--border)] bg-[var(--bg-elevated)] px-4 sm:px-6 lg:px-8 flex-shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
+        <header className="sticky top-0 z-20 flex h-14 w-full items-center justify-between border-b border-[var(--border)] bg-[var(--bg-elevated)] px-3 sm:px-6 lg:px-8 flex-shrink-0 gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <Button
               variant="secondary"
               size="icon"
-              className="lg:hidden"
+              className="lg:hidden flex-shrink-0"
               aria-label={mobileOpen ? "Close menu" : "Open menu"}
               onClick={() => setMobileOpen((value) => !value)}
               icon={<Menu size={16} />}
             />
 
-            <nav aria-label="Breadcrumb" className="flex items-center gap-2.5 min-w-0">
+            <nav aria-label="Breadcrumb" className="flex items-center gap-2 min-w-0">
               <span
                 className={`icon-squircle h-7 w-7 rounded-[var(--radius-md)] ${currentNav.colorClass} border border-[var(--border-soft)] shadow-xs hidden sm:inline-flex flex-shrink-0`}
               >
@@ -266,7 +266,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
             </nav>
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-3 flex-shrink-0">
             <Badge variant="success" dot pulse className="hidden sm:inline-flex py-1 px-2.5">
               {t("shell.systemLive")}
             </Badge>

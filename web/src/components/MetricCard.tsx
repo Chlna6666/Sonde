@@ -32,19 +32,19 @@ export function MetricCard({
   return (
     <motion.article
       whileHover={{ y: -2, transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] } }}
-      className="glass-panel p-5 relative overflow-hidden flex flex-col justify-between"
+      className="glass-panel p-3.5 sm:p-5 relative overflow-hidden flex flex-col justify-between"
     >
-      <div className="flex items-center justify-between gap-3 mb-3">
-        <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--muted)] truncate">
+      <div className="flex items-center justify-between gap-2 sm:gap-3 mb-2 sm:mb-3">
+        <span className="text-[10px] sm:text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--muted)] truncate">
           {label}
         </span>
-        <div className={`p-1.5 rounded-[var(--radius-sm)] ${style.iconBg}`}>
-          <Icon size={16} aria-hidden="true" />
+        <div className={`p-1 sm:p-1.5 rounded-[var(--radius-sm)] ${style.iconBg} flex-shrink-0`}>
+          <Icon size={15} aria-hidden="true" />
         </div>
       </div>
 
-      <div className="flex items-baseline justify-between gap-2 mt-auto">
-        <strong className="text-2xl sm:text-3xl font-bold tracking-tight text-[var(--text)] font-mono">
+      <div className="flex items-baseline justify-between gap-1.5 sm:gap-2 mt-auto">
+        <strong className="text-xl sm:text-2xl lg:text-3xl font-bold tracking-tight text-[var(--text)] font-mono truncate">
           {formattedValue}
         </strong>
 

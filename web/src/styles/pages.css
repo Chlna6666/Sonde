@@ -305,10 +305,11 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   margin-bottom: 20px;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--border-soft);
+  flex-wrap: wrap;
 }
 
 .login-card-topbar .brand-lockup {
@@ -992,7 +993,12 @@
     grid-template-columns: 1fr;
   }
   .auth-panel {
-    padding: 56px 16px 32px;
+    padding: 56px 14px 28px;
+  }
+  .auth-preferences {
+    top: 14px;
+    right: 14px;
+    gap: 6px;
   }
   .auth-context {
     padding: 24px 16px;
@@ -1007,7 +1013,7 @@
     font-size: 2.4rem;
   }
   .login-card {
-    padding: 24px 18px;
+    padding: 20px 16px;
   }
   .telemetry-panel {
     padding: 16px;

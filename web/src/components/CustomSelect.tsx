@@ -20,6 +20,8 @@ export type CustomSelectProps<T extends string | number> = {
   fullWidth?: boolean;
   disabled?: boolean;
   className?: string;
+  hideLabelOnMobile?: boolean;
+  align?: "left" | "right";
 };
 
 export function CustomSelect<T extends string | number>({
@@ -34,6 +36,8 @@ export function CustomSelect<T extends string | number>({
   fullWidth = false,
   disabled = false,
   className = "",
+  hideLabelOnMobile = false,
+  align = "right",
 }: CustomSelectProps<T>) {
   const id = useId();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -124,19 +128,27 @@ export function CustomSelect<T extends string | number>({
         aria-activedescendant={open && activeIndex >= 0 ? `${id}-option-${activeIndex}` : undefined}
         onClick={() => (open ? setOpen(false) : openMenu())}
         onKeyDown={handleKeyDown}
-        className={`inline-flex items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--input-bg)] font-semibold text-[var(--text)] hover:bg-[var(--panel-hover)] hover:border-[var(--border-highlight)] active:translate-y-px transition-colors cursor-pointer disabled:opacity-50 disabled:pointer-events-none disabled:cursor-not-allowed ${
-          fullWidth ? "w-full min-h-[40px] px-3.5 text-xs" : compact ? "h-8 px-2.5 text-[11px]" : "h-9 px-3 text-xs"
+        className={`inline-flex items-center justify-between gap-1.5 sm:gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--input-bg)] font-semibold text-[var(--text)] hover:bg-[var(--panel-hover)] hover:border-[var(--border-highlight)] active:translate-y-px transition-colors cursor-pointer disabled:opacity-50 disabled:pointer-events-none disabled:cursor-not-allowed ${
+          fullWidth
+            ? "w-full min-h-[40px] px-3.5 text-xs"
+            : compact
+            ? `h-8 ${hideLabelOnMobile ? "px-2 sm:px-2.5" : "px-2.5"} text-[11px]`
+            : "h-9 px-3 text-xs"
         }`}
       >
-        <span className="flex items-center gap-2 truncate">
+        <span className="flex items-center gap-1.5 sm:gap-2 truncate">
           {icon ? <span className="text-[var(--muted)] flex-shrink-0">{icon}</span> : null}
-          <span className={`truncate ${selectedIndex < 0 && placeholder ? "text-[var(--muted)] font-normal" : ""}`}>
+          <span
+            className={`truncate ${hideLabelOnMobile ? "hidden sm:inline" : ""} ${
+              selectedIndex < 0 && placeholder ? "text-[var(--muted)] font-normal" : ""
+            }`}
+          >
             {selectedLabel}
           </span>
         </span>
         <ChevronDown
           aria-hidden="true"
-          size={14}
+          size={compact ? 12 : 14}
           className={`text-[var(--muted)] flex-shrink-0 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
         />
       </button>
@@ -149,8 +161,12 @@ export function CustomSelect<T extends string | number>({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: -4 }}
             transition={{ type: "spring", stiffness: 450, damping: 30 }}
-            className={`absolute top-full mt-1.5 z-50 max-h-64 overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--bg-float)] p-1 shadow-xl ${
-              fullWidth ? "left-0 right-0 w-full min-w-full" : "right-0 min-w-[140px]"
+            className={`absolute top-full mt-1.5 z-50 max-h-64 overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--bg-float)] p-1 shadow-xl max-w-[calc(100vw-2rem)] ${
+              fullWidth
+                ? "left-0 right-0 w-full min-w-full"
+                : align === "left"
+                ? "left-0 min-w-[140px]"
+                : "right-0 min-w-[140px]"
             }`}
             id={`${id}-listbox`}
             role="listbox"

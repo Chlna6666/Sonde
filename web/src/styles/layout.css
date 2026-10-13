@@ -85,6 +85,13 @@
   position: relative;
   width: fit-content;
   max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.segmented-control::-webkit-scrollbar {
+  display: none;
 }
 
 .segmented-control-item {
@@ -103,12 +110,23 @@
   flex-shrink: 0;
 }
 
+@media (max-width: 640px) {
+  .segmented-control-item {
+    padding: 5px 10px;
+    font-size: 0.74rem;
+  }
+}
+
 .segmented-control-item:hover {
   color: var(--text);
 }
 
 .segmented-control-item.active {
   color: var(--signal-ink);
+}
+
+.segmented-control-item.active:not(:has(.segmented-control-pill)) {
+  background: var(--signal);
 }
 
 .segmented-control-pill {

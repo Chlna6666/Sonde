@@ -188,3 +188,14 @@
     grid-template-columns: 1fr;
   }
 }
+
+@media (max-width: 640px) {
+  .migration-stats div {
+    padding: 12px;
+  }
+  .migration-stats dd {
+    font-size: 1.25rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}

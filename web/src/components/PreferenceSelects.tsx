@@ -5,7 +5,13 @@ import { getThemeMode, setThemeMode, type ThemeMode } from "../lib/theme";
 import type { Locale } from "../i18n";
 import { CustomSelect } from "./CustomSelect";
 
-export function LocaleSelect({ compact = false }: { compact?: boolean }) {
+export function LocaleSelect({
+  compact = false,
+  hideLabelOnMobile = compact,
+}: {
+  compact?: boolean;
+  hideLabelOnMobile?: boolean;
+}) {
   const { t, i18n } = useTranslation();
   const locale: Locale = i18n.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
   const label = t("preferences.language");
@@ -23,12 +29,19 @@ export function LocaleSelect({ compact = false }: { compact?: boolean }) {
         onChange={(value) => void i18n.changeLanguage(value)}
         icon={<Languages size={13} aria-hidden="true" />}
         compact={compact}
+        hideLabelOnMobile={hideLabelOnMobile}
       />
     </div>
   );
 }
 
-export function ThemeSelect({ compact = false }: { compact?: boolean }) {
+export function ThemeSelect({
+  compact = false,
+  hideLabelOnMobile = compact,
+}: {
+  compact?: boolean;
+  hideLabelOnMobile?: boolean;
+}) {
   const { t } = useTranslation();
   const [mode, setMode] = useState<ThemeMode>(() => getThemeMode());
   const label = t("preferences.theme");
@@ -50,6 +63,7 @@ export function ThemeSelect({ compact = false }: { compact?: boolean }) {
         }}
         icon={<SunMoon size={13} aria-hidden="true" />}
         compact={compact}
+        hideLabelOnMobile={hideLabelOnMobile}
       />
     </div>
   );
