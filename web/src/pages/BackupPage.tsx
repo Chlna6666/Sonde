@@ -161,19 +161,19 @@ export function BackupPage() {
           </div>
 
           <div className="rounded-[var(--radius-md)] border border-[var(--border-soft)] bg-[var(--input-bg)] p-4 text-xs text-[var(--muted)] space-y-2">
-            <div className="flex justify-between gap-4">
+            <div className="flex flex-col sm:flex-row sm:justify-between gap-1 sm:gap-4">
               <span>{t("backup.format")}</span>
-              <strong className="font-mono text-[var(--text)]">
+              <strong className="font-mono text-[var(--text)] break-all sm:text-right">
                 {BACKUP_TYPE} / {CURRENT_FORMAT_VERSION}
               </strong>
             </div>
-            <div className="flex justify-between gap-4">
+            <div className="flex flex-col sm:flex-row sm:justify-between gap-1 sm:gap-4">
               <span>{t("backup.integrity")}</span>
-              <strong className="text-[var(--text)]">Footer SHA-256 + record count</strong>
+              <strong className="text-[var(--text)] sm:text-right">Footer SHA-256 + record count</strong>
             </div>
-            <div className="flex justify-between gap-4">
+            <div className="flex flex-col sm:flex-row sm:justify-between gap-1 sm:gap-4">
               <span>{t("backup.runtimeState")}</span>
-              <strong className="text-[var(--text)]">{t("backup.runtimeStateDesc")}</strong>
+              <strong className="text-[var(--text)] sm:text-right">{t("backup.runtimeStateDesc")}</strong>
             </div>
           </div>
 
@@ -185,7 +185,7 @@ export function BackupPage() {
           </div>
 
           <div className="mt-auto">
-            <Button size="sm" onClick={handleExport} icon={<Download size={14} />}>
+            <Button size="sm" className="w-full sm:w-auto" onClick={handleExport} icon={<Download size={14} />}>
               {t("backup.downloadButton")}
             </Button>
           </div>
@@ -237,6 +237,7 @@ export function BackupPage() {
             <Button
               variant="danger"
               size="sm"
+              className="w-full sm:w-auto"
               disabled={!restoreFile || !manifest || restoring}
               loading={restoring}
               onClick={() => void handleRestore()}
@@ -261,9 +262,9 @@ function SummaryRow({
   mono?: boolean;
 }) {
   return (
-    <div className="flex justify-between gap-4">
+    <div className="flex flex-col sm:flex-row sm:justify-between gap-1 sm:gap-4">
       <span className="text-[var(--muted)]">{label}</span>
-      <strong className={`text-[var(--text)] text-right ${mono ? "font-mono" : ""}`}>{value}</strong>
+      <strong className={`text-[var(--text)] sm:text-right break-all ${mono ? "font-mono" : ""}`}>{value}</strong>
     </div>
   );
 }

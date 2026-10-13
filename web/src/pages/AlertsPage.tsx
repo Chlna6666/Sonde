@@ -355,7 +355,7 @@ export function AlertsPage() {
       {activeTab === "rules" ? (
         <div>
           {creatingRule ? (
-            <form className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--panel)] p-6 mb-6 space-y-4" onSubmit={createRule}>
+            <form className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--panel)] p-4 sm:p-6 mb-6 space-y-4" onSubmit={createRule}>
               <h3 className="text-sm font-bold text-[var(--text)] m-0">{t("alerts.new")}</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                 <Field name="name" label={t("alerts.ruleName")} placeholder="e.g. Ingestion Spikes Spike" />
@@ -512,7 +512,7 @@ export function AlertsPage() {
                   const ruleApp = applications.find((a) => a.id === rule.applicationId);
                   const isFiring = rule.lastState === "firing";
                   return (
-                    <article key={rule.id} className="flex items-center justify-between p-4 rounded-xl border border-[var(--border-soft)] bg-[var(--panel)]">
+                    <article key={rule.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl border border-[var(--border-soft)] bg-[var(--panel)]">
                       <div className="flex items-center gap-3">
                         <div className={`p-2.5 rounded-xl border ${isFiring ? "bg-[var(--danger)]/15 border-[var(--danger)] text-[var(--danger)]" : "bg-[var(--panel-strong)] border-[var(--border-soft)] text-[var(--signal)]"}`}>
                           {isFiring ? <Flame size={18} className="animate-pulse" /> : <BellRing size={18} />}
@@ -532,22 +532,22 @@ export function AlertsPage() {
                         </div>
                       </div>
 
-                    <div className="flex items-center gap-3">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[var(--radius-sm)] text-xs font-semibold uppercase tracking-wider ${isFiring ? "bg-[var(--danger)]/20 text-[var(--danger)] border border-[var(--danger)]/30" : "bg-[var(--signal)]/15 text-[var(--signal)] border border-[var(--signal)]/30"}`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${isFiring ? "bg-[var(--danger)]" : "bg-[var(--signal)]"}`} />
-                        {isFiring ? t("alerts.stateFiring") : t("alerts.stateHealthy")}
-                      </span>
+                      <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto pt-2 sm:pt-0 border-t sm:border-t-0 border-[var(--border-soft)]">
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[var(--radius-sm)] text-xs font-semibold uppercase tracking-wider ${isFiring ? "bg-[var(--danger)]/20 text-[var(--danger)] border border-[var(--danger)]/30" : "bg-[var(--signal)]/15 text-[var(--signal)] border border-[var(--signal)]/30"}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${isFiring ? "bg-[var(--danger)]" : "bg-[var(--signal)]"}`} />
+                          {isFiring ? t("alerts.stateFiring") : t("alerts.stateHealthy")}
+                        </span>
 
-                      <button
-                        type="button"
-                        onClick={() => deleteRule(rule.id)}
-                        className="p-1.5 rounded-lg text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-colors cursor-pointer"
-                        title={t("alerts.deleteRule")}
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    </div>
-                  </article>
+                        <button
+                          type="button"
+                          onClick={() => deleteRule(rule.id)}
+                          className="p-1.5 rounded-lg text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-colors cursor-pointer"
+                          title={t("alerts.deleteRule")}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    </article>
                 );
               })
             )}
@@ -559,7 +559,7 @@ export function AlertsPage() {
       {activeTab === "channels" ? (
         <div>
           {creatingChannel ? (
-            <form className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--panel)] p-6 mb-6 space-y-4" onSubmit={createChannel}>
+            <form className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--panel)] p-4 sm:p-6 mb-6 space-y-4" onSubmit={createChannel}>
               <h3 className="text-sm font-bold text-[var(--text)] m-0">{t("alerts.newChannel")}</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                 <Field name="name" label={t("alerts.channelName")} placeholder="e.g. SRE Slack Channel" />
@@ -623,16 +623,16 @@ export function AlertsPage() {
               </div>
             ) : (
               channels.map((channel) => (
-                <article key={channel.id} className="flex items-center justify-between p-4 rounded-xl border border-[var(--border-soft)] bg-[var(--panel)]">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2.5 rounded-xl border bg-[var(--panel-strong)] border-[var(--border-soft)] text-[var(--signal)]">
+                <article key={channel.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl border border-[var(--border-soft)] bg-[var(--panel)]">
+                  <div className="flex items-start sm:items-center gap-3 min-w-0">
+                    <div className="p-2.5 rounded-xl border bg-[var(--panel-strong)] border-[var(--border-soft)] text-[var(--signal)] flex-shrink-0">
                       {channel.kind === "slack" || channel.kind === "discord" ? (
                         <MessageSquare size={18} />
                       ) : (
                         <Globe size={18} />
                       )}
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <h2 className="text-sm font-bold text-[var(--text)] m-0">{channel.name}</h2>
                       <p className="text-xs text-[var(--muted)] m-0 mt-0.5 font-mono break-all">
                         <span className="uppercase text-[10px] font-bold px-1.5 py-0.5 rounded bg-[var(--input-bg)] mr-1.5">
@@ -643,7 +643,7 @@ export function AlertsPage() {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center justify-between sm:justify-end gap-2 w-full sm:w-auto pt-2 sm:pt-0 border-t sm:border-t-0 border-[var(--border-soft)] flex-shrink-0">
                     <button
                       type="button"
                       disabled={testingChannelId === channel.id}

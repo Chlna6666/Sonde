@@ -283,7 +283,7 @@ export function SettingsPage() {
         </div>
 
         {currentUser?.totpEnabled ? (
-          <div className="flex items-center justify-between pt-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
             <p className="text-xs text-[var(--muted)] m-0">
               {t("settings.twoFactorProtected")}
             </p>
@@ -299,8 +299,8 @@ export function SettingsPage() {
           <form onSubmit={handleConfirmEnable2FA} className="space-y-4 pt-2">
             <div className="flex flex-col md:flex-row items-center gap-6 p-4 rounded-xl border border-[var(--border-soft)] bg-[var(--input-bg)]">
               {twoFactorQr ? (
-                <div className="flex flex-col items-center gap-2 p-3 bg-white rounded-[var(--radius-md)] border border-gray-200 flex-shrink-0">
-                  <img src={twoFactorQr} alt="2FA TOTP QR Code" className="w-44 h-44 rounded-lg block" />
+                <div className="flex flex-col items-center gap-2 p-3 bg-white rounded-[var(--radius-md)] border border-gray-200 flex-shrink-0 max-w-full">
+                  <img src={twoFactorQr} alt="2FA TOTP QR Code" className="w-44 h-44 max-w-full rounded-lg block" />
                   <span className="text-[11px] font-semibold text-gray-700">{t("settings.twoFactorScanWithApp")}</span>
                 </div>
               ) : null}
@@ -315,7 +315,7 @@ export function SettingsPage() {
                 <div className="space-y-1.5">
                   <span className="text-[var(--muted)] font-medium">手动输入密钥 (Secret Key):</span>
                   <div className="flex items-center gap-2 font-mono bg-[var(--panel-strong)] p-2.5 rounded-lg border border-[var(--border)] text-[var(--signal)] font-bold text-sm">
-                    <span className="flex-1 select-all tracking-wider">{twoFactorSetup.secret}</span>
+                    <span className="flex-1 select-all tracking-wider break-all">{twoFactorSetup.secret}</span>
                     <button
                       type="button"
                       onClick={() => {
@@ -386,7 +386,7 @@ export function SettingsPage() {
             </div>
           </form>
         ) : (
-          <div className="flex items-center justify-between pt-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
             <p className="text-xs text-[var(--muted)] m-0">
               {t("settings.twoFactorIntro")}
             </p>
@@ -712,31 +712,46 @@ export function SettingsPage() {
         </Modal>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "16px", marginBottom: "24px" }}>
-        <div style={{ background: "var(--panel)", border: "1px solid var(--border-soft)", borderRadius: "10px", padding: "20px", display: "flex", flexDirection: "column", gap: "14px" }}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <div className="bg-[var(--panel)] border border-[var(--border-soft)] rounded-[10px] p-5 flex flex-col gap-3.5">
           <div className="flex items-center gap-3">
             <Server size={20} className="text-signal" />
-            <h2 style={{ margin: 0, fontSize: "1.05rem" }}>{t("settings.serverInfo")}</h2>
+            <h2 className="m-0 text-base font-bold text-[var(--text)]">{t("settings.serverInfo")}</h2>
           </div>
           <div className="flex flex-col gap-2 text-xs">
-            <div className="flex justify-between py-1 border-b border-border-soft"><span className="text-muted">{t("settings.version")}</span><strong>{settings?.version || "—"}</strong></div>
-            <div className="flex justify-between py-1 border-b border-border-soft"><span className="text-muted">{t("settings.runtimeMode")}</span><code className="text-signal">Production (WAL)</code></div>
-            <div className="flex justify-between py-1 border-b border-border-soft">
-              <span className="text-muted">{t("settings.security")}</span>
+            <div className="flex flex-col sm:flex-row sm:justify-between py-1.5 border-b border-[var(--border-soft)] gap-1">
+              <span className="text-[var(--muted)]">{t("settings.version")}</span>
+              <strong>{settings?.version || "—"}</strong>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:justify-between py-1.5 border-b border-[var(--border-soft)] gap-1">
+              <span className="text-[var(--muted)]">{t("settings.runtimeMode")}</span>
+              <code className="text-signal">Production (WAL)</code>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center py-1.5 border-b border-[var(--border-soft)] gap-1">
+              <span className="text-[var(--muted)]">{t("settings.security")}</span>
               <span className="text-signal flex items-center gap-1"><ShieldCheck size={13} /> Argon2id + RFC 6238 TOTP</span>
             </div>
           </div>
         </div>
 
-        <div style={{ background: "var(--panel)", border: "1px solid var(--border-soft)", borderRadius: "10px", padding: "20px", display: "flex", flexDirection: "column", gap: "14px" }}>
+        <div className="bg-[var(--panel)] border border-[var(--border-soft)] rounded-[10px] p-5 flex flex-col gap-3.5">
           <div className="flex items-center gap-3">
             <Database size={20} className="text-amber" />
-            <h2 style={{ margin: 0, fontSize: "1.05rem" }}>{t("settings.storage")}</h2>
+            <h2 className="m-0 text-base font-bold text-[var(--text)]">{t("settings.storage")}</h2>
           </div>
           <div className="flex flex-col gap-2 text-xs">
-            <div className="flex justify-between py-1 border-b border-border-soft"><span className="text-muted">{t("settings.databaseBackend")}</span><strong>{settings?.databaseBackend || "Multi-Dialect (SQLite / Postgres / MySQL)"}</strong></div>
-            <div className="flex justify-between py-1 border-b border-border-soft"><span className="text-muted">{t("settings.journalMode")}</span><code>WAL (Write-Ahead Logging)</code></div>
-            <div className="flex justify-between py-1 border-b border-border-soft"><span className="text-muted">{t("settings.foreignKeys")}</span><span className="text-signal font-semibold">{t("settings.enabled")}</span></div>
+            <div className="flex flex-col sm:flex-row sm:justify-between py-1.5 border-b border-[var(--border-soft)] gap-1">
+              <span className="text-[var(--muted)]">{t("settings.databaseBackend")}</span>
+              <strong className="break-all sm:text-right">{settings?.databaseBackend || "Multi-Dialect (SQLite / Postgres / MySQL)"}</strong>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:justify-between py-1.5 border-b border-[var(--border-soft)] gap-1">
+              <span className="text-[var(--muted)]">{t("settings.journalMode")}</span>
+              <code>WAL (Write-Ahead Logging)</code>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:justify-between py-1.5 border-b border-[var(--border-soft)] gap-1">
+              <span className="text-[var(--muted)]">{t("settings.foreignKeys")}</span>
+              <span className="text-signal font-semibold">{t("settings.enabled")}</span>
+            </div>
           </div>
         </div>
       </div>

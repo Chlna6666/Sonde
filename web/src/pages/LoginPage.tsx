@@ -93,26 +93,26 @@ export function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
   }
 
   return (
-    <main className="relative flex min-h-screen w-full items-center justify-center p-4 overflow-hidden">
+    <main className="relative flex min-h-screen w-full items-center justify-center p-3 sm:p-4 overflow-hidden">
       <motion.section
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-        className="relative z-10 w-full max-w-md rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-elevated)] p-7 sm:p-8"
+        className="relative z-10 w-full max-w-md rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-elevated)] p-5 sm:p-8"
         aria-labelledby="login-title"
       >
-        <div className="flex items-center justify-between border-b border-[var(--border-soft)] pb-4 mb-6">
-          <div className="brand-lockup">
-            <div className="sonde-mark" aria-hidden="true">
+        <div className="flex items-center justify-between border-b border-[var(--border-soft)] pb-4 mb-6 gap-2">
+          <div className="brand-lockup min-w-0 flex-shrink-0">
+            <div className="sonde-mark flex-shrink-0" aria-hidden="true">
               <span />
             </div>
-            <div>
-              <strong>Sonde</strong>
-              <small>Telemetry</small>
+            <div className="min-w-0">
+              <strong className="truncate">Sonde</strong>
+              <small className="truncate">Telemetry</small>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
             <ThemeSelect compact />
             <LocaleSelect compact />
           </div>

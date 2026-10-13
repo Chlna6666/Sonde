@@ -329,6 +329,7 @@ export function MigrationPage() {
               <Button
                 type="submit"
                 size="sm"
+                className="w-full sm:w-auto"
                 disabled={!sql || busy || !environmentId}
                 loading={busy}
               >
@@ -380,6 +381,7 @@ export function MigrationPage() {
                 </div>
                 <Button
                   size="sm"
+                  className="w-full sm:w-auto"
                   disabled={busy || preview.valid === 0}
                   loading={busy}
                   onClick={() => void execute()}
@@ -440,6 +442,7 @@ export function MigrationPage() {
             <div className="mt-auto">
               <Button
                 size="sm"
+                className="w-full sm:w-auto"
                 disabled={!selectedExportAppId}
                 onClick={handleExportSingleApp}
                 icon={<Download size={14} />}
@@ -490,6 +493,7 @@ export function MigrationPage() {
               <Button
                 variant="secondary"
                 size="sm"
+                className="w-full sm:w-auto"
                 disabled={!appImportFile || busy}
                 loading={busy}
                 onClick={handleExecuteAppImport}
