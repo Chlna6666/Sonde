@@ -3272,7 +3272,7 @@ dependencies = [
 
 [[package]]
 name = "sonde"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "actix-http",
  "actix-web",
