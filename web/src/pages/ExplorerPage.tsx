@@ -261,8 +261,8 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="segmented-control self-start sm:self-auto">
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+          <div className="segmented-control self-start sm:self-auto max-w-full overflow-x-auto scrollbar-none">
             {kinds.map((item) => {
               const active = kind === item.value;
               const Icon = item.icon;
@@ -294,20 +294,20 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
             size="sm"
             onClick={() => setCleanModalOpen(true)}
             icon={<Trash2 size={14} className="text-[var(--danger)]" />}
-            className="text-[var(--danger)] hover:bg-[var(--danger-subtle)] hover:border-[var(--danger)]/40 text-xs font-semibold"
+            className="text-[var(--danger)] hover:bg-[var(--danger-subtle)] hover:border-[var(--danger)]/40 text-xs font-semibold shrink-0"
             title={t("explorer.cleanInvalid")}
           >
-            {t("explorer.cleanInvalid")}
+            <span className="hidden sm:inline">{t("explorer.cleanInvalid")}</span>
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={() => setResetModalOpen(true)}
             icon={<RotateCcw size={14} className="text-[var(--danger)]" />}
-            className="text-[var(--danger)] hover:bg-[var(--danger-subtle)] hover:border-[var(--danger)]/40 text-xs font-semibold"
+            className="text-[var(--danger)] hover:bg-[var(--danger-subtle)] hover:border-[var(--danger)]/40 text-xs font-semibold shrink-0"
             title={t("explorer.reset")}
           >
-            {t("explorer.reset")}
+            <span className="hidden sm:inline">{t("explorer.reset")}</span>
           </Button>
         </div>
       </div>
@@ -389,7 +389,7 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
             </div>
           ) : null}
 
-          <Button type="submit" size="default" icon={<Search size={14} />}>
+          <Button type="submit" size="default" icon={<Search size={14} />} className="w-full sm:w-auto">
             {t("explorer.apply")}
           </Button>
         </form>
@@ -624,14 +624,15 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
           icon={<FileJson size={18} />}
           size="lg"
           actions={
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2">
               {(inspectRecord.anonymousId || inspectRecord.deviceId) ? (
                 <Link
                   to={`/devices?applicationId=${applicationId}&search=${encodeURIComponent(String(inspectRecord.anonymousId ?? inspectRecord.deviceId))}`}
                   className="h-[32px] text-xs px-2.5 rounded-[var(--radius-md)] border border-[var(--border)] hover:border-[var(--signal)] hover:text-[var(--signal)] text-[var(--text)] inline-flex items-center gap-1.5 transition-colors font-medium"
+                  title={t("explorer.viewDeviceProfile")}
                 >
                   <MonitorSmartphone size={14} />
-                  <span>{t("explorer.viewDeviceProfile")}</span>
+                  <span className="hidden sm:inline">{t("explorer.viewDeviceProfile")}</span>
                 </Link>
               ) : null}
               <Button
@@ -640,16 +641,18 @@ export function ExplorerPage({ defaultKind }: { defaultKind?: Kind } = {}) {
                 className="text-[var(--danger)] hover:bg-[var(--danger-subtle)] hover:border-[var(--danger)]/30"
                 onClick={() => setConfirmDeleteModal({ open: true, ids: [inspectRecord.id], isSingle: true })}
                 icon={<Trash2 size={14} />}
+                title={t("explorer.deleteRecord")}
               >
-                {t("explorer.deleteRecord")}
+                <span className="hidden sm:inline">{t("explorer.deleteRecord")}</span>
               </Button>
               <Button
                 variant="secondary"
                 size="sm"
                 onClick={() => handleCopyJson(inspectRecord)}
                 icon={copied ? <Check size={14} className="text-[var(--signal)]" /> : <Copy size={14} />}
+                title={t("common.copyJson")}
               >
-                {copied ? t("common.copied") : t("common.copyJson")}
+                <span className="hidden sm:inline">{copied ? t("common.copied") : t("common.copyJson")}</span>
               </Button>
             </div>
           }

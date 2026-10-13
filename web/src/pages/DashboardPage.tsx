@@ -184,9 +184,9 @@ export function DashboardPage() {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
           {applications.length > 0 ? (
-            <div className="min-w-[170px] sm:min-w-[210px]">
+            <div className="w-full sm:w-auto min-w-[170px] sm:min-w-[210px] flex-1 sm:flex-initial">
               <CustomSelect
                 label={t("overview.filterApp")}
                 value={selectedAppId}
@@ -268,7 +268,7 @@ export function DashboardPage() {
       ) : null}
 
       {!data && loading ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
           {[...Array(6)].map((_, i) => (
             <Skeleton key={i} className="h-28 rounded-[var(--radius-xl)]" />
           ))}
@@ -276,7 +276,7 @@ export function DashboardPage() {
       ) : data ? (
         <>
           {/* Key Metrics Grid (Responsive 2 to 6 columns) */}
-          <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4" aria-label="Key telemetry metrics">
+          <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4" aria-label="Key telemetry metrics">
             <MetricCard
               label={t("overview.apps")}
               value={data.applications}

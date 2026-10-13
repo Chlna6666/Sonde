@@ -23,6 +23,7 @@ import {
   ScrollText,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { motion } from "motion/react";
 import { Modal } from "../components/Modal";
 import { SplineAreaChart } from "../components/SplineAreaChart";
 import { DonutChart } from "../components/DonutChart";
@@ -276,14 +277,32 @@ export function ApplicationsPage() {
               className={`segmented-control-item ${filterTab === "all" ? "active" : ""}`}
               onClick={() => setFilterTab("all")}
             >
-              {t("apps.allApps")} ({applications.length})
+              {filterTab === "all" ? (
+                <motion.div
+                  layoutId="applications-filter-tab-pill"
+                  transition={{ type: "spring", stiffness: 450, damping: 32 }}
+                  className="segmented-control-pill"
+                />
+              ) : null}
+              <span className="relative z-10">
+                {t("apps.allApps")} ({applications.length})
+              </span>
             </button>
             <button
               type="button"
               className={`segmented-control-item ${filterTab === "my" ? "active" : ""}`}
               onClick={() => setFilterTab("my")}
             >
-              {t("apps.myApps")} ({applications.filter((a) => a.ownerUserId === user?.id).length})
+              {filterTab === "my" ? (
+                <motion.div
+                  layoutId="applications-filter-tab-pill"
+                  transition={{ type: "spring", stiffness: 450, damping: 32 }}
+                  className="segmented-control-pill"
+                />
+              ) : null}
+              <span className="relative z-10">
+                {t("apps.myApps")} ({applications.filter((a) => a.ownerUserId === user?.id).length})
+              </span>
             </button>
           </div>
         </div>
@@ -632,7 +651,7 @@ function ManageAppModal({ application, onClose, onExport }: {
       subtitle={<code>{application.slug}</code>}
       icon={<AppWindow size={20} />}
       onClose={onClose}
-      actions={<button type="button" className="secondary-button compact" onClick={onExport}><Download size={14} />{t("apps.exportApp")}</button>}
+      actions={<button type="button" className="secondary-button compact" onClick={onExport}><Download size={14} /><span className="hidden sm:inline">{t("apps.exportApp")}</span></button>}
       tabs={
         <>
           {(["integration", "keys", "members", "public", "settings"] as const).map((tab) => (
@@ -830,9 +849,11 @@ function ManageAppModal({ application, onClose, onExport }: {
             </div>
             <div><button className="primary-button compact"><UserPlus size={15} />{t("apps.grantMember")}</button></div>
           </form>
-          <table className="keys-table"><thead><tr><th>{t("access.username")}</th><th>{t("access.email")}</th><th>{t("apps.memberRole")}</th><th /></tr></thead><tbody>
-            {members.map((member) => <tr key={member.userId}><td><strong>{member.username}</strong></td><td>{member.email}</td><td>{member.role}</td><td><button type="button" className="secondary-button compact" style={{ color: "var(--danger)" }} onClick={() => handleRevokeMember(member.userId)}><Trash2 size={13} /></button></td></tr>)}
-          </tbody></table>
+          <div className="overflow-x-auto">
+            <table className="keys-table"><thead><tr><th>{t("access.username")}</th><th>{t("access.email")}</th><th>{t("apps.memberRole")}</th><th /></tr></thead><tbody>
+              {members.map((member) => <tr key={member.userId}><td><strong>{member.username}</strong></td><td>{member.email}</td><td>{member.role}</td><td><button type="button" className="secondary-button compact" style={{ color: "var(--danger)" }} onClick={() => handleRevokeMember(member.userId)}><Trash2 size={13} /></button></td></tr>)}
+            </tbody></table>
+          </div>
         </div>
       ) : null}
 
@@ -944,7 +965,7 @@ function AppStatsModal({ application, onClose }: { application: Application; onC
     <Modal onClose={onClose} title={<div className="flex items-center gap-2"><span>{application.name}</span><code className="text-xs text-[var(--signal)]">{application.slug}</code></div>} subtitle={t("apps.statsRange")} size="lg">
       <div className="stats-modal-body">
         <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
-          <div className="segmented-control" style={{ minWidth: 280, gridTemplateColumns: "repeat(4, 1fr)" }}>
+          <div className="segmented-control max-w-full overflow-x-auto scrollbar-none w-full sm:w-auto">
             <button type="button" aria-pressed={selectedDays === 1} onClick={() => setSelectedDays(1)}>{t("apps.stats24h")}</button>
             <button type="button" aria-pressed={selectedDays === 7} onClick={() => setSelectedDays(7)}>{t("apps.stats7d")}</button>
             <button type="button" aria-pressed={selectedDays === 30} onClick={() => setSelectedDays(30)}>{t("apps.stats30d")}</button>
@@ -1005,5 +1026,5 @@ function AppStatsModal({ application, onClose }: { application: Application; onC
 }
 
 function StatValue({ label, value, signal = false }: { label: string; value: number; signal?: boolean }) {
-  return <div><span className="text-[0.72rem] text-[var(--muted)]">{label}</span><div className={`text-xl font-extrabold font-mono ${signal ? "text-[var(--signal)]" : "text-[var(--text)]"}`}>{value.toLocaleString()}</div></div>;
+  return <div><span className="text-[0.72rem] text-[var(--muted)]">{label}</span><div className={`text-base sm:text-xl font-extrabold font-mono truncate ${signal ? "text-[var(--signal)]" : "text-[var(--text)]"}`}>{value.toLocaleString()}</div></div>;
 }

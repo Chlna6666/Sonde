@@ -183,13 +183,13 @@ export function DevicesPage() {
           </h1>
           <p className="m-0 mt-1 max-w-2xl text-xs text-[var(--muted)]">{copy.subtitle}</p>
         </div>
-        <div className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--signal)]/30 bg-[var(--signal-subtle)] px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--signal)]">
+        <div className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--signal)]/30 bg-[var(--signal-subtle)] px-2.5 sm:px-3 py-1.5 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-[var(--signal)] self-start sm:self-auto">
           <ShieldAlert size={14} />
           {copy.observeOnly}
         </div>
       </div>
 
-      <form onSubmit={applySearch} className="glass-panel flex flex-wrap items-end gap-3.5 p-4">
+      <form onSubmit={applySearch} className="glass-panel flex flex-wrap items-end gap-3 sm:gap-3.5 p-3.5 sm:p-4">
         <FilterLabel label={t("migration.application")} className="min-w-[180px] flex-1">
           <CustomSelect
             label={t("migration.application")}
@@ -276,7 +276,7 @@ export function DevicesPage() {
           </div>
         </div>
 
-        <Button type="submit" size="default" icon={<Search size={14} />}>
+        <Button type="submit" size="default" icon={<Search size={14} />} className="w-full sm:w-auto">
           {copy.apply}
         </Button>
       </form>
@@ -287,7 +287,7 @@ export function DevicesPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6 mb-5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2.5 sm:gap-3 mb-5">
         <SummaryCard icon={MonitorSmartphone} label={copy.total} value={data?.summary.total ?? 0} />
         <SummaryCard icon={Activity} label={copy.active} value={data?.summary.active ?? 0} tone="signal" />
         <SummaryCard icon={CircleDot} label={copy.recent} value={data?.summary.recent ?? 0} />
